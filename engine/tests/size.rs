@@ -100,7 +100,12 @@ fn freed_counts_a_hard_link_only_when_all_links_are_inside() {
     std::fs::hard_link(t.path().join("outer"), t.path().join("d/outer-link")).unwrap();
     let r = size::measure(&t.path().join("d"), &opts(Mode::Freed)).unwrap();
     // inner (both links inside) counts once, outer-link frees nothing
+    #[cfg(unix)]
     assert!(r.bytes >= 1 << 20 && r.bytes < 2 << 20, "{}", r.bytes);
+    // Windows bulk listing has no link count: each file id counts once, so outer-link
+    // counts too (see size.rs)
+    #[cfg(windows)]
+    assert!(r.bytes >= 2 << 20 && r.bytes < 3 << 20, "{}", r.bytes);
 }
 
 #[test]

@@ -185,6 +185,8 @@ impl Visitor for Sizer<'_> {
                     let size = e.freed();
                     if e.nlink == 0 && !self.links.first_time(e.dev, e.ino) {
                         // unknown link count (Windows): once per file id
+                        // ponytail: a hard link to a file outside the root counts as freed;
+                        // query nNumberOfLinks per file if Windows rules ever meet such links
                     } else if e.nlink > 1 {
                         let mut map = self.freed_links.lock().unwrap();
                         let slot = map.entry((e.dev, e.ino)).or_insert((0, e.nlink, size));
