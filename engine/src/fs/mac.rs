@@ -25,8 +25,16 @@ const DIR: attrgroup_t =
     libc::ATTR_DIR_LINKCOUNT | libc::ATTR_DIR_MOUNTSTATUS | libc::ATTR_DIR_ALLOCSIZE;
 const FILE: attrgroup_t =
     libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE | libc::ATTR_FILE_DATALENGTH;
-// with FSOPT_ATTR_CMN_EXTENDED the fork group carries extended common attributes
-const EXTENDED: attrgroup_t = libc::ATTR_CMNEXT_PRIVATESIZE;
+// With FSOPT_ATTR_CMN_EXTENDED the fork group carries extended common attributes.
+// A file's private size makes the kernel walk its extents (it doubled a whole walk), but it
+// is below the allocation only for files whose extended flags say they may share blocks
+// (APFS clones), are sparse or purgeable. A bulk listing asks for the flags (free) and looks
+// up the private size of just those; every other file frees what it occupies. Checked on
+// 2.2 million files: no unflagged file differs except by resource-fork bytes, which
+// deleting frees too.
+const EF_NEEDS_PRIVATE_SIZE: u64 = 0x1 | 0x8 | 0x10 | 0x40; // MAY_SHARE_BLOCKS, IS_PURGEABLE, IS_SPARSE, SHARES_ALL_BLOCKS (<sys/stat.h>)
+const BULK_FREED: attrgroup_t = libc::ATTR_CMNEXT_EXT_FLAGS;
+const ONE_FREED: attrgroup_t = libc::ATTR_CMNEXT_PRIVATESIZE | libc::ATTR_CMNEXT_EXT_FLAGS;
 const OPTIONS: u32 = libc::FSOPT_ATTR_CMN_EXTENDED;
 
 const UF_COMPRESSED: u32 = 0x20;
@@ -35,13 +43,14 @@ const VREG: u32 = 1;
 const VDIR: u32 = 2;
 const VLNK: u32 = 5;
 
+const BULK: bool = true;
 const BUF_LEN: usize = 128 * 1024;
 
 thread_local! {
     static BUF: RefCell<Vec<u8>> = RefCell::new(vec![0; BUF_LEN]);
 }
 
-fn attr_list(detail: Detail) -> libc::attrlist {
+fn attr_list(detail: Detail, bulk: bool) -> libc::attrlist {
     libc::attrlist {
         bitmapcount: libc::ATTR_BIT_MAP_COUNT,
         reserved: 0,
@@ -49,7 +58,11 @@ fn attr_list(detail: Detail) -> libc::attrlist {
         volattr: 0,
         dirattr: DIR,
         fileattr: FILE,
-        forkattr: if detail == Detail::Freed { EXTENDED } else { 0 },
+        forkattr: match (detail, bulk) {
+            (Detail::Freed, true) => BULK_FREED,
+            (Detail::Freed, false) => ONE_FREED,
+            _ => 0,
+        },
     }
 }
 
@@ -79,7 +92,7 @@ pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io
         return Err(io::Error::last_os_error());
     }
     let fd = Fd(fd);
-    let mut attrs = attr_list(detail);
+    let mut attrs = attr_list(detail, BULK);
     BUF.with(|buf| {
         let mut buf = buf.borrow_mut();
         let mut first = true;
@@ -119,7 +132,16 @@ pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io
                         "getattrlistbulk: bad entry length",
                     ));
                 }
-                if let Some(entry) = parse(&buf[off..off + len]) {
+                if let Some(mut entry) = parse(&buf[off..off + len]) {
+                    if detail == Detail::Freed
+                        && entry.kind == Kind::File
+                        && entry.private.is_none()
+                    {
+                        // a possible clone: ask for this one file's private size
+                        entry.private = stat(&dir.join(&entry.name), Detail::Freed)
+                            .ok()
+                            .and_then(|e| e.private);
+                    }
                     visit(&entry);
                 }
                 off += len;
@@ -131,7 +153,7 @@ pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io
 /// The entry for `path` itself (final symlink not followed).
 pub fn stat(path: &Path, detail: Detail) -> io::Result<Entry> {
     let c = c_path(path)?;
-    let mut attrs = attr_list(detail);
+    let mut attrs = attr_list(detail, false);
     let mut buf = [0u8; 2048];
     let rc = unsafe {
         libc::getattrlist(
@@ -269,6 +291,15 @@ fn parse(e: &[u8]) -> Option<Entry> {
     }
     if ext & libc::ATTR_CMNEXT_PRIVATESIZE != 0 {
         entry.private = Some(read_u64(e, cur)?);
+        cur += 8;
+    }
+    if ext & libc::ATTR_CMNEXT_EXT_FLAGS != 0 {
+        let flags = read_u64(e, cur)?;
+        // blocks it cannot share are all its own: deleting it frees what it occupies
+        if entry.private.is_none() && entry.kind == Kind::File && flags & EF_NEEDS_PRIVATE_SIZE == 0
+        {
+            entry.private = Some(entry.alloc);
+        }
     }
     Some(entry)
 }

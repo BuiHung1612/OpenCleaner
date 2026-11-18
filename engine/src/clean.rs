@@ -109,6 +109,8 @@ pub fn scan_with(
         })
         .collect();
 
+    let trace = std::env::var_os("OC_TRACE").is_some();
+    let started = Instant::now();
     // candidates in rule order: an earlier (more specific) rule claims a path first
     let mut items: Vec<Item> = Vec::new();
     let mut claimed: BTreeSet<PathBuf> = BTreeSet::new();
@@ -151,6 +153,13 @@ pub fn scan_with(
         }
     }
 
+    if trace {
+        eprintln!(
+            "scan: {} candidates in {:?}",
+            items.len(),
+            started.elapsed()
+        );
+    }
     let paths: Vec<PathBuf> = items.iter().map(|i| i.path.clone()).collect();
     let mut emit_sizes = |sizes: &[u64]| {
         let mut partial = summaries.clone();
@@ -160,6 +169,21 @@ pub fn scan_with(
     let sizes = size::freed_many(&paths, cancel, &mut emit_sizes);
     for (item, b) in items.iter_mut().zip(&sizes) {
         item.bytes = *b;
+    }
+    if trace {
+        eprintln!("scan: sized in {:?} (total)", started.elapsed());
+        let mut by_rule: Vec<(u64, &str)> = Vec::new();
+        for (ri, rule) in set.rules.iter().enumerate() {
+            by_rule.push((
+                items.iter().filter(|i| i.rule == ri).map(|i| i.bytes).sum(),
+                &rule.id,
+            ));
+        }
+        by_rule.sort();
+        eprintln!(
+            "scan: largest rules {:?}",
+            &by_rule[by_rule.len().saturating_sub(4)..]
+        );
     }
     // nothing to free: not worth a row (an empty cache folder)
     items.retain(|i| i.bytes > 0);

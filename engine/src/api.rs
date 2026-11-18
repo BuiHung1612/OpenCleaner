@@ -245,7 +245,11 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             }
         }
         Request::Scan { list } => {
+            let t = std::time::Instant::now();
             let running = procs::Running::snapshot();
+            if std::env::var_os("OC_TRACE").is_some() {
+                eprintln!("scan: running apps in {:?}", t.elapsed());
+            }
             let mut progress = |p: &clean::PlanSummary| emit_value("progress", p, &mut *emit);
             let plan = clean::scan_with(ctx(), rule_set(), &running, list, cancel, &mut progress);
             emit_value("plan", &plan, emit);
