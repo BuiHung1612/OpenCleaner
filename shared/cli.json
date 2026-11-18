@@ -1,0 +1,87 @@
+{
+  "binary": ["mo", "mole"],
+  "searchPaths": ["~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/run/current-system/sw/bin"],
+
+  "commands": {
+    "version": ["--version"],
+    "statusOnce": ["status", "--json"],
+    "status": ["status", "--watch", "--interval", "{interval}"],
+    "analyze": ["analyze", "--json", "{path}"],
+    "apps": ["uninstall", "--list"],
+    "uninstall": ["uninstall", "{names}"],
+    "uninstallPreview": ["uninstall", "--dry-run", "{names}"],
+    "history": ["history", "--json"]
+  },
+
+  "tools": [
+    {
+      "id": "clean",
+      "group": "Cleanup",
+      "title": "System Junk",
+      "subtitle": "Clean up caches, logs, temporary files and leftovers of apps you already removed.",
+      "points": ["Frees up space for things that matter", "Never touches your documents"],
+      "icon": "sparkles",
+      "colors": ["#0B7A75", "#14366B"],
+      "preview": ["clean", "--dry-run"],
+      "run": ["clean"]
+    },
+    {
+      "id": "installer",
+      "group": "Cleanup",
+      "title": "Installers",
+      "subtitle": "Find leftover .dmg, .pkg, .iso, .xip and .zip installers you no longer need.",
+      "points": ["Lists every installer with its size", "You pick what goes"],
+      "icon": "opticaldisc",
+      "colors": ["#B4572E", "#5B1F4A"],
+      "preview": ["installer", "--dry-run"],
+      "run": ["installer"],
+      "terminal": true
+    },
+    {
+      "id": "purge",
+      "group": "Cleanup",
+      "title": "Project Junk",
+      "subtitle": "Remove rebuildable build folders: node_modules, target, build, dist and more.",
+      "points": ["Skips projects touched in the last 7 days", "Protects Git-tracked files"],
+      "icon": "shippingbox",
+      "colors": ["#3E7B27", "#123D3A"],
+      "preview": ["purge", "--dry-run"],
+      "run": ["purge", "--yes"],
+      "confirm": "Permanently delete the eligible build folders (they skip the Trash)?"
+    },
+    {
+      "id": "optimize",
+      "group": "Speed",
+      "title": "Optimization",
+      "subtitle": "Refresh system caches and services, and repair safe maintenance issues.",
+      "points": ["Rebuilds stale system databases", "Only applies safe, reversible fixes"],
+      "icon": "gauge.with.dots.needle.67percent",
+      "colors": ["#C0392B", "#4A1942"],
+      "preview": ["optimize", "--dry-run"],
+      "run": ["optimize"]
+    },
+    {
+      "id": "slim",
+      "group": "Applications",
+      "title": "Slim Apps",
+      "subtitle": "Remove the Intel code from universal apps on Apple Silicon.",
+      "points": ["Each app is verified before it is replaced", "The original goes to the Trash"],
+      "icon": "scissors",
+      "colors": ["#6A3FB5", "#1E2A78"],
+      "preview": ["slim", "--dry-run"],
+      "run": ["slim"]
+    },
+    {
+      "id": "touchid",
+      "group": "Security",
+      "title": "Touch ID for sudo",
+      "subtitle": "Use your fingerprint instead of typing your password in Terminal.",
+      "points": ["One-time setup", "Easy to turn off again"],
+      "icon": "touchid",
+      "colors": ["#A8325E", "#3B1C4A"],
+      "preview": ["touchid", "enable", "--dry-run"],
+      "run": ["touchid"],
+      "terminal": true
+    }
+  ]
+}

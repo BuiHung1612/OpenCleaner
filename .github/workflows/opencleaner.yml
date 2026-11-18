@@ -1,0 +1,93 @@
+name: OpenCleaner
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    # Liquid Glass and swift-tools-version 6.2 need the macOS 26 SDK
+    runs-on: macos-26
+    env:
+      # optional: base64 of a .p12 signing certificate and its password; without them the app is signed ad-hoc
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGN_ID: ${{ secrets.MACOS_SIGN_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use the newest installed Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          swift --version
+
+      - name: Tag must match VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          [[ "${GITHUB_REF_NAME#v}" == "$(cat VERSION)" ]] || { echo "::error::tag $GITHUB_REF_NAME does not match VERSION $(cat VERSION)"; exit 1; }
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            macos/.build
+            macos/build/engine-*
+          key: spm-${{ runner.os }}-${{ hashFiles('macos/Package.swift', 'ENGINE_VERSION') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Import the signing certificate
+        if: env.MACOS_CERT_P12 != ''
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p ci "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p ci "$KC"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          # a password pasted into the secret often ends with a newline
+          PASS=$(printf %s "$MACOS_CERT_PASSWORD" | tr -d '\r\n ')
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$PASS" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          echo "SIGN_ID=$MACOS_SIGN_ID" >> "$GITHUB_ENV"
+
+      - run: macos/build.sh --universal
+
+      - name: Check the bundle
+        run: |
+          APP=macos/build/OpenCleaner.app
+          lipo -info $APP/Contents/MacOS/OpenCleaner
+          codesign --verify --deep --strict $APP
+          $APP/Contents/Resources/engine/mole --version
+
+      - run: ditto -c -k --keepParent macos/build/OpenCleaner.app OpenCleaner-macos.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenCleaner-macos
+          path: OpenCleaner-macos.zip
+
+  # Push a tag like v0.1.0 (matching VERSION) to publish a GitHub Release.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      # GPL-3.0: ship the source of the exact mo engine bundled in the app next to the binary
+      - name: Attach the engine source
+        run: |
+          ENGINE=$(cat ENGINE_VERSION)
+          curl -fsSL "https://github.com/tw93/mole/archive/refs/tags/$ENGINE.tar.gz" -o "dist/mo-engine-$ENGINE-source.tar.gz"
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

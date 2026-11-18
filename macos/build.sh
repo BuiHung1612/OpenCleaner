@@ -1,0 +1,89 @@
+#!/bin/zsh
+# Builds macos/build/OpenCleaner.app.  Usage: ./build.sh [--debug] [--universal]
+#   --universal  arm64 + x86_64 in one binary (what CI ships); default is this Mac's arch only
+set -euo pipefail
+cd "${0:A:h}"
+
+CONFIG=release
+ARCHS=()
+for arg in "$@"; do
+  case $arg in
+    --debug) CONFIG=debug ;;
+    --universal) ARCHS=(--arch arm64 --arch x86_64) ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+VERSION=$(cat ../VERSION)
+STRINGS=$(mktemp -d)
+
+ENGINE=$(./fetch-engine.sh)
+
+swift build -c $CONFIG "${ARCHS[@]}" \
+  -Xswiftc -emit-localized-strings -Xswiftc -emit-localized-strings-path -Xswiftc "$STRINGS"
+BIN=$(swift build -c $CONFIG "${ARCHS[@]}" --show-bin-path)/OpenCleaner
+
+APP=build/OpenCleaner.app
+rm -rf $APP
+mkdir -p $APP/Contents/{MacOS,Resources}
+cp "$BIN" $APP/Contents/MacOS/
+cp ../shared/cli.json $APP/Contents/Resources/
+# the mo engine ships inside the app, unmodified, with its GPL-3.0 license and source pointer
+cp -R $ENGINE $APP/Contents/Resources/engine
+cp -R Resources/*.lproj $APP/Contents/Resources/
+[[ -d Resources/Art ]] && cp -R Resources/Art $APP/Contents/Resources/
+ICON_KEY=""
+if [[ -f Resources/AppIcon.png ]]; then
+  SET=$(mktemp -d)/AppIcon.iconset && mkdir -p $SET
+  for n in 16 32 128 256 512; do
+    sips -z $n $n Resources/AppIcon.png --out $SET/icon_${n}x${n}.png >/dev/null
+    sips -z $((n * 2)) $((n * 2)) Resources/AppIcon.png --out $SET/icon_${n}x${n}@2x.png >/dev/null
+  done
+  iconutil -c icns $SET -o $APP/Contents/Resources/AppIcon.icns
+  ICON_KEY="<key>CFBundleIconFile</key><string>AppIcon</string>"
+fi
+
+cat > $APP/Contents/Info.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>OpenCleaner</string>
+  <key>CFBundleDisplayName</key><string>OpenCleaner</string>
+  <key>CFBundleIdentifier</key><string>io.github.opencleaner</string>
+  <key>CFBundleExecutable</key><string>OpenCleaner</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>vi</string></array>
+  <key>LSMinimumSystemVersion</key><string>26.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  $ICON_KEY
+</dict></plist>
+EOF
+
+for helper in $APP/Contents/Resources/engine/bin/*-go; do
+  codesign --force --sign "${SIGN_ID:--}" $helper
+done
+codesign --force --sign "${SIGN_ID:--}" $APP
+echo "→ $APP"
+
+# every string the compiler marked localizable, plus cli.json texts, must exist in each language
+python3 - "$STRINGS" Resources ../shared/cli.json <<'PY'
+import glob, json, subprocess, sys
+strings, res, manifest = sys.argv[1:]
+keys = set()
+for f in glob.glob(f"{strings}/*.stringsdata"):
+    for table in json.load(open(f)).get("tables", {}).values():
+        keys |= {e["key"] for e in table}
+for t in json.load(open(manifest)).get("tools", []):
+    keys |= {t[k] for k in ("title", "subtitle", "confirm", "group") if t.get(k)}
+    keys |= set(t.get("points", []))
+keys |= {"Cleanup", "Speed", "Applications", "Files", "Security"}
+keys -= {"", "OpenCleaner"}
+for lang in sorted(glob.glob(f"{res}/*.lproj")):
+    if lang.endswith("en.lproj"):
+        continue
+    have = json.loads(subprocess.check_output(["plutil", "-convert", "json", "-o", "-", f"{lang}/Localizable.strings"]))
+    for k in sorted(keys - set(have)):
+        print(f"warning: {lang.split('/')[-1]} is missing {k!r}")
+PY
