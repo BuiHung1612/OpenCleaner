@@ -76,3 +76,16 @@ import Testing
     let after = (try? FileManager.default.contentsOfDirectory(atPath: trash.path).count) ?? 0
     #expect(after == before)
 }
+
+@MainActor
+@Test func uninstallerListsAppsAndFillsInSizes() async throws {
+    let model = AppsModel()
+    model.load()
+    for _ in 0..<300 where model.apps == nil || model.sizes.allSatisfy({ $0 == 0 }) {
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    let apps = try #require(model.apps)
+    #expect(!apps.isEmpty)
+    #expect(apps.allSatisfy { $0.path.string?.hasSuffix(".app") == true })
+    #expect(model.sizes.contains { $0 > 0 })
+}

@@ -107,6 +107,9 @@ struct MainView: View {
     @StateObject private var lens = SpaceLensModel()
     @StateObject private var status = StatusStream()
     @StateObject private var junk = JunkModel()
+    @StateObject private var apps = AppsModel()
+    @StateObject private var installers = PicksModel()
+    @StateObject private var projects = PicksModel()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -178,12 +181,17 @@ struct MainView: View {
         switch module {
         case .dashboard: DashboardPage(stream: status)
         case .spaceLens: SpaceLensPage(model: lens)
-        case .uninstaller: UninstallerPage()
+        case .uninstaller: UninstallerPage(model: apps)
         case .history: HistoryPage()
         case .tool(let id):
             if let tool = CLI.tools.first(where: { $0.id == id }) {
-                // System Junk runs on the Rust engine; the other tools still on mo (legacy)
-                if id == "clean" { JunkPage(tool: tool, model: junk) } else { ToolPage(tool: tool) }
+                // on the Rust engine; the remaining tools (optimize, slim, Touch ID) still on mo
+                switch id {
+                case "clean": JunkPage(tool: tool, model: junk)
+                case "installer": PicksPage(tool: tool, request: ["op": "installers"], trashes: true, model: installers)
+                case "purge": PicksPage(tool: tool, request: ["op": "projects"], trashes: false, model: projects)
+                default: ToolPage(tool: tool)
+                }
             }
         }
     }
