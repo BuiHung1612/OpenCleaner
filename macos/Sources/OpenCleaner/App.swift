@@ -110,6 +110,7 @@ struct MainView: View {
     @StateObject private var apps = AppsModel()
     @StateObject private var installers = PicksModel()
     @StateObject private var projects = PicksModel()
+    @StateObject private var slim = PicksModel()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -185,11 +186,14 @@ struct MainView: View {
         case .history: HistoryPage()
         case .tool(let id):
             if let tool = CLI.tools.first(where: { $0.id == id }) {
-                // on the Rust engine; the remaining tools (optimize, slim, Touch ID) still on mo
+                // every tool runs on the Rust engine; ToolPage (mo, legacy) only for unknown ids
                 switch id {
                 case "clean": JunkPage(tool: tool, model: junk)
-                case "installer": PicksPage(tool: tool, request: ["op": "installers"], trashes: true, model: installers)
-                case "purge": PicksPage(tool: tool, request: ["op": "projects"], trashes: false, model: projects)
+                case "installer": PicksPage(tool: tool, request: ["op": "installers"], kind: .trash, model: installers)
+                case "purge": PicksPage(tool: tool, request: ["op": "projects"], kind: .delete, model: projects)
+                case "slim": PicksPage(tool: tool, request: ["op": "slim"], kind: .slim, model: slim)
+                case "optimize": OptimizePage(tool: tool)
+                case "touchid": TouchIDPage(tool: tool)
                 default: ToolPage(tool: tool)
                 }
             }

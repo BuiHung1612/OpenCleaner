@@ -89,3 +89,16 @@ import Testing
     #expect(apps.allSatisfy { $0.path.string?.hasSuffix(".app") == true })
     #expect(model.sizes.contains { $0 > 0 })
 }
+
+/// The scripts the engine hands over must survive AppleScript quoting (compiled, not run:
+/// no password prompt).
+@MainActor
+@Test func privilegedScriptsCompileAsAppleScript() throws {
+    let touchOn = try #require(Engine.call(["op": "touchid_script", "enable": true]).script.string)
+    let optimize = Engine.call(["op": "optimize", "tasks": ["dns", "memory"]]).admin_script.string ?? "true"
+    for script in [touchOn, optimize, #"echo "quoted \ backslash" 'single'"#] {
+        var error: NSDictionary?
+        let compiled = NSAppleScript(source: Privileged.source(for: script))?.compileAndReturnError(&error) ?? false
+        #expect(compiled, "\(script): \(String(describing: error))")
+    }
+}

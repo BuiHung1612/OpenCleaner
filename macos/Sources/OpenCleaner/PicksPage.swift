@@ -164,12 +164,21 @@ struct PicksOutcome: View {
     }
 }
 
-/// Installers and Project Junk: one engine request finds the items.
+/// What a pick list does to the picked items.
+enum PicksKind {
+    /// to the Trash (installers)
+    case trash
+    /// deleted (rebuildable build folders)
+    case delete
+    /// Intel code removed (the original app goes to the Trash)
+    case slim
+}
+
+/// Installers, Project Junk and Slim Apps: one engine request finds the items.
 struct PicksPage: View {
     let tool: Tool
     let request: [String: Any]
-    /// Trash (recoverable) or delete (build folders).
-    let trashes: Bool
+    let kind: PicksKind
     @ObservedObject var model: PicksModel
     @State private var confirming = false
 
@@ -199,14 +208,24 @@ struct PicksPage: View {
         }
         .padding(.horizontal, 32)
         .confirmationDialog(confirmText, isPresented: $confirming) {
-            Button(trashes ? String(localized: "Move to Trash") : String(localized: "Delete"), role: .destructive) { model.act() }
+            Button(actionTitle, role: .destructive) { model.act() }
+        }
+    }
+
+    private var actionTitle: String {
+        switch kind {
+        case .trash: String(localized: "Move to Trash")
+        case .delete: String(localized: "Delete")
+        case .slim: String(localized: "Slim")
         }
     }
 
     private var confirmText: String {
-        trashes
-            ? String(localized: "Move \(model.selected.count) items (\(bytes(model.selectedBytes))) to the Trash?")
-            : String(localized: "Delete \(model.selected.count) build folders (\(bytes(model.selectedBytes)))? They are rebuilt the next time you build.")
+        switch kind {
+        case .trash: String(localized: "Move \(model.selected.count) items (\(bytes(model.selectedBytes))) to the Trash?")
+        case .delete: String(localized: "Delete \(model.selected.count) build folders (\(bytes(model.selectedBytes)))? They are rebuilt the next time you build.")
+        case .slim: String(localized: "Remove the Intel code from \(model.selected.count) apps (\(bytes(model.selectedBytes)))? Each app is checked first; the originals go to the Trash.")
+        }
     }
 
     private var status: String {
@@ -229,7 +248,7 @@ struct PicksPage: View {
             case .idle, .done: BigButton(title: String(localized: "Scan")) { model.find(request) }
             case .finding, .acting: BigButton(title: "", busy: true) {}
             case .review:
-                BigButton(title: trashes ? String(localized: "Remove") : String(localized: "Delete")) { confirming = true }
+                BigButton(title: kind == .trash ? String(localized: "Remove") : actionTitle) { confirming = true }
                     .disabled(model.selected.isEmpty)
                     .opacity(model.selected.isEmpty ? 0.5 : 1)
             }
