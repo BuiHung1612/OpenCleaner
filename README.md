@@ -19,7 +19,7 @@ swift run             # quick dev run, English only, no art bundle
 `.github/workflows/opencleaner.yml` builds a universal (Apple Silicon + Intel) app on every push and uploads `OpenCleaner-macos.zip` as a workflow artifact.
 
 - **Release:** bump `VERSION`, commit, then push a matching tag: `git tag v0.1.0 && git push origin v0.1.0`. CI checks the tag matches `VERSION`, then creates a GitHub Release with the app zip and the source of the bundled mo engine (GPL-3.0).
-- **Signing (optional):** add repository secrets `MACOS_CERT_P12` (base64 of the `.p12`), `MACOS_CERT_PASSWORD` and `MACOS_SIGN_ID` (the certificate name). Without them the app is signed ad-hoc, so users must right-click → Open the first time. Notarization needs an Apple Developer ID and is not set up yet.
+- **Signing (optional, recommended):** run `macos/make-signing-cert.sh` once to create the fixed self-signed identity "OpenCleaner Code Signing", then `macos/make-signing-cert.sh --secrets OWNER/REPO` to upload `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD` and `MACOS_SIGN_ID`. A fixed signature keeps Full Disk Access granted across updates; ad-hoc builds lose it every release. It does not remove the first-launch Gatekeeper prompt (right-click → Open); that needs a Developer ID and notarization, not set up yet. Back up `~/.opencleaner-signing`: losing it means users grant access again once.
 
 ## Layout
 
