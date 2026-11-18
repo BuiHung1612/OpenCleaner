@@ -1,0 +1,1299 @@
+diff --git a/cmd/analyze/fastsize.go b/cmd/analyze/fastsize.go
+new file mode 100644
+index 0000000..a014f53
+--- /dev/null
++++ b/cmd/analyze/fastsize.go
+@@ -0,0 +1,674 @@
++//go:build darwin
++
++package main
++
++// OpenCleaner patch: faster directory reading for the analyzer.
++//
++//   - readDirBulk lists a directory with getattrlistbulk(2): one system call returns
++//     name, type, size, link count and times for many entries, where os.ReadDir plus
++//     DirEntry.Info costs a readdir and then one lstat per entry.
++//   - walkDirectorySize replaces `du -skPx -I <name>...`. du walks one directory at a
++//     time; on a large ~/Library it needed 30–80 s and the overview gave up at its
++//     30 s deadline with a partial size. This walker reads many directories at once
++//     and returns the same number: allocated blocks, symlinks not followed, mount
++//     points not crossed, hard-linked files counted once per walk.
++//   - readDirFast is os.ReadDir with Info() already filled in from the same call.
++//
++// File systems without getattrlistbulk (SMB, FAT…) fall back to readdir + lstat.
++
++import (
++	"context"
++	"encoding/binary"
++	"errors"
++	"fmt"
++	"io/fs"
++	"os"
++	"runtime"
++	"slices"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"syscall"
++	"time"
++	"unsafe"
++
++	"golang.org/x/sys/unix"
++)
++
++// ---- getattrlistbulk ----
++
++// Attributes asked of getattrlistbulk(2). The kernel packs returned ones in bit order,
++// with ATTR_CMN_RETURNED_ATTRS first and ATTR_CMN_ERROR right after it.
++const (
++	bulkCommon = unix.ATTR_CMN_RETURNED_ATTRS | attrCmnError | unix.ATTR_CMN_NAME | unix.ATTR_CMN_DEVID |
++		unix.ATTR_CMN_OBJTYPE | unix.ATTR_CMN_MODTIME | unix.ATTR_CMN_ACCTIME | unix.ATTR_CMN_OWNERID | unix.ATTR_CMN_GRPID | unix.ATTR_CMN_ACCESSMASK | unix.ATTR_CMN_FLAGS | unix.ATTR_CMN_FILEID
++	bulkDir  = attrDirLinkCount | attrDirMountStatus | attrDirAllocSize
++	bulkFile = unix.ATTR_FILE_LINKCOUNT | unix.ATTR_FILE_ALLOCSIZE | unix.ATTR_FILE_DATALENGTH
++	// with FSOPT_ATTR_CMN_EXTENDED the fork group carries extended common attributes,
++	// packed last: the private size clean.sh counts as freed, and the APFS clone id and
++	// flags countableFileSize needs (clone_darwin.go)
++	bulkFork = attrCmnextPrivateSize | attrCmnextCloneID | attrCmnextExtFlags
++
++	attrCmnextPrivateSize = 0x8
++	ufCompressed          = 0x20 // UF_COMPRESSED in st_flags
++
++	attrCmnError       = 0x20000000 // <sys/attr.h>; not in x/sys
++	attrDirLinkCount   = 0x1
++	attrDirMountStatus = 0x4
++	attrDirAllocSize   = 0x8
++	dirMntStatusMntPt  = 0x1
++)
++
++// enum vtype in <sys/vnode.h>
++const (
++	vReg  = 1
++	vDir  = 2
++	vBlk  = 3
++	vChr  = 4
++	vLnk  = 5
++	vSock = 6
++	vFifo = 7
++)
++
++// bulkStat is one directory entry as getattrlistbulk reports it.
++type bulkStat struct {
++	name       string
++	objType    uint32
++	dev        int32
++	ino        uint64
++	perm       uint32
++	flags      uint32 // st_flags
++	uid, gid   uint32
++	nlink      uint32
++	alloc      int64 // allocated bytes (st_blocks * 512)
++	size       int64 // logical length
++	atime      unix.Timespec
++	mtime      unix.Timespec
++	mountPoint bool
++	cloneKnown bool
++	cloneID    uint64
++	extFlags   uint64
++	// bytes only this file holds (shared clone blocks excluded), when the volume knows
++	private      int64
++	privateKnown bool
++	err          syscall.Errno // the entry could not be read
++}
++
++var bulkBuffers = sync.Pool{New: func() any { b := make([]byte, 128<<10); return &b }}
++
++// errBulkUnsupported means the file system has no getattrlistbulk; nothing was read.
++var errBulkUnsupported = errors.New("getattrlistbulk not supported")
++
++// readDirBulk calls fn for every entry of the open directory f. It returns
++// errBulkUnsupported, before calling fn, when the file system lacks the call.
++func readDirBulk(f *os.File, fn func(*bulkStat)) error {
++	attrs := unix.Attrlist{Bitmapcount: unix.ATTR_BIT_MAP_COUNT, Commonattr: bulkCommon, Dirattr: bulkDir, Fileattr: bulkFile, Forkattr: bulkFork}
++	bufp := bulkBuffers.Get().(*[]byte)
++	defer bulkBuffers.Put(bufp)
++	buf := *bufp
++	first := true
++	var st bulkStat
++	for {
++		n, _, errno := unix.Syscall6(unix.SYS_GETATTRLISTBULK, f.Fd(), uintptr(unsafe.Pointer(&attrs)),
++			uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), unix.FSOPT_ATTR_CMN_EXTENDED, 0)
++		if errno == unix.EINTR {
++			continue
++		}
++		if errno != 0 {
++			if first && (errno == unix.ENOTSUP || errno == unix.EINVAL || errno == unix.ENOSYS) {
++				return errBulkUnsupported
++			}
++			return &os.PathError{Op: "getattrlistbulk", Path: f.Name(), Err: errno}
++		}
++		first = false
++		if n == 0 {
++			return nil
++		}
++		off := 0
++		for range int(n) {
++			if off+4 > len(buf) {
++				return fmt.Errorf("getattrlistbulk %s: short buffer", f.Name())
++			}
++			entryLen := int(binary.LittleEndian.Uint32(buf[off:]))
++			if entryLen < 4 || off+entryLen > len(buf) {
++				return fmt.Errorf("getattrlistbulk %s: bad entry length %d", f.Name(), entryLen)
++			}
++			if parseBulkEntry(buf[off:off+entryLen], &st) {
++				fn(&st)
++			}
++			off += entryLen
++		}
++	}
++}
++
++// parseBulkEntry decodes one packed entry, reading only the attributes the kernel
++// says it returned. It reports false for an entry it cannot make sense of.
++func parseBulkEntry(e []byte, st *bulkStat) bool {
++	*st = bulkStat{nlink: 1}
++	r := e[4:]
++	ok := true
++	need := func(n int) bool {
++		if len(r) < n {
++			ok = false
++		}
++		return ok
++	}
++	u32 := func() uint32 {
++		if !need(4) {
++			return 0
++		}
++		v := binary.LittleEndian.Uint32(r)
++		r = r[4:]
++		return v
++	}
++	u64 := func() uint64 {
++		if !need(8) {
++			return 0
++		}
++		v := binary.LittleEndian.Uint64(r)
++		r = r[8:]
++		return v
++	}
++	ts := func() unix.Timespec { return unix.Timespec{Sec: int64(u64()), Nsec: int64(u64())} }
++
++	cmn, _, dirAttrs, fileAttrs, extAttrs := u32(), u32(), u32(), u32(), u32()
++	if cmn&attrCmnError != 0 {
++		st.err = syscall.Errno(u32())
++	}
++	if cmn&unix.ATTR_CMN_NAME != 0 && need(8) {
++		field := len(e) - len(r)
++		start := field + int(int32(binary.LittleEndian.Uint32(r)))
++		length := int(binary.LittleEndian.Uint32(r[4:]))
++		r = r[8:]
++		if length > 1 && start >= 0 && start+length <= len(e) {
++			st.name = strings.Clone(string(e[start : start+length-1])) // drop the NUL
++		}
++	}
++	if st.err != 0 {
++		return ok && st.name != ""
++	}
++	if cmn&unix.ATTR_CMN_DEVID != 0 {
++		st.dev = int32(u32())
++	}
++	if cmn&unix.ATTR_CMN_OBJTYPE != 0 {
++		st.objType = u32()
++	}
++	if cmn&unix.ATTR_CMN_MODTIME != 0 {
++		st.mtime = ts()
++	}
++	if cmn&unix.ATTR_CMN_ACCTIME != 0 {
++		st.atime = ts()
++	}
++	if cmn&unix.ATTR_CMN_OWNERID != 0 {
++		st.uid = u32()
++	}
++	if cmn&unix.ATTR_CMN_GRPID != 0 {
++		st.gid = u32()
++	}
++	if cmn&unix.ATTR_CMN_ACCESSMASK != 0 {
++		st.perm = u32()
++	}
++	if cmn&unix.ATTR_CMN_FLAGS != 0 {
++		st.flags = u32()
++	}
++	if cmn&unix.ATTR_CMN_FILEID != 0 {
++		st.ino = u64()
++	}
++	if st.objType == vDir {
++		if dirAttrs&attrDirLinkCount != 0 {
++			st.nlink = u32()
++		}
++		if dirAttrs&attrDirMountStatus != 0 {
++			st.mountPoint = u32()&dirMntStatusMntPt != 0
++		}
++		if dirAttrs&attrDirAllocSize != 0 {
++			st.alloc = int64(u64())
++		}
++	} else {
++		if fileAttrs&unix.ATTR_FILE_LINKCOUNT != 0 {
++			st.nlink = u32()
++		}
++		if fileAttrs&unix.ATTR_FILE_ALLOCSIZE != 0 {
++			st.alloc = int64(u64())
++		}
++		if fileAttrs&unix.ATTR_FILE_DATALENGTH != 0 {
++			st.size = int64(u64())
++		}
++	}
++	if extAttrs&attrCmnextPrivateSize != 0 {
++		st.private, st.privateKnown = int64(u64()), true
++	}
++	if extAttrs&attrCmnextCloneID != 0 {
++		st.cloneID = u64()
++	}
++	if extAttrs&attrCmnextExtFlags != 0 {
++		st.extFlags = u64()
++	}
++	st.cloneKnown = extAttrs&attrCmnextCloneID != 0 && extAttrs&attrCmnextExtFlags != 0
++	return ok && st.name != ""
++}
++
++// ---- readDirFast: os.ReadDir with Info() included ----
++
++type bulkDirEntry struct {
++	info *bulkFileInfo
++}
++
++func (d bulkDirEntry) Name() string               { return d.info.name }
++func (d bulkDirEntry) IsDir() bool                { return d.info.IsDir() }
++func (d bulkDirEntry) Type() fs.FileMode          { return d.info.Mode().Type() }
++func (d bulkDirEntry) Info() (fs.FileInfo, error) { return d.info, nil }
++
++type bulkFileInfo struct {
++	name       string
++	mode       fs.FileMode
++	stat       syscall.Stat_t
++	cloneKnown bool
++	cloneID    uint64
++	sharesAll  bool
++}
++
++// fileCloneIdentity is cloneIdentity, answered from the bulk listing when the
++// entry came from readDirFast (no extra getattrlist per file).
++func fileCloneIdentity(path string, info fs.FileInfo) (cloneID uint64, sharesAll bool, ok bool) {
++	if b, isBulk := info.(*bulkFileInfo); isBulk && b.cloneKnown {
++		return b.cloneID, b.sharesAll, true
++	}
++	return cloneIdentity(path)
++}
++
++func (i *bulkFileInfo) Name() string      { return i.name }
++func (i *bulkFileInfo) Size() int64       { return i.stat.Size }
++func (i *bulkFileInfo) Mode() fs.FileMode { return i.mode }
++func (i *bulkFileInfo) ModTime() time.Time {
++	return time.Unix(i.stat.Mtimespec.Sec, i.stat.Mtimespec.Nsec)
++}
++func (i *bulkFileInfo) IsDir() bool { return i.mode.IsDir() }
++func (i *bulkFileInfo) Sys() any    { return &i.stat }
++
++func (st *bulkStat) fileInfo() *bulkFileInfo {
++	mode := fs.FileMode(st.perm & 0o777)
++	ifmt := uint16(0)
++	switch st.objType {
++	case vDir:
++		mode |= fs.ModeDir
++		ifmt = syscall.S_IFDIR
++	case vLnk:
++		mode |= fs.ModeSymlink
++		ifmt = syscall.S_IFLNK
++	case vBlk:
++		mode |= fs.ModeDevice
++		ifmt = syscall.S_IFBLK
++	case vChr:
++		mode |= fs.ModeDevice | fs.ModeCharDevice
++		ifmt = syscall.S_IFCHR
++	case vSock:
++		mode |= fs.ModeSocket
++		ifmt = syscall.S_IFSOCK
++	case vFifo:
++		mode |= fs.ModeNamedPipe
++		ifmt = syscall.S_IFIFO
++	default:
++		ifmt = syscall.S_IFREG
++	}
++	if st.perm&syscall.S_ISUID != 0 {
++		mode |= fs.ModeSetuid
++	}
++	if st.perm&syscall.S_ISGID != 0 {
++		mode |= fs.ModeSetgid
++	}
++	if st.perm&syscall.S_ISVTX != 0 {
++		mode |= fs.ModeSticky
++	}
++	return &bulkFileInfo{name: st.name, mode: mode, cloneKnown: st.cloneKnown, cloneID: st.cloneID, sharesAll: st.extFlags&efSharesAllBlocks != 0, stat: syscall.Stat_t{
++		Dev:       st.dev,
++		Ino:       st.ino,
++		Mode:      ifmt | uint16(st.perm&0o7777),
++		Uid:       st.uid,
++		Gid:       st.gid,
++		Nlink:     uint16(min(st.nlink, 0xFFFF)),
++		Size:      st.size,
++		Blocks:    (st.alloc + 511) / 512,
++		Atimespec: syscall.Timespec{Sec: st.atime.Sec, Nsec: st.atime.Nsec},
++		Mtimespec: syscall.Timespec{Sec: st.mtime.Sec, Nsec: st.mtime.Nsec},
++	}}
++}
++
++// For a directory, Size() is 0 and Nlink may be 1 (APFS does not return its link
++// count in bulk); the scanner reads neither for directories.
++
++// readDirFast behaves like os.ReadDir (entries sorted by name) but each entry's
++// Info() needs no further system call. A mount point gets a real lstat, because
++// getattrlistbulk describes the directory underneath it, not the mounted volume.
++func readDirFast(path string) ([]fs.DirEntry, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	defer f.Close()
++
++	var entries []fs.DirEntry
++	var firstErr error
++	err = readDirBulk(f, func(st *bulkStat) {
++		if st.err != 0 || st.mountPoint {
++			// unreadable entry or mount point: let the regular lstat path describe it
++			info, lerr := os.Lstat(path + "/" + st.name)
++			if lerr != nil {
++				if firstErr == nil && !errors.Is(lerr, fs.ErrNotExist) {
++					firstErr = lerr
++				}
++				return
++			}
++			entries = append(entries, fs.FileInfoToDirEntry(info))
++			return
++		}
++		entries = append(entries, bulkDirEntry{st.fileInfo()})
++	})
++	if errors.Is(err, errBulkUnsupported) {
++		return os.ReadDir(path)
++	}
++	slices.SortFunc(entries, func(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
++	if err == nil {
++		err = firstErr
++	}
++	return entries, err
++}
++
++// ---- tree sizes: du -skP[x] and clean.sh's freed-bytes rule ----
++
++type treeOptions struct {
++	ignore      map[string]bool
++	crossMounts bool // descend into other file systems (du without -x)
++	// private applies clean.sh's rule for what deleting the tree frees: regular files
++	// only, each at its private size (blocks shared with APFS clones excluded) unless
++	// compressed, and a hard-linked file only when all of its links are inside the tree.
++	private bool
++	// missingIsError reports entries that vanish mid-walk as failures, as du does;
++	// the analyzer ignores them (a file deleted while we walk does not make a size wrong).
++	missingIsError bool
++}
++
++type walkInode struct {
++	dev int32
++	ino uint64
++}
++
++type privateLink struct {
++	seen, nlink uint32
++	size        int64
++}
++
++type treeWalk struct {
++	ctx     context.Context
++	opts    treeOptions
++	dev     int32 // the root's file system
++	total   atomic.Int64
++	links   *sync.Map // walkInode -> struct{}; du counts a hard link once per invocation
++	mu      sync.Mutex
++	cond    *sync.Cond
++	queue   []string
++	pending int // directories queued or being read
++
++	privMu    sync.Mutex
++	privLinks map[walkInode]*privateLink
++
++	errMu    sync.Mutex
++	firstErr error
++	allPerm  bool
++}
++
++// walkDirectorySize returns what `du -skPx -I <name>...` measures for path, in bytes.
++// Like du, it keeps what it could measure when part of the tree is unreadable or the
++// context ends, and reports that with an error (wrapping fs.ErrPermission when every
++// failure was a permission denial).
++func walkDirectorySize(ctx context.Context, path string, ignoreNames []string) (int64, error) {
++	opts := treeOptions{ignore: make(map[string]bool, len(ignoreNames))}
++	for _, name := range ignoreNames {
++		opts.ignore[name] = true
++	}
++	return measureTree(ctx, path, opts, &sync.Map{})
++}
++
++// measureTree sizes one tree. links is shared between calls that must count a hard
++// link once (the operands of one du invocation).
++func measureTree(ctx context.Context, path string, opts treeOptions, links *sync.Map) (int64, error) {
++	var root syscall.Stat_t
++	if err := syscall.Lstat(path, &root); err != nil {
++		return 0, &os.PathError{Op: "lstat", Path: path, Err: err}
++	}
++	w := &treeWalk{ctx: ctx, opts: opts, dev: root.Dev, links: links, allPerm: true, privLinks: map[walkInode]*privateLink{}}
++	switch root.Mode & syscall.S_IFMT {
++	case syscall.S_IFDIR:
++	case syscall.S_IFLNK:
++		if opts.private {
++			return 0, nil // clean.sh never follows or counts a symlinked root
++		}
++		w.addFile(root.Dev, root.Ino, uint32(root.Nlink), root.Blocks*512)
++		return w.total.Load(), nil
++	default:
++		if opts.private {
++			if root.Mode&syscall.S_IFMT == syscall.S_IFREG {
++				w.addPrivateFile(root.Dev, root.Ino, uint32(root.Nlink), privateBytesOf(path, root.Blocks*512))
++				w.settlePrivateLinks()
++			}
++		} else {
++			w.addFile(root.Dev, root.Ino, uint32(root.Nlink), root.Blocks*512)
++		}
++		return w.total.Load(), nil
++	}
++
++	if !opts.private {
++		w.total.Add(root.Blocks * 512)
++	}
++	w.queue, w.pending = []string{path}, 1
++	w.cond = sync.NewCond(&w.mu)
++	workers := max(runtime.NumCPU()*2, 4)
++	var wg sync.WaitGroup
++	for range workers {
++		wg.Go(w.work)
++	}
++	wg.Wait()
++	w.settlePrivateLinks()
++
++	size := w.total.Load()
++	if err := ctx.Err(); err != nil {
++		return size, fmt.Errorf("walk incomplete for %s: %w", path, err)
++	}
++	if w.firstErr != nil {
++		if w.allPerm {
++			return size, fmt.Errorf("walk incomplete for %s: %w: %w", path, w.firstErr, fs.ErrPermission)
++		}
++		return size, fmt.Errorf("walk incomplete for %s: %w", path, w.firstErr)
++	}
++	return size, nil
++}
++
++func (w *treeWalk) work() {
++	for {
++		w.mu.Lock()
++		for len(w.queue) == 0 && w.pending > 0 {
++			w.cond.Wait()
++		}
++		if w.pending == 0 {
++			w.mu.Unlock()
++			return
++		}
++		// LIFO keeps the queue short (depth-first) on wide trees
++		dir := w.queue[len(w.queue)-1]
++		w.queue = w.queue[:len(w.queue)-1]
++		w.mu.Unlock()
++
++		subdirs := w.read(dir)
++
++		w.mu.Lock()
++		w.queue = append(w.queue, subdirs...)
++		w.pending += len(subdirs) - 1
++		w.cond.Broadcast()
++		w.mu.Unlock()
++	}
++}
++
++// read sizes the entries of one directory and returns its subdirectories to walk.
++func (w *treeWalk) read(dir string) []string {
++	if w.ctx.Err() != nil {
++		return nil
++	}
++	f, err := os.Open(dir)
++	if err != nil {
++		w.fail(err)
++		return nil
++	}
++	defer f.Close()
++
++	var subdirs []string
++	err = readDirBulk(f, func(st *bulkStat) {
++		if w.opts.ignore[st.name] {
++			return
++		}
++		p := dir + "/" + st.name
++		if st.err != 0 {
++			w.fail(&os.PathError{Op: "getattrlistbulk", Path: p, Err: st.err})
++			return
++		}
++		if st.objType == vDir {
++			if st.mountPoint {
++				// bulk attributes describe the directory under the mount; ask the mounted root
++				if !w.opts.crossMounts || w.opts.private {
++					return // another file system (an iPhone's DeviceFS, a disk image…), like du -x
++				}
++				var mst syscall.Stat_t
++				if err := syscall.Lstat(p, &mst); err != nil {
++					w.fail(&os.PathError{Op: "lstat", Path: p, Err: err})
++					return
++				}
++				w.total.Add(mst.Blocks * 512)
++			} else if !w.opts.private {
++				w.total.Add(st.alloc)
++			}
++			subdirs = append(subdirs, p)
++			return
++		}
++		if w.opts.private {
++			if st.objType != vReg {
++				return
++			}
++			size := st.alloc
++			if st.privateKnown && st.flags&ufCompressed == 0 && st.private < size {
++				size = st.private
++			}
++			w.addPrivateFile(st.dev, st.ino, st.nlink, size)
++			return
++		}
++		w.addFile(st.dev, st.ino, st.nlink, st.alloc)
++	})
++	if err == nil {
++		return subdirs
++	}
++	if !errors.Is(err, errBulkUnsupported) {
++		w.fail(err)
++		return subdirs
++	}
++
++	names, err := f.Readdirnames(-1)
++	if err != nil {
++		w.fail(err)
++	}
++	for _, name := range names {
++		if w.opts.ignore[name] {
++			continue
++		}
++		p := dir + "/" + name
++		var st syscall.Stat_t
++		if err := syscall.Lstat(p, &st); err != nil {
++			w.fail(&os.PathError{Op: "lstat", Path: p, Err: err})
++			continue
++		}
++		switch {
++		case st.Mode&syscall.S_IFMT == syscall.S_IFDIR:
++			if st.Dev != w.dev && (!w.opts.crossMounts || w.opts.private) {
++				continue // another file system, like du -x
++			}
++			if !w.opts.private {
++				w.total.Add(st.Blocks * 512)
++			}
++			subdirs = append(subdirs, p)
++		case w.opts.private:
++			if st.Mode&syscall.S_IFMT == syscall.S_IFREG {
++				w.addPrivateFile(st.Dev, st.Ino, uint32(st.Nlink), privateBytesOf(p, st.Blocks*512))
++			}
++		default:
++			w.addFile(st.Dev, st.Ino, uint32(st.Nlink), st.Blocks*512)
++		}
++	}
++	return subdirs
++}
++
++func (w *treeWalk) addFile(dev int32, ino uint64, nlink uint32, alloc int64) {
++	if nlink > 1 {
++		if _, dup := w.links.LoadOrStore(walkInode{dev, ino}, struct{}{}); dup {
++			return
++		}
++	}
++	w.total.Add(alloc)
++}
++
++// addPrivateFile counts a file for the freed-bytes rule; a hard-linked one waits until
++// the walk shows whether every link is inside the tree.
++func (w *treeWalk) addPrivateFile(dev int32, ino uint64, nlink uint32, size int64) {
++	if nlink <= 1 {
++		w.total.Add(size)
++		return
++	}
++	w.privMu.Lock()
++	defer w.privMu.Unlock()
++	link := w.privLinks[walkInode{dev, ino}]
++	if link == nil {
++		link = &privateLink{nlink: nlink, size: size}
++		w.privLinks[walkInode{dev, ino}] = link
++	}
++	link.seen++
++}
++
++func (w *treeWalk) settlePrivateLinks() {
++	for _, link := range w.privLinks {
++		if link.seen == link.nlink {
++			w.total.Add(link.size)
++		}
++	}
++}
++
++// privateBytesOf is clean.sh's private_bytes for one path: the private size when the
++// volume reports one and the file is not compressed, never more than allocated.
++func privateBytesOf(path string, allocated int64) int64 {
++	p, err := unix.BytePtrFromString(path)
++	if err != nil {
++		return allocated
++	}
++	list := attrList{bitmapCount: unix.ATTR_BIT_MAP_COUNT, commonAttr: unix.ATTR_CMN_RETURNED_ATTRS | unix.ATTR_CMN_FLAGS, forkAttr: attrCmnextPrivateSize}
++	var buf [36]byte // length, returned attribute set, flags, private size
++	_, _, errno := unix.Syscall6(unix.SYS_GETATTRLIST, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&list)),
++		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unix.FSOPT_NOFOLLOW|unix.FSOPT_ATTR_CMN_EXTENDED), 0)
++	if errno != 0 || binary.LittleEndian.Uint32(buf[0:]) < uint32(len(buf)) {
++		return allocated
++	}
++	common, ext := binary.LittleEndian.Uint32(buf[4:]), binary.LittleEndian.Uint32(buf[20:])
++	flags, private := binary.LittleEndian.Uint32(buf[24:]), int64(binary.LittleEndian.Uint64(buf[28:]))
++	if common&unix.ATTR_CMN_FLAGS == 0 || ext&attrCmnextPrivateSize == 0 || flags&ufCompressed != 0 {
++		return allocated
++	}
++	return min(private, allocated)
++}
++
++func (w *treeWalk) fail(err error) {
++	if errors.Is(err, fs.ErrNotExist) && !w.opts.missingIsError {
++		return
++	}
++	w.errMu.Lock()
++	defer w.errMu.Unlock()
++	if w.firstErr == nil {
++		w.firstErr = err
++	}
++	if !isPermissionFailure(err) {
++		w.allPerm = false
++	}
++}
+diff --git a/cmd/analyze/fastsize_test.go b/cmd/analyze/fastsize_test.go
+new file mode 100644
+index 0000000..64a6b26
+--- /dev/null
++++ b/cmd/analyze/fastsize_test.go
+@@ -0,0 +1,188 @@
++//go:build darwin
++
++package main
++
++import (
++	"context"
++	"errors"
++	"io/fs"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"syscall"
++	"testing"
++)
++
++// The walker must report exactly what `du -skPx -I <name>` reports.
++func duKB(t *testing.T, path string, ignore ...string) int64 {
++	t.Helper()
++	args := []string{"-skPx"}
++	for _, name := range ignore {
++		args = append(args, "-I", name)
++	}
++	out, _ := exec.Command(systemDu, append(args, path)...).Output()
++	kb, err := strconv.ParseInt(strings.Fields(string(out))[0], 10, 64)
++	if err != nil {
++		t.Fatalf("du output %q: %v", out, err)
++	}
++	return kb
++}
++
++func writeSized(t *testing.T, path string, size int) {
++	t.Helper()
++	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestWalkDirectorySizeMatchesDu(t *testing.T) {
++	root := t.TempDir()
++	outside := t.TempDir()
++	for i := range 40 {
++		writeSized(t, filepath.Join(root, "a", strconv.Itoa(i%7), strconv.Itoa(i)+".bin"), 1000+i*3000)
++	}
++	writeSized(t, filepath.Join(root, "big.bin"), 3<<20)
++	// hard links count once
++	if err := os.Link(filepath.Join(root, "big.bin"), filepath.Join(root, "a", "big-link.bin")); err != nil {
++		t.Fatal(err)
++	}
++	// symlinks are not followed
++	writeSized(t, filepath.Join(outside, "huge.bin"), 8<<20)
++	if err := os.Symlink(filepath.Join(outside, "huge.bin"), filepath.Join(root, "link-to-huge")); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(outside, filepath.Join(root, "link-to-dir")); err != nil {
++		t.Fatal(err)
++	}
++	// ignored names are skipped at any depth
++	writeSized(t, filepath.Join(root, "a", "node_modules", "x.bin"), 2<<20)
++	writeSized(t, filepath.Join(root, "node_modules", "y.bin"), 2<<20)
++
++	for _, ignore := range [][]string{nil, {"node_modules"}} {
++		size, err := walkDirectorySize(context.Background(), root, ignore)
++		if err != nil {
++			t.Fatalf("ignore %v: %v", ignore, err)
++		}
++		if want := duKB(t, root, ignore...); size/1024 != want {
++			t.Errorf("ignore %v: walker %d KB, du %d KB", ignore, size/1024, want)
++		}
++	}
++}
++
++func TestWalkDirectorySizeKeepsPartialSizeOnDenial(t *testing.T) {
++	root := t.TempDir()
++	writeSized(t, filepath.Join(root, "readable.bin"), 1<<20)
++	locked := filepath.Join(root, "locked")
++	writeSized(t, filepath.Join(locked, "secret.bin"), 1<<20)
++	if err := os.Chmod(locked, 0); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
++
++	size, err := walkDirectorySize(context.Background(), root, nil)
++	if !errors.Is(err, fs.ErrPermission) || !isPermissionFailure(err) {
++		t.Fatalf("err = %v, want a permission failure", err)
++	}
++	if size < 1<<20 || size >= 2<<20 {
++		t.Fatalf("size = %d, want the readable 1 MiB only", size)
++	}
++}
++
++func TestWalkDirectorySizeStopsWhenCanceled(t *testing.T) {
++	root := t.TempDir()
++	writeSized(t, filepath.Join(root, "x", "y.bin"), 4096)
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	if _, err := walkDirectorySize(ctx, root, nil); !errors.Is(err, context.Canceled) {
++		t.Fatalf("err = %v, want context.Canceled", err)
++	}
++}
++
++func TestWalkDirectorySizeOfFileAndMissingPath(t *testing.T) {
++	file := filepath.Join(t.TempDir(), "f.bin")
++	writeSized(t, file, 70000)
++	size, err := walkDirectorySize(context.Background(), file, nil)
++	if err != nil || size/1024 != duKB(t, file) {
++		t.Fatalf("file: %d, %v; du %d KB", size, err, duKB(t, file))
++	}
++	if _, err := walkDirectorySize(context.Background(), file+"-missing", nil); !errors.Is(err, fs.ErrNotExist) {
++		t.Fatalf("missing: err = %v", err)
++	}
++}
++
++// readDirFast must describe every entry exactly as os.ReadDir + lstat does, for the
++// fields the scanner reads (size, blocks, links, inode, device, mode, owner, times).
++// Directory link counts are not compared: APFS does not return them in bulk and the
++// scanner reads Nlink only for files (hard-link dedupe).
++func TestReadDirFastMatchesLstat(t *testing.T) {
++	root := t.TempDir()
++	writeSized(t, filepath.Join(root, "f.bin"), 123457)
++	writeSized(t, filepath.Join(root, "sub", "g.bin"), 10)
++	if err := os.Link(filepath.Join(root, "f.bin"), filepath.Join(root, "hard")); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink("f.bin", filepath.Join(root, "sym")); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Chmod(filepath.Join(root, "sub"), 0o751); err != nil {
++		t.Fatal(err)
++	}
++	// an APFS clone shares all its blocks with f.bin
++	if out, err := exec.Command("/bin/cp", "-c", filepath.Join(root, "f.bin"), filepath.Join(root, "clone.bin")).CombinedOutput(); err != nil {
++		t.Fatalf("cp -c: %v %s", err, out)
++	}
++	sawSharedClone := false
++	dirs := []string{root}
++	for _, d := range strings.Fields(os.Getenv("FASTDIR_EXTRA")) {
++		dirs = append(dirs, d)
++	}
++	for _, dir := range dirs {
++		fast, err := readDirFast(dir)
++		if err != nil {
++			t.Fatalf("%s: %v", dir, err)
++		}
++		slow, err := os.ReadDir(dir)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if len(fast) != len(slow) {
++			t.Fatalf("%s: %d entries, os.ReadDir has %d", dir, len(fast), len(slow))
++		}
++		for i := range slow {
++			a, b := fast[i], slow[i]
++			if a.Name() != b.Name() || a.IsDir() != b.IsDir() || a.Type() != b.Type() {
++				t.Fatalf("%s: entry %d is %q/%v/%v, want %q/%v/%v", dir, i, a.Name(), a.IsDir(), a.Type(), b.Name(), b.IsDir(), b.Type())
++			}
++			ai, _ := a.Info()
++			bi, err := b.Info()
++			if err != nil {
++				continue // vanished
++			}
++			as, bs := ai.Sys().(*syscall.Stat_t), bi.Sys().(*syscall.Stat_t)
++			path := filepath.Join(dir, a.Name())
++			if ai.Mode() != bi.Mode() || as.Blocks != bs.Blocks || (!ai.IsDir() && as.Nlink != bs.Nlink) || as.Ino != bs.Ino ||
++				as.Dev != bs.Dev || as.Mode != bs.Mode || as.Uid != bs.Uid || as.Gid != bs.Gid || !ai.ModTime().Equal(bi.ModTime()) ||
++				getLastAccessTimeFromInfo(ai) != getLastAccessTimeFromInfo(bi) ||
++				(!ai.IsDir() && ai.Size() != bi.Size()) ||
++				getActualFileSize(path, ai) != getActualFileSize(path, bi) {
++				t.Errorf("%s:\n fast %v mode=%v %+v\n lstat %v mode=%v %+v", path, ai.Size(), ai.Mode(), *as, bi.Size(), bi.Mode(), *bs)
++			}
++			if ai.Mode().IsRegular() && ai.Size() > 0 {
++				fid, fshared, fok := fileCloneIdentity(path, ai)
++				cid, cshared, cok := cloneIdentity(path)
++				if fid != cid || fshared != cshared || fok != cok {
++					t.Errorf("%s: clone identity %d/%v/%v, getattrlist says %d/%v/%v", path, fid, fshared, fok, cid, cshared, cok)
++				}
++				sawSharedClone = sawSharedClone || (dir == root && a.Name() == "clone.bin" && fshared)
++			}
++		}
++	}
++	if !sawSharedClone {
++		t.Error("clone.bin was not reported as sharing all its blocks")
++	}
++}
+diff --git a/cmd/analyze/json.go b/cmd/analyze/json.go
+index 90e6577..1e093cc 100644
+--- a/cmd/analyze/json.go
++++ b/cmd/analyze/json.go
+@@ -62,7 +62,11 @@ func performDirectoryScanForJSON(path string) jsonOutput {
+ 	currentPath := &atomic.Value{}
+ 	currentPath.Store("")
+ 
+-	result, err := scanPathConcurrentAllEntries(context.Background(), path, &filesScanned, &dirsScanned, &bytesScanned, currentPath)
++	// OpenCleaner patch: JSON callers (the app) need the disk as it is now. Reused caches
++	// only notice a change one level down, so sizes of deleted folders could survive
++	// for days. Bypass still refreshes the cache for the terminal UI.
++	ctx := context.Background()
++	result, err := scanPathConcurrentWithLimiter(ctx, path, &filesScanned, &dirsScanned, &bytesScanned, currentPath, true, 0, nil, scanCacheBypass, newScanPublication(ctx, nil))
+ 	if err != nil {
+ 		fmt.Fprintf(os.Stderr, "failed to scan directory: %v\n", err)
+ 		os.Exit(1)
+@@ -138,18 +142,16 @@ func measureOverviewEntriesForJSON(overviewEntries []dirEntry, insightPaths map[
+ 				err  error
+ 			)
+ 
+-			if cached, state, cacheErr := loadOverviewCachedMeasurement(item.Path); cacheErr == nil && cached > 0 {
+-				size, item.State = cached, state
++			// OpenCleaner patch: always measure (the cached sizes may be up to a week old;
++			// the app shows its own last result while this runs). Measuring still stores them.
++			ctx, cancel := context.WithTimeout(context.Background(), duTimeout)
++			defer cancel()
++			if insightPaths[item.Path] {
++				size, err = measureInsightSize(ctx, item.Path)
+ 			} else {
+-				ctx, cancel := context.WithTimeout(context.Background(), duTimeout)
+-				defer cancel()
+-				if insightPaths[item.Path] {
+-					size, err = measureInsightSize(ctx, item.Path)
+-				} else {
+-					size, err = measureOverviewSize(ctx, item.Path)
+-				}
+-				item.State = measurementState(size, err)
++				size, err = measureOverviewSize(ctx, item.Path)
+ 			}
++			item.State = measurementState(size, err)
+ 
+ 			item.Size = size
+ 			results <- measurement{index: index, entry: item}
+diff --git a/cmd/analyze/main.go b/cmd/analyze/main.go
+index 81876e7..3465a8e 100644
+--- a/cmd/analyze/main.go
++++ b/cmd/analyze/main.go
+@@ -64,6 +64,9 @@ func parseArgs(args []string, stdout, stderr io.Writer) (int, bool) {
+ }
+ 
+ func main() {
++	if code, ok := sizeCLI(os.Args); ok { // OpenCleaner patch: `du` and --freed-kb (sizecli.go)
++		os.Exit(code)
++	}
+ 	if code, keepGoing := parseArgs(os.Args[1:], os.Stdout, os.Stderr); !keepGoing {
+ 		os.Exit(code)
+ 	}
+diff --git a/cmd/analyze/scanner.go b/cmd/analyze/scanner.go
+index c1d914f..95e1311 100644
+--- a/cmd/analyze/scanner.go
++++ b/cmd/analyze/scanner.go
+@@ -41,7 +41,11 @@ type scanFailures struct {
+ // duBinary is the system du. The size probe passes BSD-only -I ignore patterns
+ // and parses BSD's "du: <path>: ..." errors, and a GNU coreutils du earlier in
+ // PATH rejects -I outright. A var only so tests can point it at a stub.
+-var duBinary = "/usr/bin/du"
++var duBinary = systemDu
++
++// OpenCleaner patch: with the real du, sizes come from the in-process parallel walker
++// (fastsize.go). Tests that swap duBinary for a stub still exercise the du path.
++const systemDu = "/usr/bin/du"
+ 
+ var (
+ 	// duTimeout bounds one du while a scan lists a folder, where a slow child
+@@ -275,7 +279,7 @@ func scanPathConcurrentWithLimiter(ctx context.Context, root string, filesScanne
+ 	if err := ctx.Err(); err != nil {
+ 		return scanResult{}, err
+ 	}
+-	children, err := os.ReadDir(root)
++	children, err := readDirFast(root) // OpenCleaner patch: one getattrlistbulk instead of an lstat per entry
+ 	if err != nil {
+ 		return scanResult{}, err
+ 	}
+@@ -773,7 +777,7 @@ func calculateDirSizeFastWithLimiter(ctx context.Context, root string, limiter *
+ 			currentPath.Store(dirPath)
+ 		}
+ 
+-		entries, err := os.ReadDir(dirPath)
++		entries, err := readDirFast(dirPath) // OpenCleaner patch: one getattrlistbulk instead of an lstat per entry
+ 		if err != nil {
+ 			failures.record(err)
+ 			return
+@@ -1050,6 +1054,10 @@ func getDirectorySizeFromDuWithExcludeAndIgnores(ctx context.Context, path strin
+ 		ctx, cancel := context.WithTimeout(ctx, timeout)
+ 		defer cancel()
+ 
++		if duBinary == systemDu {
++			return walkDirectorySize(ctx, target, ignoreNames)
++		}
++
+ 		args := []string{"-skPx"}
+ 		for _, ignoreName := range ignoreNames {
+ 			args = append(args, "-I", ignoreName)
+@@ -1309,7 +1317,7 @@ func countableFileSize(path string, info fs.FileInfo, seen *sync.Map) (int64, bo
+ 	if size == 0 {
+ 		return size, false
+ 	}
+-	if cloneID, sharesAll, known := cloneIdentity(path); known && sharesAll {
++	if cloneID, sharesAll, known := fileCloneIdentity(path, info); known && sharesAll { // OpenCleaner patch: from the bulk listing
+ 		if _, loaded := seen.LoadOrStore(cloneKey{uint32(stat.Dev), cloneID}, struct{}{}); loaded {
+ 			return 0, true
+ 		}
+diff --git a/cmd/analyze/sizecli.go b/cmd/analyze/sizecli.go
+new file mode 100644
+index 0000000..7be2d2b
+--- /dev/null
++++ b/cmd/analyze/sizecli.go
+@@ -0,0 +1,112 @@
++//go:build darwin
++
++package main
++
++// OpenCleaner patch: command-line front ends for the parallel tree walker (fastsize.go),
++// so mo's shell scripts get fast sizes without changing how they ask for them.
++//
++//   - Run as `du` (bin/fastdu/du links here and comes first in mo's PATH), it answers
++//     `du -s -k [-c] [-P] [-x] [--] path...` exactly like /usr/bin/du: one "<KB>\t<path>"
++//     line per operand, a "<KB>\ttotal" line for -c, hard links counted once per run,
++//     status 1 with a "du: path: error" line when something could not be read. Any other
++//     flag hands the whole command to /usr/bin/du.
++//   - `analyze-go --freed-kb path...` prints, per path, the KB clean.sh counts as freed
++//     (see treeOptions.private); it replaces the Perl walk in clean.sh.
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"syscall"
++)
++
++const systemDuPath = "/usr/bin/du"
++
++// sizeCLI dispatches the size front ends; ok is false for a regular analyze run.
++func sizeCLI(argv []string) (code int, ok bool) {
++	if filepath.Base(argv[0]) == "du" {
++		return runDuCompat(argv[1:]), true
++	}
++	if len(argv) > 1 && argv[1] == "--freed-kb" {
++		return runFreedKB(argv[2:]), true
++	}
++	return 0, false
++}
++
++func kbCeil(bytes int64) int64 { return (bytes + 1023) / 1024 }
++
++func runDuCompat(args []string) int {
++	var summary, kilo, total, oneFS bool
++	operands := args
++	for i := 0; i < len(args); i++ {
++		a := args[i]
++		if a == "--" {
++			operands = args[i+1:]
++			break
++		}
++		if !strings.HasPrefix(a, "-") || a == "-" {
++			operands = args[i:]
++			break
++		}
++		for _, c := range a[1:] {
++			switch c {
++			case 's':
++				summary = true
++			case 'k':
++				kilo = true
++			case 'c':
++				total = true
++			case 'x':
++				oneFS = true
++			case 'P':
++			default:
++				return execSystemDu(args)
++			}
++		}
++		operands = nil
++	}
++	if !summary || !kilo || len(operands) == 0 {
++		return execSystemDu(args)
++	}
++
++	links := &sync.Map{}
++	opts := treeOptions{crossMounts: !oneFS, missingIsError: true}
++	status := 0
++	var sum int64
++	for _, path := range operands {
++		size, err := measureTree(context.Background(), path, opts, links)
++		if err != nil {
++			fmt.Fprintf(os.Stderr, "du: %s: %v\n", path, err)
++			status = 1
++			if size == 0 {
++				if _, statErr := os.Lstat(path); statErr != nil {
++					continue // du prints no line for an operand it cannot stat
++				}
++			}
++		}
++		sum += size
++		fmt.Printf("%d\t%s\n", kbCeil(size), path)
++	}
++	if total {
++		fmt.Printf("%d\ttotal\n", kbCeil(sum))
++	}
++	return status
++}
++
++func execSystemDu(args []string) int {
++	err := syscall.Exec(systemDuPath, append([]string{"du"}, args...), os.Environ())
++	fmt.Fprintf(os.Stderr, "du: %v\n", err)
++	return 1
++}
++
++// runFreedKB matches clean.sh's former Perl sizer: one line per path, errors ignored.
++func runFreedKB(paths []string) int {
++	for _, path := range paths {
++		size, _ := measureTree(context.Background(), path, treeOptions{private: true}, &sync.Map{})
++		fmt.Printf("%d\n", kbCeil(size))
++	}
++	return 0
++}
+diff --git a/cmd/analyze/sizecli_test.go b/cmd/analyze/sizecli_test.go
+new file mode 100644
+index 0000000..6b1918d
+--- /dev/null
++++ b/cmd/analyze/sizecli_test.go
+@@ -0,0 +1,188 @@
++//go:build darwin
++
++package main
++
++import (
++	"bytes"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strconv"
++	"testing"
++)
++
++// runAs runs this test binary's du front end in a child process, as `du args...`.
++func runFastDu(t *testing.T, args ...string) (string, int) {
++	t.Helper()
++	cmd := exec.Command(os.Args[0], append([]string{"-test.run=TestHelperFastDu", "--"}, args...)...)
++	cmd.Env = append(os.Environ(), "FASTDU_HELPER=1")
++	var out bytes.Buffer
++	cmd.Stdout = &out
++	err := cmd.Run()
++	code := 0
++	if exitErr, ok := err.(*exec.ExitError); ok {
++		code = exitErr.ExitCode()
++	} else if err != nil {
++		t.Fatal(err)
++	}
++	return out.String(), code
++}
++
++func TestHelperFastDu(t *testing.T) {
++	if os.Getenv("FASTDU_HELPER") != "1" {
++		t.Skip()
++	}
++	args := os.Args
++	for i, a := range args {
++		if a == "--" {
++			args = args[i+1:]
++			break
++		}
++	}
++	os.Exit(runDuCompat(args))
++}
++
++func runSystemDu(args ...string) (string, int) {
++	cmd := exec.Command(systemDuPath, args...)
++	var out bytes.Buffer
++	cmd.Stdout = &out
++	err := cmd.Run()
++	if exitErr, ok := err.(*exec.ExitError); ok {
++		return out.String(), exitErr.ExitCode()
++	}
++	return out.String(), 0
++}
++
++// Every flag combination mo's scripts use must print what /usr/bin/du prints.
++func TestDuCompatMatchesSystemDu(t *testing.T) {
++	root := t.TempDir()
++	for i := range 30 {
++		writeSized(t, filepath.Join(root, "a", strconv.Itoa(i%4), strconv.Itoa(i)), 700+i*4099)
++	}
++	writeSized(t, filepath.Join(root, "b", "big"), 3<<20)
++	// a hard link shared by two operands counts once per du run
++	if err := os.Link(filepath.Join(root, "b", "big"), filepath.Join(root, "a", "big-link")); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(filepath.Join(root, "b"), filepath.Join(root, "link-to-b")); err != nil {
++		t.Fatal(err)
++	}
++	a, b, file, link := filepath.Join(root, "a"), filepath.Join(root, "b"), filepath.Join(root, "b", "big"), filepath.Join(root, "link-to-b")
++	missing := filepath.Join(root, "missing")
++
++	for _, args := range [][]string{
++		{"-skP", root},
++		{"-skP", a},
++		{"-skPx", root},
++		{"-sk", a, b},
++		{"-skcP", a, b},
++		{"-skcP", a, missing, b},
++		{"-skP", missing},
++		{"-skP", file},
++		{"-skP", link},
++		{"-s", "-k", "-P", "--", a},
++	} {
++		got, gotCode := runFastDu(t, args...)
++		want, wantCode := runSystemDu(args...)
++		if got != want || gotCode != wantCode {
++			t.Errorf("du %v:\n got  %q (status %d)\n want %q (status %d)", args, got, gotCode, want, wantCode)
++		}
++	}
++}
++
++// Flags it does not implement go to /usr/bin/du untouched.
++func TestDuCompatHandsOtherFlagsToSystemDu(t *testing.T) {
++	root := t.TempDir()
++	writeSized(t, filepath.Join(root, "x", "f"), 10000)
++	for _, args := range [][]string{{"-sh", root}, {"-k", root}, {"-d", "0", root}} {
++		got, gotCode := runFastDu(t, args...)
++		want, wantCode := runSystemDu(args...)
++		if got != want || gotCode != wantCode {
++			t.Errorf("du %v: got %q/%d, want %q/%d", args, got, gotCode, want, wantCode)
++		}
++	}
++}
++
++// --freed-kb must agree with clean.sh's Perl rule: regular files at private size,
++// hard links only when every link is inside, clones not counted twice.
++func TestFreedKBMatchesCleanPerlRule(t *testing.T) {
++	root := t.TempDir()
++	writeSized(t, filepath.Join(root, "d", "plain"), 200000)
++	writeSized(t, filepath.Join(root, "d", "shared"), 300000)
++	writeSized(t, filepath.Join(root, "outside"), 400000)
++	// one link inside d and one outside: deleting d frees nothing for it
++	if err := os.Link(filepath.Join(root, "outside"), filepath.Join(root, "d", "half-link")); err != nil {
++		t.Fatal(err)
++	}
++	// both links inside d: counted once
++	if err := os.Link(filepath.Join(root, "d", "shared"), filepath.Join(root, "d", "shared-link")); err != nil {
++		t.Fatal(err)
++	}
++	// an APFS clone of a file outside d shares its blocks: frees (almost) nothing
++	writeSized(t, filepath.Join(root, "orig"), 1<<20)
++	if out, err := exec.Command("/bin/cp", "-c", filepath.Join(root, "orig"), filepath.Join(root, "d", "clone")).CombinedOutput(); err != nil {
++		t.Fatalf("cp -c: %v %s", err, out)
++	}
++	if err := os.Symlink(filepath.Join(root, "orig"), filepath.Join(root, "d", "sym")); err != nil {
++		t.Fatal(err)
++	}
++
++	perl := cleanPerlSizer(t)
++	for _, p := range []string{filepath.Join(root, "d"), filepath.Join(root, "d", "plain"), filepath.Join(root, "d", "sym"), filepath.Join(root, "missing"), root} {
++		size, _ := measureTree(t.Context(), p, treeOptions{private: true}, nil)
++		want, err := exec.Command("/usr/bin/perl", "-e", perl, p).Output()
++		if err != nil {
++			t.Fatal(err)
++		}
++		if got := strconv.FormatInt(kbCeil(size), 10) + "\n"; got != string(want) {
++			t.Errorf("%s: --freed-kb %q, perl %q", p, got, want)
++		}
++	}
++}
++
++// cleanPerlSizer is the Perl program clean.sh used before this patch (verbatim).
++func cleanPerlSizer(t *testing.T) string {
++	t.Helper()
++	return `
++        use strict;
++        use warnings;
++        use File::Find;
++        use Fcntl qw(:mode);
++        sub private_bytes {
++            my ($path, $allocated) = @_;
++            my $attrs = pack("SSLLLLL", 5, 0, 0x80040000, 0, 0, 0, 8);
++            my $reply = "\0" x 36;
++            my $name = "$path\0";
++            return $allocated if syscall(220, $name, $attrs, $reply, 36, 0x21) != 0;
++            my ($length, $common, $volume, $dir, $file, $extended, $flags, $private) = unpack("L7Q", $reply);
++            return $allocated if $length < 36 || !($common & 0x40000) || !($extended & 8) || ($flags & 0x20);
++            return $private < $allocated ? $private : $allocated;
++        }
++        for my $root (@ARGV) {
++            my @root_stat = lstat($root);
++            if (!@root_stat || S_ISLNK($root_stat[2])) { print "0\n" or die $!; next; }
++            my %links;
++            my $bytes = 0;
++            my $visit = sub {
++                my $path = $_;
++                my @s = lstat($path);
++                return unless @s;
++                if ($s[0] != $root_stat[0]) { $File::Find::prune = 1; return; }
++                return unless S_ISREG($s[2]);
++                my $allocated = $s[12] * 512;
++                my $size = private_bytes($path, $allocated);
++                if ($s[3] > 1) {
++                    my $key = "$s[0]:$s[1]";
++                    $links{$key} ||= [0, $s[3], $size];
++                    $links{$key}[0]++;
++                } else { $bytes += $size; }
++            };
++            if (S_ISDIR($root_stat[2])) {
++                find({wanted => $visit, no_chdir => 1, follow => 0}, $root);
++            } else { local $_ = $root; $visit->(); }
++            for my $link (values %links) {
++                $bytes += $link->[2] if $link->[0] == $link->[1];
++            }
++            print(int(($bytes + 1023) / 1024), "\n") or die $!;
++        }`
++}

@@ -30,12 +30,19 @@ jobs:
         run: |
           [[ "${GITHUB_REF_NAME#v}" == "$(cat VERSION)" ]] || { echo "::error::tag $GITHUB_REF_NAME does not match VERSION $(cat VERSION)"; exit 1; }
 
+      # the engine's Go helpers are built from the patched mo source (fetch-engine.sh)
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.10'
+          cache: false
+
       - uses: actions/cache@v6
         with:
           path: |
             macos/.build
             macos/build/engine-*
-          key: spm-${{ runner.os }}-${{ hashFiles('macos/Package.swift', 'ENGINE_VERSION') }}
+            macos/build/mo-engine-*-source.tar.gz
+          key: spm-${{ runner.os }}-${{ hashFiles('macos/Package.swift', 'ENGINE_VERSION', 'engine/**', 'macos/fetch-engine.sh') }}
           restore-keys: spm-${{ runner.os }}-
 
       - name: Import the signing certificate
@@ -55,6 +62,8 @@ jobs:
           echo "SIGN_ID=$MACOS_SIGN_ID" >> "$GITHUB_ENV"
 
       - run: swift test --package-path macos
+      - name: Test the patched engine
+        run: ENGINE_TEST=1 macos/fetch-engine.sh --rebuild
       - run: macos/build.sh --universal
 
       - name: Check the bundle
@@ -64,12 +73,18 @@ jobs:
           codesign --verify --deep --strict $APP
           $APP/Contents/Resources/engine/mole --version
 
-      - run: ditto -c -k --keepParent macos/build/OpenCleaner.app OpenCleaner-macos.zip
+      - name: Package the app and the engine source
+        run: |
+          ditto -c -k --keepParent macos/build/OpenCleaner.app OpenCleaner-macos.zip
+          # GPL-3.0: the exact (patched) source of the bundled mo engine
+          cp "$(macos/fetch-engine.sh --source | tail -1)" .
 
       - uses: actions/upload-artifact@v7
         with:
           name: OpenCleaner-macos
-          path: OpenCleaner-macos.zip
+          path: |
+            OpenCleaner-macos.zip
+            mo-engine-*-source.tar.gz
 
   # Push a tag like v0.1.0 (matching VERSION) to publish a GitHub Release.
   release:
@@ -84,11 +99,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # GPL-3.0: ship the source of the exact mo engine bundled in the app next to the binary
-      - name: Attach the engine source
-        run: |
-          ENGINE=$(cat ENGINE_VERSION)
-          curl -fsSL "https://github.com/tw93/mole/archive/refs/tags/$ENGINE.tar.gz" -o "dist/mo-engine-$ENGINE-source.tar.gz"
+      # dist/ holds the app zip and the patched engine source (GPL-3.0), both built by the macos job
       - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

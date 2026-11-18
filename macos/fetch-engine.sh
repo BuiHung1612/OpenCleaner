@@ -1,40 +1,61 @@
 #!/bin/zsh
-# Downloads the pinned mo release (../ENGINE_VERSION) into build/engine-<version>/ as a
-# self-contained, relocatable engine: mole + lib/ + bin/ with universal Go helpers.
-# Re-running is a no-op once that version is there. To move to a new mo release, change
-# ENGINE_VERSION and rebuild.
+# Builds the cleaning engine into build/engine-<version>-<patches>/: the pinned mo release
+# (../ENGINE_VERSION), its source checked against ../engine/source.sha256, with every
+# ../engine/patches/*.patch applied, and the Go helpers (analyze, status) compiled as
+# universal binaries. Needs Go (the toolchain mo's go.mod names is fetched automatically).
+# Re-running is a no-op while the version and patches are unchanged.
+# Prints the engine directory; with --source it also writes the patched source tarball
+# (GPL-3.0 §6) next to it and prints that path on a second line. --rebuild forces a
+# fresh build; ENGINE_TEST=1 runs the analyzer's Go tests on the patched source first.
 set -euo pipefail
 cd "${0:A:h}"
 
 VERSION=$(cat ../ENGINE_VERSION)
-OUT=build/engine-$VERSION
-[[ -x $OUT/mole ]] && { echo $OUT; exit 0; }
+PATCHES=(../engine/patches/*.patch(N))
+STAMP=$(cat ../engine/source.sha256 $PATCHES | shasum -a 256 | cut -c1-8)
+OUT=build/engine-$VERSION-$STAMP
+SRC_TAR=build/mo-engine-$VERSION-$STAMP-source.tar.gz
 
-REPO=https://github.com/tw93/mole
-TMP=$(mktemp -d)
-trap 'rm -rf $TMP' EXIT
+if [[ ! -x $OUT/mole || ${1:-} == --rebuild || ( ${1:-} == --source && ! -f $SRC_TAR ) ]]; then
+  REPO=https://github.com/tw93/mole
+  TMP=$(mktemp -d)
+  trap 'rm -rf $TMP' EXIT
 
-curl -fsSL "$REPO/archive/refs/tags/$VERSION.tar.gz" -o $TMP/src.tar.gz
-for arch in arm64 amd64; do
-  curl -fsSL "$REPO/releases/download/$VERSION/binaries-darwin-$arch.tar.gz" -o $TMP/binaries-darwin-$arch.tar.gz
-done
-curl -fsSL "$REPO/releases/download/$VERSION/SHA256SUMS" -o $TMP/SHA256SUMS
-(cd $TMP && grep -E ' binaries-darwin-(arm64|amd64)\.tar\.gz$' SHA256SUMS | shasum -a 256 -c - >&2)
+  curl -fsSL "$REPO/archive/refs/tags/$VERSION.tar.gz" -o $TMP/src.tar.gz
+  echo "$(cat ../engine/source.sha256)  $TMP/src.tar.gz" | shasum -a 256 -c - >&2
 
-mkdir -p $TMP/src $TMP/arm64 $TMP/amd64
-tar -xzf $TMP/src.tar.gz -C $TMP/src --strip-components 1
-tar -xzf $TMP/binaries-darwin-arm64.tar.gz -C $TMP/arm64
-tar -xzf $TMP/binaries-darwin-amd64.tar.gz -C $TMP/amd64
+  SRC=$TMP/mole-$VERSION
+  mkdir -p $SRC
+  tar -xzf $TMP/src.tar.gz -C $SRC --strip-components 1
+  for patch in $PATCHES; do
+    patch -d $SRC -p1 --forward --quiet < $patch >&2
+  done
 
-rm -rf $OUT && mkdir -p $OUT/bin
-cp $TMP/src/mole $TMP/src/LICENSE $OUT/
-cp -R $TMP/src/lib $OUT/
-cp $TMP/src/bin/*.sh $OUT/bin/
-for tool in analyze status; do
-  arm=$(find $TMP/arm64 -type f -name "$tool*" | head -1)
-  amd=$(find $TMP/amd64 -type f -name "$tool*" | head -1)
-  lipo -create "$arm" "$amd" -output $OUT/bin/$tool-go
-done
-chmod +x $OUT/mole $OUT/bin/*
-echo "Source: $REPO/tree/$VERSION (GPL-3.0, unmodified)" > $OUT/SOURCE
+  [[ ${ENGINE_TEST:-} == 1 ]] && (cd $SRC && go test ./cmd/analyze) >&2
+
+  rm -rf build/engine-*(N) build/mo-engine-*-source.tar.gz(N)
+  mkdir -p $OUT/bin
+  cp $SRC/mole $SRC/LICENSE $OUT/
+  cp -R $SRC/lib $OUT/
+  cp $SRC/bin/*.sh $OUT/bin/
+  for tool in analyze status; do
+    for arch in arm64 amd64; do
+      (cd $SRC && CGO_ENABLED=0 GOOS=darwin GOARCH=$arch go build -trimpath -ldflags="-s -w" -o $TMP/$tool-$arch ./cmd/$tool) >&2
+    done
+    lipo -create $TMP/$tool-arm64 $TMP/$tool-amd64 -output $OUT/bin/$tool-go
+  done
+  chmod +x $OUT/mole $OUT/bin/*
+  # `du` for mo's scripts: analyze-go answers du -sk[cPx] itself (patch 0002 puts it in PATH)
+  mkdir -p $OUT/bin/fastdu && ln -s ../analyze-go $OUT/bin/fastdu/du
+  {
+    echo "Source: $REPO/tree/$VERSION (GPL-3.0)"
+    (( ${#PATCHES} )) && echo "Modified by OpenCleaner: ${(j:, :)${(@)PATCHES:t}}. The patched source ships with each OpenCleaner release."
+  } > $OUT/SOURCE
+
+  # the exact source of what we ship, for the release page
+  tar -czf $SRC_TAR -C $TMP mole-$VERSION
+fi
+
 echo $OUT
+[[ ${1:-} == --source ]] && echo $SRC_TAR
+exit 0
