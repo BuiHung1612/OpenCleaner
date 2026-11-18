@@ -72,19 +72,82 @@ const KEEP_ITSELF: &[&str] = &[
     "AppData/Local/Temp",
 ];
 
-/// May `item` (found from `root`) be removed? Checks only the path; `still_same` checks
-/// that it is still the file that was measured.
+/// What the removal is for. Each purpose opens only what it needs on top of the rules
+/// shared by all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    /// System Junk: caches and logs.
+    Clean,
+    /// An app and its leftovers: also its preferences and cookies, and the bundle itself
+    /// in /Applications.
+    Uninstall,
+    /// Installer files (.dmg, .pkg…) in Downloads and on the Desktop.
+    Installers,
+    /// Rebuildable build folders inside projects, wherever the projects live (Documents too).
+    Projects,
+}
+
+/// Extensions of installer files the Installers tool may move to the Trash.
+pub const INSTALLER_EXTENSIONS: &[&str] =
+    &["dmg", "pkg", "mpkg", "iso", "xip", "msi", "msix", "appx"];
+
+/// Names of the build folders the Projects tool may remove (with a marker next to them,
+/// checked by the finder).
+pub const PROJECT_ARTIFACTS: &[&str] = &[
+    "node_modules",
+    "target",
+    "build",
+    ".dart_tool",
+    ".gradle",
+    "dist",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".parcel-cache",
+    "Pods",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+];
+
+/// May `item` (found from `root`) be removed by System Junk?
 pub fn check(item: &Path, root: &Path, ctx: &Context) -> Result<(), Refusal> {
+    check_for(item, root, ctx, Purpose::Clean)
+}
+
+/// May `item` (found from `root`) be removed for `purpose`? Checks only the path;
+/// `still_same` checks that it is still the object that was measured.
+pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> Result<(), Refusal> {
     if !is_clean_path(item) {
         return Err("not a plain absolute path");
     }
-    // only the user's own files: never the system, other users or other volumes
+    let name = item
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if purpose == Purpose::Uninstall && is_app_in_applications(item) {
+        if !is_within(item, root) {
+            return Err("outside the app's folder");
+        }
+        return no_symlink_between(Path::new(APPLICATIONS), item);
+    }
+    // otherwise only the user's own files: never the system, other users or other volumes
     if !is_within(item, &ctx.home) || item == ctx.home {
         return Err("outside the home folder");
     }
     let rel = item.strip_prefix(&ctx.home).unwrap();
     for p in PRIVATE {
-        if is_within(rel, Path::new(p)) {
+        let open = match purpose {
+            Purpose::Clean => false,
+            Purpose::Uninstall => matches!(*p, "Library/Preferences" | "Library/Cookies"),
+            Purpose::Installers => matches!(*p, "Downloads" | "Desktop"),
+            Purpose::Projects => matches!(*p, "Documents" | "Desktop"),
+        };
+        if !open && is_within(rel, Path::new(p)) {
             return Err("personal files");
         }
     }
@@ -94,8 +157,37 @@ pub fn check(item: &Path, root: &Path, ctx: &Context) -> Result<(), Refusal> {
     if !is_within(item, root) {
         return Err("outside the rule's folder");
     }
+    match purpose {
+        Purpose::Installers => {
+            let ext = item
+                .extension()
+                .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            if !INSTALLER_EXTENSIONS.contains(&ext.as_str()) {
+                return Err("not an installer file");
+            }
+        }
+        Purpose::Projects if !PROJECT_ARTIFACTS.contains(&name.as_str()) => {
+            return Err("not a build folder");
+        }
+        _ => {}
+    }
     no_symlink_between(&ctx.home, item)?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+const APPLICATIONS: &str = "/Applications";
+#[cfg(not(target_os = "macos"))]
+const APPLICATIONS: &str = "/nonexistent-applications";
+
+/// /Applications/X.app or /Applications/<folder>/X.app.
+fn is_app_in_applications(item: &Path) -> bool {
+    let Ok(rel) = item.strip_prefix(APPLICATIONS) else {
+        return false;
+    };
+    let depth = rel.components().count();
+    (1..=2).contains(&depth) && item.extension().is_some_and(|e| e == "app")
 }
 
 /// Every directory from `base` down to the item's parent must be a real directory: a

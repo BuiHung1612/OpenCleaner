@@ -74,6 +74,47 @@ fn main() -> ExitCode {
             eprintln!("oce scan: {:.2}s", start.elapsed().as_secs_f64());
             ExitCode::SUCCESS
         }
+        Some(cmd @ ("apps" | "installers" | "projects")) => {
+            let start = std::time::Instant::now();
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let req = format!(r#"{{"op":"{cmd}"}}"#);
+            oc_engine::api::run(&req, &cancel, &mut |event| match event["event"].as_str() {
+                Some("apps") => eprintln!(
+                    "{} apps listed after {:.0} ms",
+                    event["apps"].as_array().map_or(0, |a| a.len()),
+                    start.elapsed().as_secs_f64() * 1000.0
+                ),
+                Some("sizes") if event["final"] == true => {
+                    let total: u64 = event["sizes"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_u64())
+                        .sum();
+                    println!("apps total {:.2} GB", total as f64 / 1e9);
+                }
+                Some("picks") => {
+                    for p in event["items"].as_array().into_iter().flatten() {
+                        println!(
+                            "{} {:>9.1} MB  {:<40} {}  ({})",
+                            if p["preselect"] == true { "[x]" } else { "[ ]" },
+                            p["bytes"].as_f64().unwrap_or(0.0) / 1e6,
+                            p["group"].as_str().unwrap_or(""),
+                            p["name"].as_str().unwrap_or(""),
+                            p["detail"].as_str().unwrap_or("")
+                        );
+                    }
+                    println!(
+                        "{} items, {:.2} GB",
+                        event["items"].as_array().map_or(0, |a| a.len()),
+                        event["bytes"].as_f64().unwrap_or(0.0) / 1e9
+                    );
+                }
+                _ => {}
+            });
+            eprintln!("oce {cmd}: {:.2}s", start.elapsed().as_secs_f64());
+            ExitCode::SUCCESS
+        }
         Some("call") if args.len() == 2 => {
             println!("{}", oc_engine::api::call(&args[1]));
             ExitCode::SUCCESS

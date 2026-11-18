@@ -3,7 +3,7 @@
 
 use crate::context::Context;
 use crate::rules::RuleSet;
-use crate::{clean, ledger, procs, size, space, status};
+use crate::{apps, clean, finders, ledger, picks, procs, size, space, status};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -40,6 +40,25 @@ enum Request {
     Clean {
         plan: u64,
         rules: Vec<String>,
+    },
+    /// Installed apps at once (`apps`), then their sizes as they are measured (`sizes`).
+    Apps,
+    /// What uninstalling these apps would move to the Trash: the bundles and their
+    /// leftovers, as a pick list (`picks`).
+    UninstallPlan {
+        paths: Vec<PathBuf>,
+    },
+    /// Installer files in Downloads and on the Desktop (`picks`).
+    Installers,
+    /// Rebuildable build folders in projects (`picks`).
+    Projects {
+        #[serde(default)]
+        roots: Vec<PathBuf>,
+    },
+    /// Act on the picked `items` (indexes) of a pick list: `progress`, then `removed`.
+    Remove {
+        plan: u64,
+        items: Vec<usize>,
     },
     /// Past cleanups, newest first.
     History {
@@ -148,6 +167,49 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         }
         Request::Rules | Request::History { .. } => {
             emit(json!({"event": "error", "error": "use call"}))
+        }
+        Request::Apps => {
+            let list = apps::list(ctx(), &procs::Running::snapshot());
+            emit(json!({"event": "apps", "apps": list}));
+            let paths: Vec<PathBuf> = list.iter().map(|a| a.path.clone()).collect();
+            let mut progress =
+                |sizes: &[u64]| emit(json!({"event": "sizes", "sizes": sizes, "final": false}));
+            let sizes = apps::sizes(&paths, cancel, &mut progress);
+            emit(json!({"event": "sizes", "sizes": sizes, "final": true}));
+        }
+        Request::UninstallPlan { paths } => {
+            let running = procs::Running::snapshot();
+            let known = apps::list(ctx(), &running);
+            let mut all = Vec::new();
+            for path in paths {
+                match known.iter().find(|a| a.path == path) {
+                    Some(app) => all.extend(apps::uninstall_picks(app, ctx(), cancel)),
+                    None => emit(
+                        json!({"event": "error", "path": path, "error": "not an installed app OpenCleaner can remove"}),
+                    ),
+                }
+            }
+            emit_value("picks", &picks::store("uninstall", all, ctx()), emit);
+        }
+        Request::Installers => {
+            let found = finders::installers(ctx());
+            emit_value("picks", &picks::store("installers", found, ctx()), emit);
+        }
+        Request::Projects { roots } => {
+            let found = finders::projects(ctx(), &roots, cancel);
+            emit_value("picks", &picks::store("projects", found, ctx()), emit);
+        }
+        Request::Remove { plan, items } => {
+            let mut progress = |o: &picks::Outcome, total: u64| {
+                let mut v = serde_json::to_value(o).unwrap_or(Value::Null);
+                v["event"] = json!("progress");
+                v["total"] = json!(total);
+                emit(v);
+            };
+            match picks::execute(ctx(), plan, &items, cancel, &mut progress) {
+                Ok(outcome) => emit_value("removed", &outcome, emit),
+                Err(e) => emit(json!({"event": "removed", "error": e})),
+            }
         }
         Request::Scan { list } => {
             let running = procs::Running::snapshot();

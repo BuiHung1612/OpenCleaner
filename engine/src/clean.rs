@@ -68,6 +68,7 @@ struct Plan {
 }
 
 static PLANS: Mutex<Vec<Plan>> = Mutex::new(Vec::new());
+const MAX_PLANS: usize = 32;
 static NEXT_PLAN: AtomicU64 = AtomicU64::new(1);
 
 /// Finds and measures everything the rules point at. Nothing is removed.
@@ -180,7 +181,9 @@ pub fn scan_with(
         rules: set.rules.clone(),
         items,
     });
-    if plans.len() > 3 {
+    // a plan stays valid while its review is open; other scans (other tools, other
+    // windows) must not push it out, so keep plenty and drop the oldest
+    if plans.len() > MAX_PLANS {
         plans.remove(0);
     }
     summary

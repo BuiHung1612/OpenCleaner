@@ -238,28 +238,51 @@ pub fn freed_many(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&[u64]),
 ) -> Vec<u64> {
-    let tagged = TaggedFreed {
+    many(items, Mode::Freed, cancel, progress)
+}
+
+/// Allocated bytes (du semantics) of many items in one parallel walk.
+pub fn allocated_many(
+    items: &[std::path::PathBuf],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&[u64]),
+) -> Vec<u64> {
+    many(items, Mode::Allocated, cancel, progress)
+}
+
+fn many(
+    items: &[std::path::PathBuf],
+    mode: Mode,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&[u64]),
+) -> Vec<u64> {
+    let detail = if mode == Mode::Freed {
+        Detail::Freed
+    } else {
+        Detail::Basic
+    };
+    let tagged = Tagged {
+        mode,
         bytes: items.iter().map(|_| AtomicU64::new(0)).collect(),
         links: Mutex::new(HashMap::new()),
+        seen: Links::default(),
     };
     let mut roots = Vec::new();
     for (i, path) in items.iter().enumerate() {
-        match fs::stat(path, Detail::Freed) {
-            Ok(e) if e.kind == Kind::Dir => roots.push((path.clone(), i as u32)),
-            Ok(e) if e.kind == Kind::File => tagged.add_file(i, &e),
-            _ => {}
+        match fs::stat(path, detail) {
+            Ok(e) if e.kind == Kind::Dir => {
+                if mode == Mode::Allocated {
+                    tagged.bytes[i].fetch_add(e.alloc, Ordering::Relaxed);
+                }
+                roots.push((path.clone(), i as u32));
+            }
+            Ok(e) => tagged.add(i, &e),
+            Err(_) => {}
         }
     }
     std::thread::scope(|scope| {
-        let walker = scope.spawn(|| {
-            walk::walk_tagged(
-                roots,
-                walk::default_threads(),
-                Detail::Freed,
-                cancel,
-                &tagged,
-            )
-        });
+        let walker = scope
+            .spawn(|| walk::walk_tagged(roots, walk::default_threads(), detail, cancel, &tagged));
         let mut last = std::time::Instant::now();
         while !walker.is_finished() {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -283,12 +306,16 @@ pub fn freed_many(
 /// (item the links were seen in, or None once seen in two items; links seen; link count; size)
 type TaggedLink = (Option<usize>, u32, u32, u64);
 
-struct TaggedFreed {
+struct Tagged {
+    mode: Mode,
     bytes: Vec<AtomicU64>,
+    /// Freed: hard links waiting to see whether all are inside one item
     links: Mutex<HashMap<(u64, u64), TaggedLink>>,
+    /// Allocated: hard links already counted (once overall, like du)
+    seen: Links,
 }
 
-impl TaggedFreed {
+impl Tagged {
     fn snapshot(&self) -> Vec<u64> {
         self.bytes
             .iter()
@@ -296,7 +323,17 @@ impl TaggedFreed {
             .collect()
     }
 
-    fn add_file(&self, tag: usize, e: &Entry) {
+    /// A non-directory entry of item `tag`.
+    fn add(&self, tag: usize, e: &Entry) {
+        if self.mode == Mode::Allocated {
+            if e.nlink <= 1 || self.seen.first_time(e.dev, e.ino) {
+                self.bytes[tag].fetch_add(e.alloc, Ordering::Relaxed);
+            }
+            return;
+        }
+        if e.kind != Kind::File {
+            return; // freed: regular files only
+        }
         if e.nlink <= 1 {
             self.bytes[tag].fetch_add(e.freed(), Ordering::Relaxed);
             return;
@@ -312,15 +349,20 @@ impl TaggedFreed {
     }
 }
 
-impl Visitor for TaggedFreed {
+impl Visitor for Tagged {
     fn entry(&self, _dir: &Path, tag: u32, e: &Entry) -> Option<u32> {
         match e.kind {
-            Kind::Dir if !e.mount_point => Some(tag),
-            Kind::File => {
-                self.add_file(tag as usize, e);
+            Kind::Dir if e.mount_point => None,
+            Kind::Dir => {
+                if self.mode == Mode::Allocated {
+                    self.bytes[tag as usize].fetch_add(e.alloc, Ordering::Relaxed);
+                }
+                Some(tag)
+            }
+            _ => {
+                self.add(tag as usize, e);
                 None
             }
-            _ => None,
         }
     }
 

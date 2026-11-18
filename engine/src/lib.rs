@@ -4,12 +4,15 @@
 //! `ffi.rs` (JSON requests and events); `oce` is the same engine on the command line.
 
 pub mod api;
+pub mod apps;
 pub mod clean;
 pub mod context;
 pub mod ffi;
+pub mod finders;
 pub mod fs;
 pub mod guard;
 pub mod ledger;
+pub mod picks;
 pub mod procs;
 pub mod rules;
 pub mod size;
