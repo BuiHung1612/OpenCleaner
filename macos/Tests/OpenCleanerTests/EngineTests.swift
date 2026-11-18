@@ -43,3 +43,15 @@ import Testing
     #expect(selectable == 3)
     #expect(!model.isLive)
 }
+
+@Test func engineReadsSystemStatus() async {
+    let first = Engine.call(["op": "status"])
+    #expect(first.ok.bool)
+    #expect((first.memory.total.double ?? 0) > 0)
+    #expect((first.cpu.cores.double ?? 0) > 0)
+    #expect(!first.disks.array.isEmpty)
+    // later readings compare against the previous one: no sampling pause
+    let start = Date()
+    _ = Engine.call(["op": "status"])
+    #expect(Date().timeIntervalSince(start) < 0.2)
+}

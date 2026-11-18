@@ -8,5 +8,6 @@ pub mod ffi;
 pub mod fs;
 pub mod size;
 pub mod space;
+pub mod status;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

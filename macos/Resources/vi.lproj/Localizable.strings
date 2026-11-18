@@ -124,3 +124,9 @@
 "Could not update, showing the result from %@: %@" = "Không cập nhật được, đang hiện kết quả từ %@: %@";
 "OpenCleaner engine" = "Engine OpenCleaner";
 "Measuring… sizes keep growing until the scan finishes." = "Đang đo… dung lượng còn tăng cho đến khi quét xong.";
+"The engine did not answer." = "Engine không phản hồi.";
+"Everything is running well" = "Mọi thứ đang chạy tốt";
+"Your disk is almost full" = "Ổ đĩa sắp đầy";
+"Memory is under pressure" = "Bộ nhớ đang bị thiếu";
+"The processor is busy" = "Bộ xử lý đang bận";
+"More work is queued than the processor can run" = "Có nhiều việc chờ hơn sức bộ xử lý";

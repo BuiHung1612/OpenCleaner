@@ -32,6 +32,15 @@ fn main() -> ExitCode {
             eprintln!("oce space: {:.2}s", start.elapsed().as_secs_f64());
             ExitCode::SUCCESS
         }
+        Some("status") => {
+            let start = std::time::Instant::now();
+            println!("{}", oc_engine::api::call(r#"{"op":"status"}"#));
+            eprintln!(
+                "oce status: {:.0} ms",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            ExitCode::SUCCESS
+        }
         Some("call") if args.len() == 2 => {
             println!("{}", oc_engine::api::call(&args[1]));
             ExitCode::SUCCESS

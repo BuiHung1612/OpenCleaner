@@ -23,8 +23,7 @@ struct DashboardPage: View {
                             .disabled(stream.loading)
                             .help(String(localized: "Refresh"))
                         }
-                        // mo's own message, English only
-                        Text(verbatim: s.health_score_msg.string ?? String(localized: "Measuring system status…"))
+                        Text(verbatim: s.health_score_msg.string.map(tr) ?? String(localized: "Measuring system status…"))
                             .font(.system(size: 15)).foregroundStyle(.dim)
                         let hw = s.hardware
                         Text(verbatim: [hw.model, hw.cpu_model, hw.total_ram, hw.os_version].compactMap(\.string).filter { !$0.isEmpty }.joined(separator: " · "))

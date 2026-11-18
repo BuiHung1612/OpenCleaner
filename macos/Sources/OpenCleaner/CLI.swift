@@ -242,61 +242,52 @@ final class StatusStream: ObservableObject {
     @Published private(set) var replay = 0
     @Published private(set) var loading = false
     @Published private(set) var updatedAt: Date?
-    private var process: Process?
+    private var ticker: Task<Void, Never>?
     private var lastRead = Date.distantPast
 
-    /// A single read costs about a second of collector CPU, so focus-driven reads pass `ifOlderThan`.
+    /// One engine reading, off the main thread (the first one samples CPU for 250 ms).
+    private static func read() async -> JSON {
+        await Task.detached(priority: .userInitiated) { Engine.call(["op": "status"]) }.value
+    }
+
+    /// Focus-driven reads pass `ifOlderThan` so switching windows does not re-read every time.
     func refresh(ifOlderThan age: TimeInterval = 0) {
         guard !loading, Date().timeIntervalSince(lastRead) >= age else { return }
         loading = true
         Task {
-            do {
-                let json = try await CLI.json("statusOnce")
+            let json = await Self.read()
+            if json.ok.bool {
                 snapshot = json
                 replay += 1
                 updatedAt = Date()
                 error = nil
-            } catch {
-                self.error = error.localizedDescription
+            } else {
+                error = json.error.string ?? String(localized: "The engine did not answer.")
             }
             loading = false
             lastRead = Date()
         }
     }
 
+    /// Quiet updates every `seconds` (no intro animation) until `stop`.
     func start(every seconds: Int) {
-        guard process == nil else { return }
-        do {
-            let p = try CLI.process(CLI.command("status", ["interval": ["\(seconds)s"]]))
-            let out = Pipe()
-            p.standardOutput = out
-            p.standardError = FileHandle.nullDevice
-            nonisolated(unsafe) var buffer = Data() // readabilityHandler calls are serial per handle
-            out.fileHandleForReading.readabilityHandler = { [weak self] h in
-                let data = h.availableData
-                if data.isEmpty { h.readabilityHandler = nil; return }
-                buffer.append(data)
-                guard let nl = buffer.lastIndex(of: 0x0A) else { return }
-                let line = buffer[..<nl].split(separator: 0x0A).last.map { Data($0) }
-                buffer.removeSubrange(...nl)
-                guard let line else { return }
-                let json = JSON(data: line)
-                Task { @MainActor in
-                    self?.snapshot = json
-                    self?.updatedAt = Date()
-                }
+        guard ticker == nil else { return }
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(seconds))
+                guard !Task.isCancelled else { return }
+                let json = await Self.read()
+                guard let self, json.ok.bool else { continue }
+                self.snapshot = json
+                self.updatedAt = Date()
+                self.lastRead = Date()
             }
-            try p.run()
-            process = p
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
         }
     }
 
     func stop() {
-        process?.terminate()
-        process = nil
+        ticker?.cancel()
+        ticker = nil
     }
 }
 

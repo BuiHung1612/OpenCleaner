@@ -1,7 +1,7 @@
 //! Requests the app sends, as JSON: quick ones answered at once (`call`), long ones run
 //! as jobs that report events until `{"event":"done"}` (`run`).
 
-use crate::{size, space};
+use crate::{size, space, status};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -11,6 +11,8 @@ use std::sync::atomic::AtomicBool;
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Request {
     Version,
+    /// Dashboard reading (CPU since the previous reading).
+    Status,
     Size {
         paths: Vec<PathBuf>,
         #[serde(default = "allocated")]
@@ -39,6 +41,11 @@ pub fn call(request: &str) -> Value {
     match parse(request) {
         Err(e) => e,
         Ok(Request::Version) => json!({"ok": true, "version": crate::VERSION}),
+        Ok(Request::Status) => {
+            let mut v = serde_json::to_value(status::read()).unwrap_or(Value::Null);
+            v["ok"] = json!(true);
+            v
+        }
         Ok(req) => {
             let mut out = Vec::new();
             run_request(req, &AtomicBool::new(false), &mut |v| out.push(v));
@@ -59,6 +66,11 @@ pub fn run(request: &str, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
 fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
     match req {
         Request::Version => emit(json!({"event": "version", "version": crate::VERSION})),
+        Request::Status => {
+            let mut v = serde_json::to_value(status::read()).unwrap_or(Value::Null);
+            v["event"] = json!("status");
+            emit(v);
+        }
         Request::Size {
             paths,
             mode,
