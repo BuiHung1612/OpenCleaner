@@ -147,12 +147,20 @@ enum CLI {
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
+        try Task.checkCancellation()
         try p.run()
-        return await Task.detached {
-            let data = out.fileHandleForReading.readDataToEndOfFile()
-            p.waitUntilExit()
+        // cancelling the Swift task kills the process (mo execs straight into its Go helper)
+        return try await withTaskCancellationHandler {
+            let data = await Task.detached {
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                return data
+            }.value
+            try Task.checkCancellation()
             return data
-        }.value
+        } onCancel: {
+            p.terminate()
+        }
     }
 
     static func json(_ key: String, _ vars: [String: [String]] = [:], background: Bool = false) async throws -> JSON {
@@ -265,8 +273,14 @@ final class Session: ObservableObject, Identifiable {
     @Published private(set) var text = ""
     @Published private(set) var running = false
     @Published private(set) var exitCode: Int32?
+    /// The closing report mo prints between two `=====` rules, if any.
+    @Published private(set) var summary: [String] = []
     var isPreview = false
-    private var raw = Data()
+    /// bytes after the last newline: the line still being drawn (spinner, prompt)
+    private var pending = Data()
+    /// finished lines, already cleaned; never re-processed
+    private var committed = ""
+    private var flushScheduled = false
     private var process: Process?
     private var input: Pipe?
 
@@ -289,11 +303,16 @@ final class Session: ObservableObject, Identifiable {
             p.standardInput = inp
             out.fileHandleForReading.readabilityHandler = { [weak self] h in
                 let data = h.availableData
-                if data.isEmpty { h.readabilityHandler = nil; return }
+                if data.isEmpty {
+                    h.readabilityHandler = nil
+                    Task { @MainActor in self?.flush() }
+                    return
+                }
                 Task { @MainActor in self?.append(data) }
             }
             p.terminationHandler = { [weak self] p in
                 Task { @MainActor in
+                    self?.flush()
                     self?.running = false
                     self?.exitCode = p.terminationStatus
                 }
@@ -308,8 +327,8 @@ final class Session: ObservableObject, Identifiable {
         }
     }
 
-    /// The closing report mo prints between two `=====` rules, if any.
-    var summary: [String] {
+    static func summary(of text: String) -> [String] {
+        guard text.contains("=====") else { return [] }
         let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         let rules = lines.indices.filter { lines[$0].hasPrefix("=====") }
         guard rules.count >= 2, let end = rules.last else { return [] }
@@ -326,11 +345,47 @@ final class Session: ObservableObject, Identifiable {
         input?.fileHandleForWriting.write(Data([0x03]))
     }
 
+    /// Only the unfinished tail is cleaned per chunk (a `\n` byte never sits inside a UTF-8 char,
+    /// so cutting there is safe), and the UI gets at most ~12 updates a second however fast mo spins.
     private func append(_ chunk: Data) {
-        raw.append(chunk)
-        // whole buffer re-decoded so a UTF-8 char split across chunks still renders
-        // ponytail: O(n) per chunk; fine for mo's few-thousand-line output
-        text = Self.clean(String(decoding: raw, as: UTF8.self))
+        pending.append(chunk)
+        if let nl = pending.lastIndex(of: 0x0A) {
+            committed += Self.clean(String(decoding: pending[...nl], as: UTF8.self))
+            pending.removeSubrange(...nl)
+        }
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(80))
+            flush()
+        }
+    }
+
+    private func flush() {
+        flushScheduled = false
+        let new = committed + Self.clean(String(decoding: pending, as: UTF8.self))
+        let shown = Self.tail(new, lines: Self.maxLines)
+        guard shown != text else { return }
+        text = shown
+        summary = Self.summary(of: new)
+    }
+
+    /// The log view re-lays out all of its text on every update, so it only keeps the end.
+    static let maxLines = 2000
+
+    /// Last `n` lines of `s`, with a "…" line in front when earlier ones were dropped.
+    static func tail(_ s: String, lines n: Int) -> String {
+        var count = 0
+        var i = s.utf8.endIndex
+        while i > s.utf8.startIndex {
+            let j = s.utf8.index(before: i)
+            if s.utf8[j] == 0x0A {
+                count += 1
+                if count > n { return "…\n" + s[i...] }
+            }
+            i = j
+        }
+        return s
     }
 
     /// Drops ANSI escapes and keeps only what is left after the last `\r` of a line (spinners).

@@ -57,22 +57,36 @@ final class SpaceLensModel: ObservableObject {
         guard !stack.isEmpty else { return }
         stack.removeLast()
         selection = []
-        if stack.isEmpty { volume = nil }
+        cancelPrefetch()
+        if stack.isEmpty { volume = nil } else if let current { prefetchChildren(of: current) }
     }
 
     func startOver() {
+        cancelPrefetch()
         stack = []
         volume = nil
         selection = []
     }
 
-    /// One scan per folder at a time: opening a folder that is being prefetched joins that scan.
+    /// One scan per folder at a time; opening a folder that is being prefetched restarts it in the foreground.
     private var inflight: [String: Task<JSON, Error>] = [:]
+    /// keys in `inflight` that run at utility QoS (prefetch)
+    private var backgroundKeys: Set<String> = []
     private var queue: [String] = []
     private var draining = false
 
+    /// The user moved: drop speculative scans so they stop competing for the disk, and so a
+    /// folder they open is scanned at full priority instead of joining a throttled prefetch.
+    /// A cancelled scan restarts quickly: the file system metadata it touched is still cached.
+    private func cancelPrefetch() {
+        queue = []
+        for key in backgroundKeys { inflight[key]?.cancel(); inflight[key] = nil }
+        backgroundKeys = []
+    }
+
     func load(_ path: String?, force: Bool = false) {
         let key = path ?? ""
+        cancelPrefetch()
         if force { cache[key] = nil }
         error = nil
         if let ready = cache[key] {
@@ -101,8 +115,15 @@ final class SpaceLensModel: ObservableObject {
         let task = inflight[key] ?? Task {
             try await CLI.json("analyze", key.isEmpty ? [:] : ["path": [key]], background: background)
         }
+        if inflight[key] == nil, background { backgroundKeys.insert(key) }
         inflight[key] = task
-        defer { inflight[key] = nil }
+        // a cancelled prefetch must not unregister the foreground scan that replaced it
+        defer {
+            if inflight[key] == task {
+                inflight[key] = nil
+                backgroundKeys.remove(key)
+            }
+        }
         let json = try await task.value
         cache[key] = json
         return json
@@ -290,7 +311,7 @@ struct VolumeCard: View {
     var body: some View {
         VStack(spacing: 12) {
             // custom art when provided, otherwise the drive icon macOS uses
-            Image(nsImage: Art.image(volume.isStartup ? "volumeInternal" : "volumeExternal") ?? NSWorkspace.shared.icon(forFile: volume.url.path))
+            Image(nsImage: Art.image(volume.isStartup ? "volumeInternal" : "volumeExternal") ?? fileIcon(volume.url.path))
                 .resizable().scaledToFit().frame(width: 88, height: 88)
             Text(volume.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
             UsageBar(fraction: volume.used / volume.total)
@@ -336,7 +357,7 @@ struct EntryRow: View {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
             }
             .buttonStyle(.plain)
-            Image(nsImage: NSWorkspace.shared.icon(forFile: entry.path.string ?? "")).resizable().frame(width: 34, height: 34)
+            Image(nsImage: fileIcon(entry.path.string ?? "")).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: entry.name.string ?? "?").font(.system(size: 14, weight: .medium)).lineLimit(1)
                 if entry.cleanable.bool {
@@ -391,13 +412,22 @@ struct BubbleChart: View {
     let open: (JSON) -> Void
     @State private var appeared = false
 
+    /// Hover re-renders the chart many times a second; the packing only changes with the folder,
+    /// so the unit-radius layout is kept and just scaled.
+    @MainActor private static var memo: (sizes: [Double], unit: [Bubble]) = ([], [])
+
+    @MainActor static func layout(_ sizes: [Double], radius: CGFloat) -> [Bubble] {
+        if memo.sizes != sizes { memo = (sizes, pack(sizes, radius: 1)) }
+        return memo.unit.map { Bubble(index: $0.index, center: CGPoint(x: $0.center.x * radius, y: $0.center.y * radius), r: $0.r * radius) }
+    }
+
     private static let tints = ["#5EE6D0", "#4FC3F7", "#7C9CFF", "#B388FF", "#64B5F6"].map(Color.init(hex:))
 
     var body: some View {
         let items = BubbleItem.from(entries)
         GeometryReader { g in
             let side = min(g.size.width, g.size.height)
-            let bubbles = pack(items.map(\.size), radius: side / 2 * 0.9)
+            let bubbles = Self.layout(items.map(\.size), radius: side / 2 * 0.9)
             ZStack {
                 Circle()
                     .fill(RadialGradient(colors: [.white.opacity(0.16), .white.opacity(0.03)], center: .topLeading, startRadius: 0, endRadius: side))
@@ -436,7 +466,7 @@ struct BubbleChart: View {
     @ViewBuilder private func label(_ item: BubbleItem, r: CGFloat) -> some View {
         let icon = Group {
             if let path = item.entry?.path.string {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable()
+                Image(nsImage: fileIcon(path)).resizable()
             } else {
                 Image(systemName: "ellipsis.circle").resizable().foregroundStyle(.white.opacity(0.85))
             }

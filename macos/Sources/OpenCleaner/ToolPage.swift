@@ -110,7 +110,9 @@ struct SessionView: View {
                 .brightScroller()
                 .onChange(of: session.text) {
                     proxy.scrollTo("end")
-                    secure = session.text.split(separator: "\n").last?.lowercased().contains("password") ?? false
+                    // last non-empty line, read from the end instead of splitting the whole log
+                    let lastLine = String(session.text.reversed().drop { $0 == "\n" }.prefix { $0 != "\n" }.reversed())
+                    secure = lastLine.lowercased().contains("password")
                 }
             }
             .glassPanel()

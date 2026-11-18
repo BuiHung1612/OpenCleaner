@@ -54,6 +54,7 @@ jobs:
           rm "$RUNNER_TEMP/cert.p12"
           echo "SIGN_ID=$MACOS_SIGN_ID" >> "$GITHUB_ENV"
 
+      - run: swift test --package-path macos
       - run: macos/build.sh --universal
 
       - name: Check the bundle

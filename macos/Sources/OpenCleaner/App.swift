@@ -20,6 +20,11 @@ struct OpenCleanerApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1080, height: 720)
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button(String(localized: "Check for Updates…")) { Task { await Updater.check(manual: true) } }
+            }
+        }
 
         Settings {
             SettingsView()
@@ -119,6 +124,7 @@ struct MainView: View {
         .tint(.white)
         .animation(.easeInOut(duration: 0.35), value: module)
         .task { version = await CLI.version() }
+        .task { Updater.startAutomaticChecks() }
     }
 
     /// A floating glass panel, not a system sidebar, so the module gradient shows through it.
@@ -249,11 +255,31 @@ struct Art: View {
         }
     }
 
-    static func image(_ id: String) -> NSImage? {
+    /// Loaded once per id: bodies re-run on every live-output tick, and a PNG read each time adds up.
+    @MainActor private static var images: [String: NSImage?] = [:]
+
+    @MainActor static func image(_ id: String) -> NSImage? {
+        if let hit = images[id] { return hit }
         let repoArt = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Resources/Art")
         let urls = [Bundle.main.url(forResource: id, withExtension: "png", subdirectory: "Art"), repoArt.appendingPathComponent("\(id).png")]
-        return urls.compactMap { $0 }.lazy.compactMap { NSImage(contentsOf: $0) }.first
+        let image = urls.compactMap { $0 }.lazy.compactMap { NSImage(contentsOf: $0) }.first
+        images[id] = image
+        return image
     }
+}
+
+/// Finder icon for a path, cached: rows and bubbles re-render on every hover.
+@MainActor private let iconCache: NSCache<NSString, NSImage> = {
+    let c = NSCache<NSString, NSImage>()
+    c.countLimit = 500
+    return c
+}()
+
+@MainActor func fileIcon(_ path: String) -> NSImage {
+    if let hit = iconCache.object(forKey: path as NSString) { return hit }
+    let icon = NSWorkspace.shared.icon(forFile: path)
+    iconCache.setObject(icon, forKey: path as NSString)
+    return icon
 }
 
 /// The big round call-to-action at the bottom of a module page.

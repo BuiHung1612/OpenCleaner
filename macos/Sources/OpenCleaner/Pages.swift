@@ -214,7 +214,7 @@ struct UninstallerPage: View {
         let selected = selection.contains(name)
         return HStack(spacing: 12) {
             Image(systemName: selected ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
-            Image(nsImage: NSWorkspace.shared.icon(forFile: a.path.string ?? "")).resizable().frame(width: 34, height: 34)
+            Image(nsImage: fileIcon(a.path.string ?? "")).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: a.name.string ?? "?").font(.system(size: 14, weight: .medium))
                 Text(verbatim: a.bundle_id.string ?? "").font(.system(size: 12)).foregroundStyle(.dim)
@@ -329,6 +329,7 @@ struct SettingsView: View {
     @AppStorage("autoRefresh") private var autoRefresh = false
     @AppStorage("refreshInterval") private var refreshInterval = 5
     @AppStorage("language") private var language = ""
+    @AppStorage(Updater.autoKey) private var checkUpdates = true
     @State private var languageChanged = false
 
     var body: some View {
@@ -344,6 +345,11 @@ struct SettingsView: View {
                     languageChanged = true
                 }
                 if languageChanged { Button(String(localized: "Relaunch"), action: relaunch) }
+            }
+            Section(String(localized: "Updates")) {
+                LabeledContent(String(localized: "Version")) { Text(verbatim: Updater.current) }
+                Toggle(String(localized: "Check for updates automatically"), isOn: $checkUpdates)
+                Button(String(localized: "Check for Updates…")) { Task { await Updater.check(manual: true) } }
             }
             Section(String(localized: "Dashboard")) {
                 Toggle(String(localized: "Refresh automatically"), isOn: $autoRefresh)
