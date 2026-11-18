@@ -177,7 +177,7 @@ final class SpaceLensModel: ObservableObject {
         }
     }
 
-    /// Quietly scans the biggest subfolders next (mo lists entries largest first), so the folder
+    /// Quietly scans the biggest subfolders next (the engine lists entries largest first), so the folder
     /// the user most likely opens is already there. Replaces the queue when they navigate.
     private func prefetchChildren(of json: JSON) {
         queue = Array(json.entries.array.filter(\.is_dir.bool).compactMap(\.path.string).filter { cache[$0] == nil }.prefix(4))

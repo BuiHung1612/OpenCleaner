@@ -146,22 +146,21 @@ struct Tile: View {
 }
 
 struct HistoryPage: View {
-    /// Sessions from the Rust engine first (newest first), then mo's (legacy tools).
     @State private var sessions: [JSON]?
-    @State private var engineLog: String?
-    @State private var moLog: String?
+    @State private var log: String?
     @State private var error: String?
 
-    /// mo logs commands like "optimize-dry-run"; show the app's own name for that tool.
+    /// The engine logs a session per tool run; show the tool's own name.
     static func title(_ command: String) -> String {
-        let preview = command.hasSuffix("-dry-run")
-        let id = preview ? String(command.dropLast("-dry-run".count)) : command
-        let name: String = switch id {
-        case "uninstall": String(localized: "Uninstaller")
-        case "analyze": String(localized: "Space Lens")
-        default: CLI.tools.first { $0.id == id }?.title ?? id.capitalized
+        let id = switch command {
+        case "projects": "purge"
+        case "installers": "installer"
+        default: command
         }
-        return preview ? String(localized: "\(name) · preview") : name
+        switch id {
+        case "uninstall": return String(localized: "Uninstaller")
+        default: return Tools.all.first { $0.id == id }?.title ?? id.capitalized
+        }
     }
 
     var body: some View {
@@ -180,7 +179,7 @@ struct HistoryPage: View {
                                 Text(verbatim: Self.when(s)).font(.system(size: 12)).foregroundStyle(.dim)
                             }
                             Spacer()
-                            Text("\(s.items.string ?? "0") items · \(s.bytes.double.map { bytes($0) } ?? s.size.string ?? "—")").monospacedDigit()
+                            Text("\(s.items.string ?? "0") items · \(bytes(s.bytes.double))").monospacedDigit()
                         }
                         .padding(.horizontal, 14).padding(.vertical, 10)
                     }
@@ -192,38 +191,30 @@ struct HistoryPage: View {
             }
             .brightScroller()
             .glassPanel()
-            ForEach([engineLog, moLog].compactMap { $0 }, id: \.self) { log in
+            if let log {
                 Text("Every deleted file is listed in \((log as NSString).abbreviatingWithTildeInPath)")
                     .font(.system(size: 12)).foregroundStyle(.dim)
             }
         }
         .padding(.horizontal, 32).padding(.bottom, 28)
         .task {
-            let engine = Engine.call(["op": "history"])
-            engineLog = engine.logs.deletions.string
-            var all = engine.sessions.array
-            do {
-                let mo = try await CLI.json("history")
-                all += mo.sessions.array
-                moLog = mo.logs.deletions.string
-            } catch {
-                if all.isEmpty { self.error = error.localizedDescription }
+            let history = Engine.call(["op": "history"])
+            if history.ok.bool {
+                sessions = history.sessions.array
+                log = history.logs.deletions.string
+            } else {
+                error = history.error.string ?? String(localized: "The engine did not answer.")
+                sessions = []
             }
-            sessions = all
         }
     }
 
-    /// Engine sessions carry a Unix time; mo's a preformatted string.
     static func when(_ s: JSON) -> String {
-        if let t = s.started_unix.double {
-            return Date(timeIntervalSince1970: t).formatted(date: .abbreviated, time: .shortened)
-        }
-        return s.started_at.string ?? ""
+        s.started_unix.double.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .shortened) } ?? ""
     }
 }
 
 struct SettingsView: View {
-    @AppStorage(CLI.pathKey) private var customPath = ""
     @AppStorage("autoRefresh") private var autoRefresh = false
     @AppStorage("refreshInterval") private var refreshInterval = 5
     @AppStorage("language") private var language = ""
@@ -262,39 +253,10 @@ struct SettingsView: View {
                 LabeledContent(String(localized: "OpenCleaner engine")) {
                     Text(verbatim: Engine.version ?? "—").font(.system(size: 11, design: .monospaced))
                 }
-                LabeledContent(String(localized: "Engine path")) {
-                    HStack {
-                        Text(verbatim: CLI.binary ?? String(localized: "Not found")).font(.system(size: 11, design: .monospaced))
-                            .lineLimit(1).truncationMode(.middle)
-                        Button(String(localized: "Choose…")) {
-                            let panel = NSOpenPanel()
-                            panel.directoryURL = URL(fileURLWithPath: "/opt/homebrew/bin")
-                            if panel.runModal() == .OK, let path = panel.url?.path { customPath = path }
-                        }
-                    }
-                }
-                if !customPath.isEmpty {
-                    Button(String(localized: "Use the built-in engine")) { customPath = "" }
-                }
-                LabeledContent(String(localized: "Command list (cli.json)")) {
-                    Button(String(localized: "Customize…"), action: customizeManifest)
-                }
-                Text("OpenCleaner runs the open-source mo engine (GPL-3.0), bundled with the app. If its commands change, editing cli.json is enough; reopen the app to apply.")
-                    .font(.system(size: 12)).foregroundStyle(.dim)
             }
         }
         .formStyle(.grouped)
         .frame(width: 520)
-    }
-
-    private func customizeManifest() {
-        let dest = CLI.manifestOverride
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: dest.path), let src = CLI.manifestURL {
-            try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? fm.copyItem(at: src, to: dest)
-        }
-        reveal(dest.path)
     }
 
     private func relaunch() {
@@ -303,5 +265,63 @@ struct SettingsView: View {
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
+    }
+}
+
+/// System status. One-shot reads (launch, focus, reload button) bump `replay` so the dashboard
+/// plays its intro animation; the optional `--watch` stream updates values quietly.
+@MainActor
+final class StatusStream: ObservableObject {
+    @Published var snapshot = JSON(nil)
+    @Published var error: String?
+    @Published private(set) var replay = 0
+    @Published private(set) var loading = false
+    @Published private(set) var updatedAt: Date?
+    private var ticker: Task<Void, Never>?
+    private var lastRead = Date.distantPast
+
+    /// One engine reading, off the main thread (the first one samples CPU for 250 ms).
+    private static func read() async -> JSON {
+        await Task.detached(priority: .userInitiated) { Engine.call(["op": "status"]) }.value
+    }
+
+    /// Focus-driven reads pass `ifOlderThan` so switching windows does not re-read every time.
+    func refresh(ifOlderThan age: TimeInterval = 0) {
+        guard !loading, Date().timeIntervalSince(lastRead) >= age else { return }
+        loading = true
+        Task {
+            let json = await Self.read()
+            if json.ok.bool {
+                snapshot = json
+                replay += 1
+                updatedAt = Date()
+                error = nil
+            } else {
+                error = json.error.string ?? String(localized: "The engine did not answer.")
+            }
+            loading = false
+            lastRead = Date()
+        }
+    }
+
+    /// Quiet updates every `seconds` (no intro animation) until `stop`.
+    func start(every seconds: Int) {
+        guard ticker == nil else { return }
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(seconds))
+                guard !Task.isCancelled else { return }
+                let json = await Self.read()
+                guard let self, json.ok.bool else { continue }
+                self.snapshot = json
+                self.updatedAt = Date()
+                self.lastRead = Date()
+            }
+        }
+    }
+
+    func stop() {
+        ticker?.cancel()
+        ticker = nil
     }
 }

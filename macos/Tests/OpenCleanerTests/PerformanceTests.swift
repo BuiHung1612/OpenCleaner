@@ -2,14 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCleaner
 
-@Test func logTailKeepsLastLines() {
-    let log = (1...5000).map { "line \($0)" }.joined(separator: "\n") + "\n"
-    let t = Session.tail(log, lines: 2000)
-    #expect(t.hasPrefix("…\nline 3001\n"))
-    #expect(t.hasSuffix("line 5000\n"))
-    #expect(Session.tail("a\nb\n", lines: 2000) == "a\nb\n")
-}
-
 @Test func resultCacheRoundTrip() throws {
     let args = ["test-\(UUID().uuidString)"]
     defer { try? FileManager.default.removeItem(at: ResultCache.url(args)) }

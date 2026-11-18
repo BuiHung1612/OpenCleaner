@@ -1,0 +1,94 @@
+{
+  "tools": [
+    {
+      "id": "clean",
+      "group": "Cleanup",
+      "title": "System Junk",
+      "subtitle": "Clean up caches, logs, temporary files and leftovers of apps you already removed.",
+      "points": [
+        "Frees up space for things that matter",
+        "Never touches your documents"
+      ],
+      "icon": "sparkles",
+      "colors": [
+        "#0B7A75",
+        "#14366B"
+      ]
+    },
+    {
+      "id": "installer",
+      "group": "Cleanup",
+      "title": "Installers",
+      "subtitle": "Find leftover .dmg, .pkg, .iso, .xip and .zip installers you no longer need.",
+      "points": [
+        "Lists every installer with its size",
+        "You pick what goes"
+      ],
+      "icon": "opticaldisc",
+      "colors": [
+        "#B4572E",
+        "#5B1F4A"
+      ]
+    },
+    {
+      "id": "purge",
+      "group": "Cleanup",
+      "title": "Project Junk",
+      "subtitle": "Remove rebuildable build folders: node_modules, target, build, dist and more.",
+      "points": [
+        "Skips projects touched in the last 7 days",
+        "Protects Git-tracked files"
+      ],
+      "icon": "shippingbox",
+      "colors": [
+        "#3E7B27",
+        "#123D3A"
+      ]
+    },
+    {
+      "id": "optimize",
+      "group": "Speed",
+      "title": "Optimization",
+      "subtitle": "Refresh system caches and services, and repair safe maintenance issues.",
+      "points": [
+        "Rebuilds stale system databases",
+        "Only applies safe, reversible fixes"
+      ],
+      "icon": "gauge.with.dots.needle.67percent",
+      "colors": [
+        "#C0392B",
+        "#4A1942"
+      ]
+    },
+    {
+      "id": "slim",
+      "group": "Applications",
+      "title": "Slim Apps",
+      "subtitle": "Remove the Intel code from universal apps on Apple Silicon.",
+      "points": [
+        "Each app is verified before it is replaced",
+        "The original goes to the Trash"
+      ],
+      "icon": "scissors",
+      "colors": [
+        "#6A3FB5",
+        "#1E2A78"
+      ]
+    },
+    {
+      "id": "touchid",
+      "group": "Security",
+      "title": "Touch ID for sudo",
+      "subtitle": "Use your fingerprint instead of typing your password in Terminal.",
+      "points": [
+        "One-time setup",
+        "Easy to turn off again"
+      ],
+      "icon": "touchid",
+      "colors": [
+        "#A8325E",
+        "#3B1C4A"
+      ]
+    }
+  ]
+}

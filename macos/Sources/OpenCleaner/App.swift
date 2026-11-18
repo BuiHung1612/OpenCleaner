@@ -44,7 +44,7 @@ enum Module: Hashable {
         case .spaceLens: String(localized: "Space Lens")
         case .uninstaller: String(localized: "Uninstaller")
         case .history: String(localized: "History")
-        case .tool(let id): CLI.tools.first { $0.id == id }?.title ?? id
+        case .tool(let id): Tools.all.first { $0.id == id }?.title ?? id
         }
     }
 
@@ -54,7 +54,7 @@ enum Module: Hashable {
         case .spaceLens: "circle.hexagongrid"
         case .uninstaller: "xmark.app"
         case .history: "clock.arrow.circlepath"
-        case .tool(let id): CLI.tools.first { $0.id == id }?.icon ?? "terminal"
+        case .tool(let id): Tools.all.first { $0.id == id }?.icon ?? "terminal"
         }
     }
 
@@ -63,7 +63,7 @@ enum Module: Hashable {
         case .dashboard, .history: ""
         case .spaceLens: "Files"
         case .uninstaller: "Applications"
-        case .tool(let id): CLI.tools.first { $0.id == id }?.group ?? "Tools"
+        case .tool(let id): Tools.all.first { $0.id == id }?.group ?? "Tools"
         }
     }
 
@@ -83,13 +83,13 @@ enum Module: Hashable {
         case .spaceLens: [Color(hex: "#0E8A9E"), Color(hex: "#123063")]
         case .uninstaller: [Color(hex: "#2F6FD6"), Color(hex: "#2A1857")]
         case .history: [Color(hex: "#4D5B73"), Color(hex: "#1C2233")]
-        case .tool(let id): (CLI.tools.first { $0.id == id }?.colors ?? []).map(Color.init(hex:)).paddedPalette
+        case .tool(let id): (Tools.all.first { $0.id == id }?.colors ?? []).map(Color.init(hex:)).paddedPalette
         }
     }
 
     /// Sidebar: dashboard, then groups in a fixed order (unknown manifest groups go last), history.
     static var sections: [(group: String, modules: [Module])] {
-        let modules: [Module] = [.spaceLens, .uninstaller] + CLI.tools.map { .tool($0.id) }
+        let modules: [Module] = [.spaceLens, .uninstaller] + Tools.all.map { .tool($0.id) }
         var order = ["Cleanup", "Speed", "Applications", "Files", "Security"]
         for m in modules where !order.contains(m.group) { order.append(m.group) }
         return [("", [.dashboard])]
@@ -129,7 +129,7 @@ struct MainView: View {
         .foregroundStyle(.white)
         .tint(.white)
         .animation(.easeInOut(duration: 0.35), value: module)
-        .task { version = await CLI.version() }
+        .task { version = Engine.version }
         .task { Updater.startAutomaticChecks() }
     }
 
@@ -185,8 +185,7 @@ struct MainView: View {
         case .uninstaller: UninstallerPage(model: apps)
         case .history: HistoryPage()
         case .tool(let id):
-            if let tool = CLI.tools.first(where: { $0.id == id }) {
-                // every tool runs on the Rust engine; ToolPage (mo, legacy) only for unknown ids
+            if let tool = Tools.all.first(where: { $0.id == id }) {
                 switch id {
                 case "clean": JunkPage(tool: tool, model: junk)
                 case "installer": PicksPage(tool: tool, request: ["op": "installers"], kind: .trash, model: installers)
@@ -194,7 +193,7 @@ struct MainView: View {
                 case "slim": PicksPage(tool: tool, request: ["op": "slim"], kind: .slim, model: slim)
                 case "optimize": OptimizePage(tool: tool)
                 case "touchid": TouchIDPage(tool: tool)
-                default: ToolPage(tool: tool)
+                default: Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
                 }
             }
         }
@@ -381,16 +380,6 @@ func bytes(_ n: Double?) -> String {
 
 func percent(_ n: Double?) -> String {
     n.map { String(format: "%.0f%%", $0) } ?? "—"
-}
-
-/// mo prints sizes like "512.4MB"; good enough for sorting and totals.
-func parseSize(_ s: String?) -> Double {
-    guard let s else { return 0 }
-    let units: [(String, Double)] = [("TB", 1e12), ("GB", 1e9), ("MB", 1e6), ("KB", 1e3), ("B", 1)]
-    for (u, m) in units where s.hasSuffix(u) {
-        return (Double(s.dropLast(u.count).trimmingCharacters(in: .whitespaces)) ?? 0) * m
-    }
-    return Double(s) ?? 0
 }
 
 func reveal(_ path: String?) {

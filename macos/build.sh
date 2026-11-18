@@ -18,7 +18,6 @@ VERSION=$(cat ../VERSION)
 STRINGS=$(mktemp -d)
 
 ../engine/build-lib.sh "${ENGINE_FLAGS[@]}" >/dev/null  # the Rust engine, linked into the app
-ENGINE=$(../legacy/mo/fetch-engine.sh)  # legacy mo engine, until the Rust engine replaces it
 
 swift build -c $CONFIG "${ARCHS[@]}" \
   -Xswiftc -emit-localized-strings -Xswiftc -emit-localized-strings-path -Xswiftc "$STRINGS"
@@ -28,9 +27,7 @@ APP=build/OpenCleaner.app
 rm -rf $APP
 mkdir -p $APP/Contents/{MacOS,Resources}
 cp "$BIN" $APP/Contents/MacOS/
-cp ../shared/cli.json $APP/Contents/Resources/
-# the mo engine ships inside the app, unmodified, with its GPL-3.0 license and source pointer
-cp -R $ENGINE $APP/Contents/Resources/engine
+cp ../shared/tools.json $APP/Contents/Resources/
 cp -R Resources/*.lproj $APP/Contents/Resources/
 [[ -d Resources/Art ]] && cp -R Resources/Art $APP/Contents/Resources/
 ICON_KEY=""
@@ -63,14 +60,11 @@ cat > $APP/Contents/Info.plist <<EOF
 </dict></plist>
 EOF
 
-for helper in $APP/Contents/Resources/engine/bin/*-go; do
-  codesign --force --sign "${SIGN_ID:--}" $helper
-done
 codesign --force --sign "${SIGN_ID:--}" $APP
 echo "→ $APP"
 
-# every string the compiler marked localizable, plus cli.json texts, must exist in each language
-python3 - "$STRINGS" Resources ../shared/cli.json <<'PY'
+# every string the compiler marked localizable, plus tools.json texts, must exist in each language
+python3 - "$STRINGS" Resources ../shared/tools.json <<'PY'
 import glob, json, subprocess, sys
 strings, res, manifest = sys.argv[1:]
 keys = set()
@@ -78,7 +72,7 @@ for f in glob.glob(f"{strings}/*.stringsdata"):
     for table in json.load(open(f)).get("tables", {}).values():
         keys |= {e["key"] for e in table}
 for t in json.load(open(manifest)).get("tools", []):
-    keys |= {t[k] for k in ("title", "subtitle", "confirm", "group") if t.get(k)}
+    keys |= {t[k] for k in ("title", "subtitle", "group") if t.get(k)}
     keys |= set(t.get("points", []))
 keys |= {"Cleanup", "Speed", "Applications", "Files", "Security"}
 keys -= {"", "OpenCleaner"}
