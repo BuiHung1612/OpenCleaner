@@ -25,13 +25,15 @@ struct Volume: Identifiable {
 final class SpaceLensModel: ObservableObject {
     @Published var volumes = Volume.all()
     @Published var volume: Volume?
-    /// folders opened so far; `nil` is the startup disk overview (`mo analyze` without a path)
+    /// folders opened so far; `nil` is the startup disk overview
     @Published var stack: [String?] = []
     @Published var selection: Set<String> = []
     @Published var error: String?
     @Published private var cache: [String: JSON] = [:]
     /// keys whose `cache` entry came from disk (an earlier launch) and is being re-scanned
     @Published private var stale: [String: Date] = [:]
+    /// keys whose `cache` entry is a scan still in progress (sizes are still growing)
+    @Published private var live: Set<String> = []
 
     var usedLabel: Text? {
         volumes.first(where: \.isStartup).map { Text(verbatim: bytes($0.used)) }
@@ -40,6 +42,7 @@ final class SpaceLensModel: ObservableObject {
     var current: JSON? { stack.last.map { cache[$0 ?? ""] } ?? nil }
     /// When the shown results were really taken, if they are an older scan being refreshed.
     var staleDate: Date? { stack.last.map { stale[$0 ?? ""] } ?? nil }
+    var isLive: Bool { stack.last.map { live.contains($0 ?? "") } ?? false }
     var entries: [JSON] { current?.entries.array ?? [] }
     var selectedSize: Double {
         entries.filter { selection.contains($0.path.string ?? "") }.compactMap(\.size.double).reduce(0, +)
@@ -98,7 +101,7 @@ final class SpaceLensModel: ObservableObject {
             return
         }
         // show the previous launch's scan right away; the fresh one replaces it
-        if !force, cache[key] == nil, let old = CLI.cached("analyze", Self.vars(key)) {
+        if !force, cache[key] == nil, let old = ResultCache.load(Self.cacheKey(key)) {
             cache[key] = old.json
             stale[key] = old.date
         }
@@ -118,13 +121,40 @@ final class SpaceLensModel: ObservableObject {
         Task { _ = try? await scan("", background: false) }
     }
 
-    private static func vars(_ key: String) -> [String: [String]] { key.isEmpty ? [:] : ["path": [key]] }
+    private static func cacheKey(_ key: String) -> [String] { ["space", key] }
+
+    struct EngineFailure: LocalizedError {
+        let errorDescription: String?
+    }
+
+    /// One engine scan. A foreground scan of a folder with nothing to show yet publishes its
+    /// partial listings as it goes, so the map fills in instead of waiting on a spinner.
+    private func engineScan(_ key: String, background: Bool) async throws -> JSON {
+        var result = JSON(nil)
+        let request: [String: Any] = key.isEmpty ? ["op": "space"] : ["op": "space", "path": key]
+        for await event in Engine.run(request) {
+            switch event.event.string {
+            case "progress" where !background && (cache[key] == nil || live.contains(key)):
+                cache[key] = event
+                live.insert(key)
+            case "space":
+                result = event
+            default:
+                break
+            }
+        }
+        try Task.checkCancellation()
+        if let message = result.error.string { throw EngineFailure(errorDescription: message) }
+        guard let raw = result.raw else { throw CancellationError() }
+        if let data = try? JSONSerialization.data(withJSONObject: raw) {
+            try? ResultCache.save(data, for: Self.cacheKey(key))
+        }
+        return result
+    }
 
     private func scan(_ key: String, background: Bool) async throws -> JSON {
-        if let cached = cache[key], stale[key] == nil { return cached }
-        let task = inflight[key] ?? Task {
-            try await CLI.json("analyze", Self.vars(key), background: background, persist: true)
-        }
+        if let cached = cache[key], stale[key] == nil, !live.contains(key) { return cached }
+        let task = inflight[key] ?? Task { try await engineScan(key, background: background) }
         if inflight[key] == nil, background { backgroundKeys.insert(key) }
         inflight[key] = task
         // a cancelled prefetch must not unregister the foreground scan that replaced it
@@ -134,10 +164,17 @@ final class SpaceLensModel: ObservableObject {
                 backgroundKeys.remove(key)
             }
         }
-        let json = try await task.value
-        cache[key] = json
-        stale[key] = nil
-        return json
+        do {
+            let json = try await task.value
+            cache[key] = json
+            stale[key] = nil
+            live.remove(key)
+            return json
+        } catch {
+            // a half-measured listing must not pass for a finished one
+            if live.remove(key) != nil { cache[key] = nil }
+            throw error
+        }
     }
 
     /// Quietly scans the biggest subfolders next (mo lists entries largest first), so the folder
@@ -161,13 +198,15 @@ final class SpaceLensModel: ObservableObject {
     /// Selected items go to the Trash (recoverable), never deleted outright.
     func removeSelected() {
         var failed: [String] = []
-        for path in selection {
+        let removable = Set(entries.filter(\.selectable.bool).compactMap(\.path.string))
+        for path in selection where removable.contains(path) {
             do { try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil) } catch { failed.append((path as NSString).lastPathComponent) }
         }
         selection = []
         error = failed.isEmpty ? nil : String(localized: "Could not move to Trash: \(failed.joined(separator: ", "))")
         cache = [:]
         stale = [:]
+        live = []
         volumes = Volume.all()
         load(stack.last ?? nil, force: true)
     }
@@ -226,6 +265,15 @@ struct SpaceLensPage: View {
 
             if let date = model.staleDate, model.current != nil {
                 RefreshBanner(date: date, error: model.error)
+            } else if model.isLive {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).brightScroller()
+                    Text("Measuring… sizes keep growing until the scan finishes.")
+                }
+                .font(.system(size: 12)).foregroundStyle(.dim)
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .glassEffect(.clear.tint(.white.opacity(0.07)), in: .capsule)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if let current = model.current {
@@ -284,7 +332,7 @@ struct SpaceLensPage: View {
                         selected: model.selection.contains(e.path.string ?? ""),
                         highlighted: hovered == e.path.string,
                         toggle: {
-                            guard let p = e.path.string else { return }
+                            guard e.selectable.bool, let p = e.path.string else { return }
                             if model.selection.contains(p) { model.selection.remove(p) } else { model.selection.insert(p) }
                         },
                         open: { if e.is_dir.bool, let p = e.path.string { model.open(p) } }
@@ -369,10 +417,13 @@ struct EntryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // overview rows (Home, Applications…) are summaries: never offered for removal
             Button(action: toggle) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
             }
             .buttonStyle(.plain)
+            .opacity(entry.selectable.bool ? 1 : 0)
+            .disabled(!entry.selectable.bool)
             Image(nsImage: fileIcon(entry.path.string ?? "")).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: entry.name.string ?? "?").font(.system(size: 14, weight: .medium)).lineLimit(1)

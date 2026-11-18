@@ -25,6 +25,9 @@ pub struct Item {
     pub is_dir: bool,
     /// "complete", or "partial" when part of it could not be read (size is a lower bound)
     pub scan_status: &'static str,
+    /// A real item the user may act on. Overview rows (Home, Applications, System &
+    /// other…) are summaries and must never be offered for removal.
+    pub selectable: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -118,6 +121,7 @@ pub fn overview(cancel: &AtomicBool, progress: &mut dyn FnMut(&Listing)) -> io::
                 files: 0,
                 is_dir: false,
                 scan_status: "complete",
+                selectable: false,
             });
             listing.total_size += rest;
             sort(&mut listing.entries);
@@ -170,6 +174,7 @@ fn measure(
                 } else {
                     "complete"
                 },
+                selectable: !overview,
             })
             .filter(|item| !overview || item.size > 0)
             .collect();

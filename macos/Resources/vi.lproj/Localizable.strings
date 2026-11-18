@@ -123,3 +123,4 @@
 "Showing the result from %@. Updating…" = "Đang hiện kết quả từ %@. Đang cập nhật…";
 "Could not update, showing the result from %@: %@" = "Không cập nhật được, đang hiện kết quả từ %@: %@";
 "OpenCleaner engine" = "Engine OpenCleaner";
+"Measuring… sizes keep growing until the scan finishes." = "Đang đo… dung lượng còn tăng cho đến khi quét xong.";
