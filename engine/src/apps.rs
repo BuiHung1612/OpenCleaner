@@ -7,6 +7,7 @@ use crate::procs::Running;
 use crate::rules;
 use crate::size;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -106,8 +107,81 @@ fn read_app(_path: &Path, _running: &Running) -> Option<App> {
 }
 
 /// Bytes each app bundle takes, in the order given.
-pub fn sizes(apps: &[PathBuf], cancel: &AtomicBool, progress: &mut dyn FnMut(&[u64])) -> Vec<u64> {
-    size::allocated_many(apps, cancel, progress)
+///
+/// Sizes are remembered between runs (`<data dir>/app-sizes.json`) against a stamp of the
+/// bundle: an app that was not updated or replaced is not walked again. Known sizes are
+/// reported at once through `progress`.
+pub fn sizes(
+    ctx: &Context,
+    apps: &[PathBuf],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&[u64]),
+) -> Vec<u64> {
+    let file = ctx.data_dir.join("app-sizes.json");
+    let mut cache: HashMap<PathBuf, (String, u64)> = std::fs::read(&file)
+        .ok()
+        .and_then(|d| serde_json::from_slice(&d).ok())
+        .unwrap_or_default();
+    let stamps: Vec<Option<String>> = apps.iter().map(|p| stamp(p)).collect();
+    let mut out: Vec<u64> = apps
+        .iter()
+        .zip(&stamps)
+        .map(|(p, s)| match (cache.get(p), s) {
+            (Some((was, bytes)), Some(now)) if was == now => *bytes,
+            _ => 0,
+        })
+        .collect();
+    let missing: Vec<usize> = (0..apps.len()).filter(|&i| out[i] == 0).collect();
+    if missing.len() < apps.len() {
+        progress(&out);
+    }
+    if !missing.is_empty() {
+        let paths: Vec<PathBuf> = missing.iter().map(|&i| apps[i].clone()).collect();
+        let base = out.clone();
+        let measured = size::allocated_many(&paths, cancel, &mut |partial| {
+            let mut now = base.clone();
+            for (k, &i) in missing.iter().enumerate() {
+                now[i] = partial[k];
+            }
+            progress(&now);
+        });
+        for (k, &i) in missing.iter().enumerate() {
+            out[i] = measured[k];
+        }
+    }
+    if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        cache.clear();
+        for ((p, s), b) in apps.iter().zip(stamps).zip(&out) {
+            if let Some(s) = s {
+                cache.insert(p.clone(), (s, *b));
+            }
+        }
+        let _ = std::fs::create_dir_all(&ctx.data_dir);
+        if let Ok(text) = serde_json::to_vec(&cache) {
+            let _ = std::fs::write(&file, text);
+        }
+    }
+    out
+}
+
+/// Changes when the bundle is updated or replaced: the modification times of the bundle,
+/// its Contents folder and its Info.plist.
+fn stamp(app: &Path) -> Option<String> {
+    let t = |p: &Path| -> Option<u128> {
+        std::fs::symlink_metadata(p)
+            .ok()?
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_nanos())
+    };
+    Some(format!(
+        "{}-{}-{}",
+        t(app)?,
+        t(&app.join("Contents"))?,
+        t(&app.join("Contents/Info.plist"))?
+    ))
 }
 
 /// Places an app keeps its data, by bundle id (`{id}`) or by name (`{name}`). Each pattern

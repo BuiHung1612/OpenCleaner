@@ -351,3 +351,41 @@ fn a_pick_changed_after_listing_is_left_alone() {
     assert!(h("Projects/web/node_modules/new-and-precious").exists());
     let _: PathBuf = h("x");
 }
+
+#[test]
+fn app_sizes_are_remembered_until_the_app_changes() {
+    let (_t, ctx) = home();
+    let app = ctx.home.join("Applications/Thing.app");
+    write(&app.join("Contents/Info.plist"), 100);
+    write(&app.join("Contents/MacOS/thing"), 100_000);
+    let other = ctx.home.join("Applications/Other.app");
+    write(&other.join("Contents/Info.plist"), 100);
+    write(&other.join("Contents/MacOS/other"), 50_000);
+    let paths = vec![app.clone(), other.clone()];
+    let first = apps::sizes(&ctx, &paths, &AtomicBool::new(false), &mut |_| {});
+    assert!(first[0] >= 100_000 && first[1] >= 50_000);
+
+    // remembered: grows on disk without a new stamp, the old size is reported
+    write(&app.join("Contents/Resources/big"), 1_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(app.join("Contents"))
+        .ok();
+    let t = SystemTime::now() - Duration::from_secs(3600);
+    for p in [
+        app.clone(),
+        app.join("Contents"),
+        app.join("Contents/Info.plist"),
+    ] {
+        std::fs::File::open(&p).unwrap().set_modified(t).unwrap();
+    }
+    let stamped = apps::sizes(&ctx, &paths, &AtomicBool::new(false), &mut |_| {});
+    let again = apps::sizes(&ctx, &paths, &AtomicBool::new(false), &mut |_| {});
+    assert_eq!(stamped, again, "an unchanged app is not walked again");
+
+    // an update touches Info.plist: measured again
+    write(&app.join("Contents/Info.plist"), 120);
+    let updated = apps::sizes(&ctx, &paths, &AtomicBool::new(false), &mut |_| {});
+    assert!(updated[0] >= 1_100_000, "{updated:?}");
+    assert_eq!(updated[1], first[1]);
+}

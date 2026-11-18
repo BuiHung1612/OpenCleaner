@@ -200,7 +200,7 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             let paths: Vec<PathBuf> = list.iter().map(|a| a.path.clone()).collect();
             let mut progress =
                 |sizes: &[u64]| emit(json!({"event": "sizes", "sizes": sizes, "final": false}));
-            let sizes = apps::sizes(&paths, cancel, &mut progress);
+            let sizes = apps::sizes(ctx(), &paths, cancel, &mut progress);
             emit(json!({"event": "sizes", "sizes": sizes, "final": true}));
         }
         Request::UninstallPlan { paths } => {
