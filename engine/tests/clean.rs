@@ -299,9 +299,15 @@ fn every_attempt_is_in_the_history() {
     assert_eq!(history["sessions"][0]["items"], 1);
     // path separators differ by platform: compare the logged path, not its text
     let log = std::fs::read_to_string(oc_engine::ledger::path(&h.ctx)).unwrap();
-    let removed = log.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).any(|v| {
-        v["result"] == "removed" && v["path"].as_str().is_some_and(|p| Path::new(p).ends_with(Path::new("Library").join("Caches").join("a")))
-    });
+    let removed = log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .any(|v| {
+            v["result"] == "removed"
+                && v["path"].as_str().is_some_and(|p| {
+                    Path::new(p).ends_with(Path::new("Library").join("Caches").join("a"))
+                })
+        });
     assert!(removed, "{log}");
 }
 

@@ -6,7 +6,32 @@ use std::path::Path;
 
 #[cfg(target_os = "macos")]
 pub fn move_to_trash(path: &Path) -> io::Result<()> {
+    // Given something it cannot remove, macOS copies it into the Trash and then reports
+    // success or an error depending on the system: never ask it to move what cannot move.
+    if !movable(path) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "it cannot be moved (read-only or protected)",
+        ));
+    }
     mac::trash(path)
+}
+
+/// Its folder accepts changes (write permission, not a read-only volume).
+#[cfg(target_os = "macos")]
+fn movable(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Ok(c) = CString::new(parent.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+    let read_only = unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0
+        || st.f_flags & libc::MNT_RDONLY as u32 != 0;
+    !read_only && unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0
 }
 
 #[cfg(windows)]

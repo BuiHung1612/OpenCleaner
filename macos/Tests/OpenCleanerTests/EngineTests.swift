@@ -84,8 +84,10 @@ import Testing
 @Test func uninstallerListsAppsAndFillsInSizes() async throws {
     let model = AppsModel()
     model.load()
-    for _ in 0..<300 where model.apps == nil || model.sizes.allSatisfy({ $0 == 0 }) {
-        try await Task.sleep(for: .milliseconds(20))
+    // a cold size cache on a busy runner can take a while
+    let deadline = Date().addingTimeInterval(60)
+    while Date() < deadline, model.apps == nil || model.sizes.allSatisfy({ $0 == 0 }) {
+        try await Task.sleep(for: .milliseconds(50))
     }
     let apps = try #require(model.apps)
     #expect(!apps.isEmpty)

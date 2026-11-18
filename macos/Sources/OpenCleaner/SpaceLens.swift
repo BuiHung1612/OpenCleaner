@@ -199,6 +199,10 @@ final class SpaceLensModel: ObservableObject {
     /// protected volumes) into the Trash and still reports success: that copy is taken
     /// back out and the move counts as failed.
     static func moveToTrash(_ path: String) -> Bool {
+        // never ask macOS to move what cannot move: it may copy it into the Trash first
+        let parent = (path as NSString).deletingLastPathComponent
+        let volume = try? URL(fileURLWithPath: parent).resourceValues(forKeys: [.volumeIsReadOnlyKey])
+        guard FileManager.default.isWritableFile(atPath: parent), volume?.volumeIsReadOnly != true else { return false }
         var result: NSURL?
         do {
             try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &result)

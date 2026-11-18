@@ -4,7 +4,7 @@
 mod common;
 
 use common::{TempDir, write};
-use oc_engine::apps::{self, App};
+use oc_engine::apps;
 use oc_engine::context::Context;
 use oc_engine::finders;
 use oc_engine::guard::{Purpose, check_for};
@@ -26,9 +26,21 @@ fn home() -> (TempDir, Context) {
 }
 
 fn age(path: &std::path::Path, days: u64) {
-    let t = SystemTime::now() - Duration::from_secs(days * 86_400);
-    let f = std::fs::File::options().read(true).open(path).unwrap();
-    f.set_modified(t).unwrap();
+    set_mtime(path, SystemTime::now() - Duration::from_secs(days * 86_400));
+}
+
+/// Sets a file's or folder's modification time (Windows opens folders only with
+/// FILE_FLAG_BACKUP_SEMANTICS, and needs write access to change times).
+fn set_mtime(path: &std::path::Path, t: SystemTime) {
+    let mut options = std::fs::File::options();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.write(true).custom_flags(0x0200_0000);
+    }
+    #[cfg(not(windows))]
+    options.read(true);
+    options.open(path).unwrap().set_modified(t).unwrap();
 }
 
 #[test]
@@ -41,9 +53,13 @@ fn each_purpose_opens_only_what_it_needs() {
     write(&h("Documents/proj/node_modules/a"), 10);
     write(&h("Documents/proj/src/main.js"), 10);
 
-    let prefs = h("Library/Preferences/com.x.plist");
-    assert!(check_for(&prefs, &h("Library/Preferences"), &ctx, Purpose::Clean).is_err());
-    assert!(check_for(&prefs, &h("Library/Preferences"), &ctx, Purpose::Uninstall).is_ok());
+    // macOS keeps preferences in ~/Library/Preferences: only the Uninstaller may touch them
+    #[cfg(target_os = "macos")]
+    {
+        let prefs = h("Library/Preferences/com.x.plist");
+        assert!(check_for(&prefs, &h("Library/Preferences"), &ctx, Purpose::Clean).is_err());
+        assert!(check_for(&prefs, &h("Library/Preferences"), &ctx, Purpose::Uninstall).is_ok());
+    }
 
     let dmg = h("Downloads/setup.dmg");
     assert!(check_for(&dmg, &h("Downloads"), &ctx, Purpose::Clean).is_err());
@@ -108,6 +124,8 @@ fn each_purpose_opens_only_what_it_needs() {
     );
 }
 
+/// macOS app leftovers (Windows apps are removed by their own uninstallers).
+#[cfg(target_os = "macos")]
 #[test]
 fn leftovers_match_the_bundle_id_exactly_and_names_only_when_distinctive() {
     let (_t, ctx) = home();
@@ -127,7 +145,7 @@ fn leftovers_match_the_bundle_id_exactly_and_names_only_when_distinctive() {
     ] {
         write(&h(p), 1000);
     }
-    let app = App {
+    let app = apps::App {
         name: "AcmeEditor".into(),
         bundle_id: "com.acme.Editor".into(),
         version: "1".into(),
@@ -167,7 +185,7 @@ fn leftovers_match_the_bundle_id_exactly_and_names_only_when_distinctive() {
     }
 
     // a two-letter name is not used to guess folders
-    let short = App {
+    let short = apps::App {
         name: "Go".into(),
         bundle_id: "org.example.go".into(),
         path: app.path.clone(),
@@ -377,7 +395,7 @@ fn app_sizes_are_remembered_until_the_app_changes() {
         app.join("Contents"),
         app.join("Contents/Info.plist"),
     ] {
-        std::fs::File::open(&p).unwrap().set_modified(t).unwrap();
+        set_mtime(&p, t);
     }
     let stamped = apps::sizes(&ctx, &paths, &AtomicBool::new(false), &mut |_| {});
     let again = apps::sizes(&ctx, &paths, &AtomicBool::new(false), &mut |_| {});
