@@ -1,0 +1,280 @@
+# OpenCleaner cleaning rules for macOS. Schema: src/rules.rs.
+# Order matters: an earlier rule claims a path first, so specific rules come before the
+# general "User caches" one. Everything here lives in the user's home and is rebuilt by the
+# app that made it; `default = false` marks what is worth a look before cleaning.
+
+[[group]]
+id = "browsers"
+title = "Browsers"
+
+[[group]]
+id = "apps"
+title = "App caches"
+
+[[group]]
+id = "developer"
+title = "Developer tools"
+
+[[group]]
+id = "system"
+title = "User caches & logs"
+
+[[group]]
+id = "trash"
+title = "Trash"
+
+# --- browsers -------------------------------------------------------------------------
+
+[[rule]]
+id = "browser.chrome"
+group = "browsers"
+title = "Google Chrome"
+paths = [
+  "~/Library/Caches/Google/Chrome",
+  "~/Library/Application Support/Google/Chrome/*/Service Worker/CacheStorage",
+  "~/Library/Application Support/Google/Chrome/*/GPUCache",
+  "~/Library/Application Support/Google/Chrome/GrShaderCache",
+  "~/Library/Application Support/Google/Chrome/ShaderCache",
+]
+running = ["com.google.Chrome"]
+note = "Web page cache and offline site data caches. Logins and history stay."
+
+[[rule]]
+id = "browser.edge"
+group = "browsers"
+title = "Microsoft Edge"
+paths = [
+  "~/Library/Caches/Microsoft Edge",
+  "~/Library/Application Support/Microsoft Edge/*/Service Worker/CacheStorage",
+  "~/Library/Application Support/Microsoft Edge/*/GPUCache",
+]
+running = ["com.microsoft.edgemac"]
+note = "Web page cache. Logins and history stay."
+
+[[rule]]
+id = "browser.brave"
+group = "browsers"
+title = "Brave"
+paths = [
+  "~/Library/Caches/BraveSoftware/Brave-Browser",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Service Worker/CacheStorage",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/GPUCache",
+]
+running = ["com.brave.Browser"]
+note = "Web page cache. Logins and history stay."
+
+[[rule]]
+id = "browser.arc"
+group = "browsers"
+title = "Arc"
+paths = ["~/Library/Caches/Arc"]
+running = ["company.thebrowser.Browser"]
+note = "Web page cache. Logins and history stay."
+
+[[rule]]
+id = "browser.firefox"
+group = "browsers"
+title = "Firefox"
+paths = ["~/Library/Caches/Firefox/Profiles/*/cache2", "~/Library/Caches/Firefox/Profiles/*/startupCache"]
+target = "self"
+running = ["org.mozilla.firefox"]
+note = "Web page cache. Logins and history stay."
+
+# --- app caches -----------------------------------------------------------------------
+
+[[rule]]
+id = "app.slack"
+group = "apps"
+title = "Slack"
+paths = [
+  "~/Library/Application Support/Slack/Cache",
+  "~/Library/Application Support/Slack/Code Cache",
+  "~/Library/Application Support/Slack/GPUCache",
+  "~/Library/Application Support/Slack/Service Worker/CacheStorage",
+  "~/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack/Cache",
+]
+running = ["com.tinyspeck.slackmacgap"]
+note = "Downloaded images and app code cache. Messages stay on Slack's servers."
+
+[[rule]]
+id = "app.discord"
+group = "apps"
+title = "Discord"
+paths = [
+  "~/Library/Application Support/discord/Cache",
+  "~/Library/Application Support/discord/Code Cache",
+  "~/Library/Application Support/discord/GPUCache",
+]
+running = ["com.hnc.Discord"]
+note = "Downloaded media and app code cache."
+
+[[rule]]
+id = "app.vscode"
+group = "apps"
+title = "Visual Studio Code"
+paths = [
+  "~/Library/Application Support/Code/Cache",
+  "~/Library/Application Support/Code/CachedData",
+  "~/Library/Application Support/Code/Code Cache",
+  "~/Library/Application Support/Code/GPUCache",
+  "~/Library/Application Support/Code/CachedExtensionVSIXs",
+]
+running = ["com.microsoft.VSCode"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "app.code-forks"
+group = "apps"
+title = "Cursor, Windsurf and other VS Code editors"
+paths = [
+  "~/Library/Application Support/Cursor/Cache",
+  "~/Library/Application Support/Cursor/CachedData",
+  "~/Library/Application Support/Cursor/Code Cache",
+  "~/Library/Application Support/Cursor/GPUCache",
+  "~/Library/Application Support/Windsurf/Cache",
+  "~/Library/Application Support/Windsurf/CachedData",
+  "~/Library/Application Support/Windsurf/Code Cache",
+  "~/Library/Application Support/Windsurf/GPUCache",
+  "~/Library/Application Support/Antigravity/Cache",
+  "~/Library/Application Support/Antigravity/CachedData",
+  "~/Library/Application Support/Antigravity/Code Cache",
+  "~/Library/Application Support/Antigravity IDE/Cache",
+  "~/Library/Application Support/Antigravity IDE/CachedData",
+  "~/Library/Application Support/Antigravity IDE/Code Cache",
+]
+running = ["com.todesktop.230313mzl4w4u92", "com.exafunction.windsurf", "com.google.antigravity", "com.google.antigravity-ide"]
+note = "Editor code caches. Settings and extensions stay."
+
+[[rule]]
+id = "app.google"
+group = "apps"
+title = "Android Studio and other Google apps"
+paths = ["~/Library/Caches/Google"]
+exclude = ["Chrome"]
+running = ["com.google.android.studio"]
+note = "Caches of Google apps other than Chrome (Chrome has its own row)."
+
+[[rule]]
+id = "app.teams"
+group = "apps"
+title = "Microsoft Teams"
+paths = ["~/Library/Containers/com.microsoft.teams2/Data/Library/Caches"]
+running = ["com.microsoft.teams2"]
+note = "Downloaded images and web cache."
+
+# --- developer tools ------------------------------------------------------------------
+
+[[rule]]
+id = "dev.xcode.derived"
+group = "developer"
+title = "Xcode build data (DerivedData)"
+paths = ["~/Library/Developer/Xcode/DerivedData"]
+running = ["com.apple.dt.Xcode"]
+note = "Build products and indexes. Xcode rebuilds them; the next build of each project takes longer."
+
+[[rule]]
+id = "dev.xcode.cache"
+group = "developer"
+title = "Xcode cache"
+paths = ["~/Library/Caches/com.apple.dt.Xcode"]
+target = "self"
+running = ["com.apple.dt.Xcode"]
+note = "Downloaded documentation and other caches Xcode fetches again."
+
+[[rule]]
+id = "dev.simulator.caches"
+group = "developer"
+title = "Simulator caches"
+paths = ["~/Library/Developer/CoreSimulator/Caches"]
+running = ["com.apple.iphonesimulator"]
+note = "Rebuilt when a simulator boots. Simulators and their apps stay."
+
+[[rule]]
+id = "dev.xcode.devicesupport"
+group = "developer"
+title = "Device support files"
+paths = ["~/Library/Developer/Xcode/iOS DeviceSupport", "~/Library/Developer/Xcode/watchOS DeviceSupport"]
+default = false
+note = "Debug symbols copied from devices you connected. Copied again (slowly) the next time that device connects."
+
+[[rule]]
+id = "dev.npm"
+group = "developer"
+title = "npm cache"
+paths = ["~/.npm/_cacache"]
+target = "self"
+note = "Downloaded packages; npm downloads them again when needed."
+
+[[rule]]
+id = "dev.gradle"
+group = "developer"
+title = "Gradle caches"
+paths = ["~/.gradle/caches"]
+target = "self"
+default = false
+note = "Downloaded dependencies and build caches. The next build downloads and rebuilds them."
+
+[[rule]]
+id = "dev.pnpm"
+group = "developer"
+title = "pnpm store"
+paths = ["~/Library/pnpm/store"]
+target = "self"
+default = false
+note = "Shared package store. Projects keep working; installs download packages again."
+
+[[rule]]
+id = "dev.cargo"
+group = "developer"
+title = "Cargo downloads"
+paths = ["~/.cargo/registry/cache", "~/.cargo/registry/src"]
+target = "self"
+default = false
+note = "Downloaded crate archives and sources; cargo fetches them again."
+
+[[rule]]
+id = "dev.xdg"
+group = "developer"
+title = "Tool caches (~/.cache)"
+paths = ["~/.cache"]
+exclude = ["huggingface", "torch", "lm-studio", "ollama", "whisper", "pre-commit"]
+default = false
+note = "Caches of command-line tools. Model downloads (Hugging Face, PyTorch…) are not included."
+
+# --- user caches & logs (general, after the specific rules above) ---------------------
+
+[[rule]]
+id = "user.caches"
+group = "system"
+title = "App caches in Library"
+paths = ["~/Library/Caches"]
+item_is_bundle_id = true
+exclude = [
+  "com.apple.*",
+  "CloudKit",
+  "FamilyCircle",
+  "Google",
+  "Firefox",
+  "Microsoft Edge",
+  "BraveSoftware",
+  "Arc",
+]
+note = "Files apps keep to start faster. Each app rebuilds its own; caches of running apps are left alone."
+
+[[rule]]
+id = "user.logs"
+group = "system"
+title = "Logs older than a week"
+paths = ["~/Library/Logs"]
+min_age_days = 7
+note = "Diagnostic logs and crash reports older than 7 days."
+
+# --- trash ----------------------------------------------------------------------------
+
+[[rule]]
+id = "trash"
+group = "trash"
+title = "Empty the Trash"
+paths = ["~/.Trash"]
+default = false
+note = "Everything in the Trash, permanently."

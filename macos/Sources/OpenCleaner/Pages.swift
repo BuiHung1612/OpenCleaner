@@ -290,7 +290,10 @@ struct UninstallerPage: View {
 }
 
 struct HistoryPage: View {
-    @State private var data = JSON(nil)
+    /// Sessions from the Rust engine first (newest first), then mo's (legacy tools).
+    @State private var sessions: [JSON]?
+    @State private var engineLog: String?
+    @State private var moLog: String?
     @State private var error: String?
 
     /// mo logs commands like "optimize-dry-run"; show the app's own name for that tool.
@@ -314,18 +317,18 @@ struct HistoryPage: View {
             .padding(.top, 36)
             ScrollView {
                 VStack(spacing: 4) {
-                    ForEach(Array(data.sessions.array.enumerated()), id: \.offset) { _, s in
+                    ForEach(Array((sessions ?? []).enumerated()), id: \.offset) { _, s in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(verbatim: Self.title(s.command.string ?? "?")).font(.system(size: 14, weight: .semibold))
-                                Text(verbatim: s.started_at.string ?? "").font(.system(size: 12)).foregroundStyle(.dim)
+                                Text(verbatim: Self.when(s)).font(.system(size: 12)).foregroundStyle(.dim)
                             }
                             Spacer()
-                            Text("\(s.items.string ?? "0") items · \(s.size.string ?? "—")").monospacedDigit()
+                            Text("\(s.items.string ?? "0") items · \(s.bytes.double.map { bytes($0) } ?? s.size.string ?? "—")").monospacedDigit()
                         }
                         .padding(.horizontal, 14).padding(.vertical, 10)
                     }
-                    if data.raw == nil {
+                    if sessions == nil {
                         if let error { Text(error) } else { ProgressView().brightScroller().padding(40) }
                     }
                 }
@@ -333,15 +336,33 @@ struct HistoryPage: View {
             }
             .brightScroller()
             .glassPanel()
-            if let log = data.logs.deletions.string {
+            ForEach([engineLog, moLog].compactMap { $0 }, id: \.self) { log in
                 Text("Every deleted file is listed in \((log as NSString).abbreviatingWithTildeInPath)")
                     .font(.system(size: 12)).foregroundStyle(.dim)
             }
         }
         .padding(.horizontal, 32).padding(.bottom, 28)
         .task {
-            do { data = try await CLI.json("history") } catch { self.error = error.localizedDescription }
+            let engine = Engine.call(["op": "history"])
+            engineLog = engine.logs.deletions.string
+            var all = engine.sessions.array
+            do {
+                let mo = try await CLI.json("history")
+                all += mo.sessions.array
+                moLog = mo.logs.deletions.string
+            } catch {
+                if all.isEmpty { self.error = error.localizedDescription }
+            }
+            sessions = all
         }
+    }
+
+    /// Engine sessions carry a Unix time; mo's a preformatted string.
+    static func when(_ s: JSON) -> String {
+        if let t = s.started_unix.double {
+            return Date(timeIntervalSince1970: t).formatted(date: .abbreviated, time: .shortened)
+        }
+        return s.started_at.string ?? ""
     }
 }
 

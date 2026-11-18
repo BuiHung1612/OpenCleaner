@@ -1,0 +1,103 @@
+# OpenCleaner cleaning rules for Windows. Schema: src/rules.rs. Paths use %VAR% (LOCALAPPDATA,
+# APPDATA, TEMP, USERPROFILE) and stay inside the user's profile.
+
+[[group]]
+id = "browsers"
+title = "Browsers"
+
+[[group]]
+id = "developer"
+title = "Developer tools"
+
+[[group]]
+id = "system"
+title = "Temporary files & logs"
+
+[[rule]]
+id = "browser.chrome"
+group = "browsers"
+title = "Google Chrome"
+paths = [
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/Cache",
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/Code Cache",
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/GPUCache",
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/Service Worker/CacheStorage",
+]
+target = "self"
+running = ["chrome.exe"]
+note = "Web page cache. Logins and history stay."
+
+[[rule]]
+id = "browser.edge"
+group = "browsers"
+title = "Microsoft Edge"
+paths = [
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Cache",
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Code Cache",
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/GPUCache",
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Service Worker/CacheStorage",
+]
+target = "self"
+running = ["msedge.exe"]
+note = "Web page cache. Logins and history stay."
+
+[[rule]]
+id = "browser.firefox"
+group = "browsers"
+title = "Firefox"
+paths = ["%LOCALAPPDATA%/Mozilla/Firefox/Profiles/*/cache2"]
+target = "self"
+running = ["firefox.exe"]
+note = "Web page cache. Logins and history stay."
+
+[[rule]]
+id = "dev.npm"
+group = "developer"
+title = "npm cache"
+paths = ["%LOCALAPPDATA%/npm-cache/_cacache"]
+target = "self"
+note = "Downloaded packages; npm downloads them again when needed."
+
+[[rule]]
+id = "dev.gradle"
+group = "developer"
+title = "Gradle caches"
+paths = ["%USERPROFILE%/.gradle/caches"]
+target = "self"
+default = false
+note = "Downloaded dependencies and build caches. The next build downloads and rebuilds them."
+
+[[rule]]
+id = "system.temp"
+group = "system"
+title = "Temporary files"
+paths = ["%TEMP%"]
+min_age_days = 1
+note = "Files programs left in the temp folder, older than a day. Files in use are skipped."
+
+[[rule]]
+id = "system.inetcache"
+group = "system"
+title = "Internet cache"
+paths = ["%LOCALAPPDATA%/Microsoft/Windows/INetCache"]
+note = "Cache of Windows web components."
+
+[[rule]]
+id = "system.crashdumps"
+group = "system"
+title = "Crash dumps and error reports"
+paths = [
+  "%LOCALAPPDATA%/CrashDumps",
+  "%LOCALAPPDATA%/Microsoft/Windows/WER/ReportArchive",
+  "%LOCALAPPDATA%/Microsoft/Windows/WER/ReportQueue",
+]
+note = "Memory dumps and reports of programs that crashed."
+
+[[rule]]
+id = "system.thumbnails"
+group = "system"
+title = "Thumbnail cache"
+paths = ["%LOCALAPPDATA%/Microsoft/Windows/Explorer"]
+include = ["thumbcache_*.db", "iconcache_*.db"]
+default = false
+note = "Explorer rebuilds thumbnails as you browse folders. Files Explorer has open are skipped."

@@ -14,10 +14,10 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_BOTH_DIR_INFO,
-    FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo, GetFileInformationByHandle,
-    GetFileInformationByHandleEx, OPEN_EXISTING,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
+    GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING,
 };
 
 const BUF_LEN: usize = 64 * 1024;
@@ -139,4 +139,56 @@ fn entry_of(rec: &FILE_ID_BOTH_DIR_INFO, name: OsString, volume: u64) -> Entry {
         atime: filetime_to_unix(rec.LastAccessTime as u64),
         ..Entry::empty(name)
     }
+}
+
+/// The entry for `path` itself (a reparse point is not followed), with the volume serial
+/// and file id, so an object can be recognised again before it is removed.
+pub fn stat(path: &Path) -> io::Result<Entry> {
+    let wide_path = wide(path);
+    let h = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let h = Handle(h);
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(h.0, &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let attrs = info.dwFileAttributes;
+    let kind = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        Kind::Symlink
+    } else if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        Kind::Dir
+    } else {
+        Kind::File
+    };
+    let len = (info.nFileSizeHigh as u64) << 32 | info.nFileSizeLow as u64;
+    let ft = |f: windows_sys::Win32::Foundation::FILETIME| {
+        (f.dwHighDateTime as u64) << 32 | f.dwLowDateTime as u64
+    };
+    Ok(Entry {
+        kind,
+        dev: info.dwVolumeSerialNumber as u64,
+        ino: (info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64,
+        nlink: info.nNumberOfLinks,
+        len,
+        alloc: len.div_ceil(4096) * 4096,
+        mtime: filetime_to_unix(ft(info.ftLastWriteTime)),
+        atime: filetime_to_unix(ft(info.ftLastAccessTime)),
+        ..Entry::empty(
+            path.file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_default(),
+        )
+    })
 }

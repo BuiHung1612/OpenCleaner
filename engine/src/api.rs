@@ -1,10 +1,13 @@
 //! Requests the app sends, as JSON: quick ones answered at once (`call`), long ones run
 //! as jobs that report events until `{"event":"done"}` (`run`).
 
-use crate::{size, space, status};
+use crate::context::Context;
+use crate::rules::RuleSet;
+use crate::{clean, ledger, procs, size, space, status};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 
 #[derive(Deserialize)]
@@ -25,6 +28,38 @@ enum Request {
     Space {
         path: Option<PathBuf>,
     },
+    /// The cleaning rules and their groups, for the review screen.
+    Rules,
+    /// System Junk scan: `progress` summaries, then one `plan` (nothing is removed).
+    /// `list` adds every item's path and size to its rule.
+    Scan {
+        #[serde(default)]
+        list: bool,
+    },
+    /// Remove the items of `rules` from a scanned plan: `progress`, then `cleaned`.
+    Clean {
+        plan: u64,
+        rules: Vec<String>,
+    },
+    /// Past cleanups, newest first.
+    History {
+        #[serde(default = "history_limit")]
+        limit: usize,
+    },
+}
+
+fn history_limit() -> usize {
+    200
+}
+
+fn ctx() -> &'static Context {
+    static CTX: OnceLock<Context> = OnceLock::new();
+    CTX.get_or_init(Context::from_env)
+}
+
+fn rule_set() -> &'static RuleSet {
+    static SET: OnceLock<RuleSet> = OnceLock::new();
+    SET.get_or_init(RuleSet::builtin)
 }
 
 fn allocated() -> size::Mode {
@@ -43,6 +78,28 @@ pub fn call(request: &str) -> Value {
         Ok(Request::Version) => json!({"ok": true, "version": crate::VERSION}),
         Ok(Request::Status) => {
             let mut v = serde_json::to_value(status::read()).unwrap_or(Value::Null);
+            v["ok"] = json!(true);
+            v
+        }
+        Ok(Request::Rules) => {
+            let set = rule_set();
+            let groups: Vec<Value> = set
+                .groups
+                .iter()
+                .map(|g| {
+                    let rules: Vec<Value> = set
+                        .rules
+                        .iter()
+                        .filter(|r| r.group == g.id)
+                        .map(|r| json!({"id": r.id, "title": r.title, "note": r.note, "default": r.default}))
+                        .collect();
+                    json!({"id": g.id, "title": g.title, "rules": rules})
+                })
+                .collect();
+            json!({"ok": true, "groups": groups})
+        }
+        Ok(Request::History { limit }) => {
+            let mut v = ledger::sessions(ctx(), limit);
             v["ok"] = json!(true);
             v
         }
@@ -89,6 +146,27 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
                 }
             }
         }
+        Request::Rules | Request::History { .. } => {
+            emit(json!({"event": "error", "error": "use call"}))
+        }
+        Request::Scan { list } => {
+            let running = procs::Running::snapshot();
+            let mut progress = |p: &clean::PlanSummary| emit_value("progress", p, &mut *emit);
+            let plan = clean::scan_with(ctx(), rule_set(), &running, list, cancel, &mut progress);
+            emit_value("plan", &plan, emit);
+        }
+        Request::Clean { plan, rules } => {
+            let mut progress = |o: &clean::Outcome, total: u64| {
+                let mut v = serde_json::to_value(o).unwrap_or(Value::Null);
+                v["event"] = json!("progress");
+                v["total"] = json!(total);
+                emit(v);
+            };
+            match clean::execute(ctx(), plan, &rules, cancel, &mut progress) {
+                Ok(outcome) => emit_value("cleaned", &outcome, emit),
+                Err(e) => emit(json!({"event": "cleaned", "error": e})),
+            }
+        }
         Request::Space { path } => {
             let mut progress = |l: &space::Listing| emit_listing("progress", l, &mut *emit);
             let result = match &path {
@@ -105,6 +183,12 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
 
 fn emit_listing(event: &str, listing: &space::Listing, emit: &mut dyn FnMut(Value)) {
     let mut v = serde_json::to_value(listing).unwrap_or(Value::Null);
+    v["event"] = json!(event);
+    emit(v);
+}
+
+fn emit_value<T: serde::Serialize>(event: &str, value: &T, emit: &mut dyn FnMut(Value)) {
+    let mut v = serde_json::to_value(value).unwrap_or(Value::Null);
     v["event"] = json!(event);
     emit(v);
 }

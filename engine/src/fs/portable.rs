@@ -29,6 +29,7 @@ pub fn read_dir(dir: &Path, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg_attr(windows, allow(dead_code))] // Windows has its own (with file ids)
 pub fn stat(path: &Path) -> io::Result<Entry> {
     let meta = fs::symlink_metadata(path)?;
     let name = path

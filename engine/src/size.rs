@@ -228,3 +228,101 @@ impl Sizer<'_> {
 pub fn kib(bytes: u64) -> u64 {
     bytes.div_ceil(1024)
 }
+
+/// Freed bytes of many items in one parallel walk (each walked directory is tagged with
+/// its item), so a few big caches and many small ones spread evenly over the workers.
+/// `progress` gets the running totals about every 200 ms. A hard-linked file counts for
+/// an item only when all of its links are inside that item.
+pub fn freed_many(
+    items: &[std::path::PathBuf],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&[u64]),
+) -> Vec<u64> {
+    let tagged = TaggedFreed {
+        bytes: items.iter().map(|_| AtomicU64::new(0)).collect(),
+        links: Mutex::new(HashMap::new()),
+    };
+    let mut roots = Vec::new();
+    for (i, path) in items.iter().enumerate() {
+        match fs::stat(path, Detail::Freed) {
+            Ok(e) if e.kind == Kind::Dir => roots.push((path.clone(), i as u32)),
+            Ok(e) if e.kind == Kind::File => tagged.add_file(i, &e),
+            _ => {}
+        }
+    }
+    std::thread::scope(|scope| {
+        let walker = scope.spawn(|| {
+            walk::walk_tagged(
+                roots,
+                walk::default_threads(),
+                Detail::Freed,
+                cancel,
+                &tagged,
+            )
+        });
+        let mut last = std::time::Instant::now();
+        while !walker.is_finished() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if last.elapsed() >= std::time::Duration::from_millis(200) {
+                progress(&tagged.snapshot());
+                last = std::time::Instant::now();
+            }
+        }
+    });
+    let mut out = tagged.snapshot();
+    for (_, (tag, seen, nlink, size)) in tagged.links.into_inner().unwrap() {
+        if let Some(tag) = tag
+            && seen >= nlink
+        {
+            out[tag] += size;
+        }
+    }
+    out
+}
+
+/// (item the links were seen in, or None once seen in two items; links seen; link count; size)
+type TaggedLink = (Option<usize>, u32, u32, u64);
+
+struct TaggedFreed {
+    bytes: Vec<AtomicU64>,
+    links: Mutex<HashMap<(u64, u64), TaggedLink>>,
+}
+
+impl TaggedFreed {
+    fn snapshot(&self) -> Vec<u64> {
+        self.bytes
+            .iter()
+            .map(|b| b.load(Ordering::Relaxed))
+            .collect()
+    }
+
+    fn add_file(&self, tag: usize, e: &Entry) {
+        if e.nlink <= 1 {
+            self.bytes[tag].fetch_add(e.freed(), Ordering::Relaxed);
+            return;
+        }
+        let mut links = self.links.lock().unwrap();
+        let slot = links
+            .entry((e.dev, e.ino))
+            .or_insert((Some(tag), 0, e.nlink, e.freed()));
+        if slot.0 != Some(tag) {
+            slot.0 = None;
+        }
+        slot.1 += 1;
+    }
+}
+
+impl Visitor for TaggedFreed {
+    fn entry(&self, _dir: &Path, tag: u32, e: &Entry) -> Option<u32> {
+        match e.kind {
+            Kind::Dir if !e.mount_point => Some(tag),
+            Kind::File => {
+                self.add_file(tag as usize, e);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn error(&self, _path: &Path, _tag: u32, _err: io::Error) {}
+}

@@ -3,6 +3,7 @@
 //!   oce version
 //!   oce size [--freed] [--all-volumes] [--json] PATH...   du-style "<KiB>\t<path>" lines
 //!   oce space [PATH]                                       Space Lens listing (JSON); no PATH: overview
+//!   oce scan                                               System Junk preview (removes nothing)
 //!   oce call '<request json>'                              same requests as the app
 
 use oc_engine::size::{self, Mode};
@@ -39,6 +40,38 @@ fn main() -> ExitCode {
                 "oce status: {:.0} ms",
                 start.elapsed().as_secs_f64() * 1000.0
             );
+            ExitCode::SUCCESS
+        }
+        Some("scan") => {
+            let start = std::time::Instant::now();
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            oc_engine::api::run(r#"{"op":"scan"}"#, &cancel, &mut |event| {
+                if event["event"] == "plan" {
+                    for g in event["groups"].as_array().into_iter().flatten() {
+                        println!("{}", g["title"].as_str().unwrap_or(""));
+                        for r in g["rules"].as_array().into_iter().flatten() {
+                            println!(
+                                "  {:<44} {:>9.1} MB {:>6} items  {}{}",
+                                r["title"].as_str().unwrap_or(""),
+                                r["bytes"].as_f64().unwrap_or(0.0) / 1e6,
+                                r["items"],
+                                r["status"].as_str().unwrap_or(""),
+                                if r["default"] == true {
+                                    ""
+                                } else {
+                                    "  (not preselected)"
+                                }
+                            );
+                        }
+                    }
+                    println!(
+                        "total {:.2} GB in {} items",
+                        event["bytes"].as_f64().unwrap_or(0.0) / 1e9,
+                        event["items"]
+                    );
+                }
+            });
+            eprintln!("oce scan: {:.2}s", start.elapsed().as_secs_f64());
             ExitCode::SUCCESS
         }
         Some("call") if args.len() == 2 => {

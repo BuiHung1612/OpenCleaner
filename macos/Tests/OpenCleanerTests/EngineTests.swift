@@ -55,3 +55,13 @@ import Testing
     _ = Engine.call(["op": "status"])
     #expect(Date().timeIntervalSince(start) < 0.2)
 }
+
+@Test func engineListsItsCleaningRules() {
+    let rules = Engine.call(["op": "rules"])
+    #expect(rules.ok.bool)
+    let ids = rules.groups.array.flatMap(\.rules.array).compactMap(\.id.string)
+    #expect(ids.contains("user.caches"))
+    // emptying the Trash is never preselected
+    let trash = rules.groups.array.flatMap(\.rules.array).first { $0.id.string == "trash" }
+    #expect(trash?.default.bool == false)
+}

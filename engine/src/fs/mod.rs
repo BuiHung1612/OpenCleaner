@@ -130,6 +130,14 @@ pub fn stat(path: &Path, detail: Detail) -> io::Result<Entry> {
             other => return other,
         }
     }
-    let _ = detail;
-    portable::stat(path)
+    #[cfg(windows)]
+    {
+        let _ = detail;
+        win::stat(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = detail;
+        portable::stat(path)
+    }
 }

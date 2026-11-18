@@ -106,6 +106,7 @@ struct MainView: View {
     @State private var version: String?
     @StateObject private var lens = SpaceLensModel()
     @StateObject private var status = StatusStream()
+    @StateObject private var junk = JunkModel()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -180,7 +181,10 @@ struct MainView: View {
         case .uninstaller: UninstallerPage()
         case .history: HistoryPage()
         case .tool(let id):
-            if let tool = CLI.tools.first(where: { $0.id == id }) { ToolPage(tool: tool) }
+            if let tool = CLI.tools.first(where: { $0.id == id }) {
+                // System Junk runs on the Rust engine; the other tools still on mo (legacy)
+                if id == "clean" { JunkPage(tool: tool, model: junk) } else { ToolPage(tool: tool) }
+            }
         }
     }
 }
