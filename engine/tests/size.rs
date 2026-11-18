@@ -1,7 +1,7 @@
 mod common;
 
 use common::{TempDir, write};
-use oc_engine::fs::{self, Kind};
+use oc_engine::fs::{self, Detail, Kind};
 use oc_engine::size::{self, Mode, Options};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,7 +35,7 @@ fn bulk_listing_matches_lstat() {
     }
     for dir in dirs {
         let mut bulk = BTreeMap::new();
-        fs::read_dir(&dir, &mut |e| {
+        fs::read_dir(&dir, Detail::Basic, &mut |e| {
             bulk.insert(e.name.clone(), e.clone());
         })
         .unwrap();

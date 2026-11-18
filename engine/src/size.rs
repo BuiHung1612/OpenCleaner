@@ -7,7 +7,7 @@
 //!   of its links are inside the tree. Never crosses into another volume.
 
 use crate::fs::walk::{self, Visitor};
-use crate::fs::{self, Entry, Kind};
+use crate::fs::{self, Detail, Entry, Kind};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -69,7 +69,7 @@ impl Report {
 pub struct Links(Mutex<HashSet<(u64, u64)>>);
 
 impl Links {
-    fn first_time(&self, dev: u64, ino: u64) -> bool {
+    pub(crate) fn first_time(&self, dev: u64, ino: u64) -> bool {
         self.0.lock().unwrap().insert((dev, ino))
     }
 }
@@ -84,7 +84,12 @@ pub fn measure_with(
     links: &Links,
     cancel: &AtomicBool,
 ) -> io::Result<Report> {
-    let root = fs::stat(path)?;
+    let detail = if opts.mode == Mode::Freed {
+        Detail::Freed
+    } else {
+        Detail::Basic
+    };
+    let root = fs::stat(path, detail)?;
     let mut report = Report::default();
     match (root.kind, opts.mode) {
         (Kind::Dir, _) => {}
@@ -119,7 +124,7 @@ pub fn measure_with(
         first_error: Mutex::new(None),
         freed_links: Mutex::new(HashMap::new()),
     };
-    walk::walk(path, opts.threads, cancel, &sizer);
+    walk::walk(path, opts.threads, detail, cancel, &sizer);
 
     let mut bytes = sizer.bytes.load(Ordering::Relaxed);
     for (_, (seen, nlink, size)) in sizer.freed_links.into_inner().unwrap() {
@@ -153,26 +158,26 @@ struct Sizer<'a> {
 }
 
 impl Visitor for Sizer<'_> {
-    fn entry(&self, dir: &Path, e: &Entry) -> bool {
+    fn entry(&self, dir: &Path, tag: u32, e: &Entry) -> Option<u32> {
         match e.kind {
             Kind::Dir => {
                 if e.mount_point {
                     if self.opts.one_volume || self.opts.mode == Mode::Freed {
-                        return false;
+                        return None;
                     }
                     // the bulk listing describes the directory under the mount: ask the mounted root
-                    match fs::stat(&dir.join(&e.name)) {
+                    match fs::stat(&dir.join(&e.name), Detail::Basic) {
                         Ok(m) => self.add_alloc(m.alloc),
                         Err(err) => {
-                            self.error(&dir.join(&e.name), err);
-                            return false;
+                            self.error(&dir.join(&e.name), tag, err);
+                            return None;
                         }
                     }
                 } else if self.opts.mode == Mode::Allocated {
                     self.add_alloc(e.alloc);
                 }
                 self.dirs.fetch_add(1, Ordering::Relaxed);
-                true
+                Some(tag)
             }
             _ if self.opts.mode == Mode::Freed => {
                 if e.kind == Kind::File {
@@ -186,19 +191,19 @@ impl Visitor for Sizer<'_> {
                         self.add_alloc(size);
                     }
                 }
-                false
+                None
             }
             _ => {
                 self.files.fetch_add(1, Ordering::Relaxed);
                 if e.nlink <= 1 || self.links.first_time(e.dev, e.ino) {
                     self.add_alloc(e.alloc);
                 }
-                false
+                None
             }
         }
     }
 
-    fn error(&self, path: &Path, err: io::Error) {
+    fn error(&self, path: &Path, _tag: u32, err: io::Error) {
         if err.kind() == io::ErrorKind::NotFound && !self.opts.missing_is_error {
             return;
         }

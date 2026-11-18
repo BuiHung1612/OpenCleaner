@@ -1,7 +1,7 @@
 //! Requests the app sends, as JSON: quick ones answered at once (`call`), long ones run
 //! as jobs that report events until `{"event":"done"}` (`run`).
 
-use crate::size;
+use crate::{size, space};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -17,6 +17,11 @@ enum Request {
         mode: size::Mode,
         #[serde(default)]
         all_volumes: bool,
+    },
+    /// Space Lens: the children of `path` by size, or the startup disk overview.
+    /// Emits `progress` listings while it runs, then one `space` listing.
+    Space {
+        path: Option<PathBuf>,
     },
 }
 
@@ -72,5 +77,22 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
                 }
             }
         }
+        Request::Space { path } => {
+            let mut progress = |l: &space::Listing| emit_listing("progress", l, &mut *emit);
+            let result = match &path {
+                Some(p) => space::list(p, cancel, &mut progress),
+                None => space::overview(cancel, &mut progress),
+            };
+            match result {
+                Ok(l) => emit_listing("space", &l, emit),
+                Err(e) => emit(json!({"event": "space", "path": path, "error": e.to_string()})),
+            }
+        }
     }
+}
+
+fn emit_listing(event: &str, listing: &space::Listing, emit: &mut dyn FnMut(Value)) {
+    let mut v = serde_json::to_value(listing).unwrap_or(Value::Null);
+    v["event"] = json!(event);
+    emit(v);
 }

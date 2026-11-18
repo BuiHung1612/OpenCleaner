@@ -17,6 +17,17 @@ pub mod walk;
 #[cfg(windows)]
 mod win;
 
+/// How much to ask the system for each entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Detail {
+    /// Type, ids, link count, allocated and logical size, times, flags.
+    Basic,
+    /// Basic plus each file's private size (`Entry::private`). On APFS this makes the
+    /// kernel look up every file's extents and costs about twice the walk time, so only
+    /// "what would deleting free" asks for it.
+    Freed,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     File,
@@ -84,21 +95,23 @@ impl Entry {
 }
 
 /// Calls `visit` for every entry of the directory `dir` (not recursive, no `.`/`..`).
-pub fn read_dir(dir: &Path, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
+pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
-        match mac::read_dir(dir, visit) {
+        match mac::read_dir(dir, detail, visit) {
             Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
             other => return other,
         }
     }
     #[cfg(windows)]
     {
+        let _ = detail;
         match win::read_dir(dir, visit) {
             Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
             other => return other,
         }
     }
+    let _ = detail;
     portable::read_dir(dir, visit)
 }
 
@@ -109,13 +122,14 @@ pub fn read_dir_portable(dir: &Path, visit: &mut dyn FnMut(&Entry)) -> io::Resul
 }
 
 /// The entry for `path` itself, without following a final symlink.
-pub fn stat(path: &Path) -> io::Result<Entry> {
+pub fn stat(path: &Path, detail: Detail) -> io::Result<Entry> {
     #[cfg(target_os = "macos")]
     {
-        match mac::stat(path) {
+        match mac::stat(path, detail) {
             Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
             other => return other,
         }
     }
+    let _ = detail;
     portable::stat(path)
 }

@@ -1,7 +1,7 @@
 //! macOS listing with `getattrlistbulk(2)`: one call returns name, type, ids, sizes and
 //! times for as many entries as fit in the buffer.
 
-use super::{Entry, Kind};
+use super::{Detail, Entry, Kind};
 use libc::{attrgroup_t, c_void};
 use std::cell::RefCell;
 use std::ffi::{CString, OsString};
@@ -41,7 +41,7 @@ thread_local! {
     static BUF: RefCell<Vec<u8>> = RefCell::new(vec![0; BUF_LEN]);
 }
 
-fn attr_list() -> libc::attrlist {
+fn attr_list(detail: Detail) -> libc::attrlist {
     libc::attrlist {
         bitmapcount: libc::ATTR_BIT_MAP_COUNT,
         reserved: 0,
@@ -49,7 +49,7 @@ fn attr_list() -> libc::attrlist {
         volattr: 0,
         dirattr: DIR,
         fileattr: FILE,
-        forkattr: EXTENDED,
+        forkattr: if detail == Detail::Freed { EXTENDED } else { 0 },
     }
 }
 
@@ -67,7 +67,7 @@ impl Drop for Fd {
 
 /// Lists `dir`. Returns `ErrorKind::Unsupported` before visiting anything when the volume
 /// has no `getattrlistbulk` (the caller then falls back to readdir + lstat).
-pub fn read_dir(dir: &Path, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
+pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
     let path = c_path(dir)?;
     let fd = unsafe {
         libc::open(
@@ -79,7 +79,7 @@ pub fn read_dir(dir: &Path, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     let fd = Fd(fd);
-    let mut attrs = attr_list();
+    let mut attrs = attr_list(detail);
     BUF.with(|buf| {
         let mut buf = buf.borrow_mut();
         let mut first = true;
@@ -129,9 +129,9 @@ pub fn read_dir(dir: &Path, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
 }
 
 /// The entry for `path` itself (final symlink not followed).
-pub fn stat(path: &Path) -> io::Result<Entry> {
+pub fn stat(path: &Path, detail: Detail) -> io::Result<Entry> {
     let c = c_path(path)?;
-    let mut attrs = attr_list();
+    let mut attrs = attr_list(detail);
     let mut buf = [0u8; 2048];
     let rc = unsafe {
         libc::getattrlist(
