@@ -52,6 +52,10 @@ enum Request {
     RunUninstaller {
         key: String,
     },
+    /// Space Lens: moves the picked paths to the Trash / Recycle Bin (`removed`).
+    TrashPaths {
+        paths: Vec<PathBuf>,
+    },
     /// Installer files in Downloads and on the Desktop (`picks`).
     Installers,
     /// Rebuildable build folders in projects (`picks`).
@@ -245,6 +249,22 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             #[cfg(not(target_os = "macos"))]
             let found = Vec::new();
             emit_value("picks", &picks::store("slim", found, ctx()), emit);
+        }
+        Request::TrashPaths { paths } => {
+            let mut removed = 0;
+            let mut failed = Vec::new();
+            for p in &paths {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                match crate::trash::move_to_trash(p) {
+                    Ok(()) => removed += 1,
+                    Err(e) => failed.push(format!("{}: {e}", p.display())),
+                }
+            }
+            emit(
+                json!({"event": "removed", "removed": removed, "failed": failed.len(), "failures": failed}),
+            );
         }
         Request::Installers => {
             let found = finders::installers(ctx());

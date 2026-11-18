@@ -31,6 +31,35 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test
 
+  # the Windows app: native UI (Win32 + GDI+) on the same engine
+  windows-app:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            windows/target
+          key: win-app-${{ hashFiles('engine/Cargo.lock', 'windows/Cargo.lock') }}
+          restore-keys: win-app-
+      - name: Build
+        working-directory: windows
+        run: |
+          cargo clippy --release -- -D warnings
+          cargo build --release
+      - name: Package
+        shell: pwsh
+        run: |
+          $exe = "windows/target/release/OpenCleaner.exe"
+          if (-not (Test-Path $exe)) { throw "OpenCleaner.exe was not built" }
+          Get-Item $exe | Format-List Name, Length
+          Compress-Archive -Path $exe -DestinationPath OpenCleaner-windows.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenCleaner-windows
+          path: OpenCleaner-windows.zip
+
   macos:
     # Liquid Glass and swift-tools-version 6.2 need the macOS 26 SDK
     runs-on: macos-26
@@ -102,7 +131,7 @@ jobs:
   # Push a tag like v0.1.0 (matching VERSION) to publish a GitHub Release.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos]
+    needs: [macos, windows-app]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -112,7 +141,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # dist/ holds the app zip built by the macos job
+      # dist/ holds the app zips built by the macos and windows-app jobs
       - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

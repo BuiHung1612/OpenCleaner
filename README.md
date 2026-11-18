@@ -1,6 +1,6 @@
 # OpenCleaner
 
-Free, open-source Mac cleaner with a Liquid Glass UI. macOS first (SwiftUI), Windows next.
+Free, open-source cleaner for macOS (SwiftUI, Liquid Glass) and Windows (native Win32), on one Rust engine.
 English is the default language; Vietnamese is included.
 
 The engine is OpenCleaner's own, written in Rust (`engine/`) and linked into the app as a static library: no helper processes, one code base for macOS and Windows. It replaced [`mo`](https://github.com/tw93/mole), which earlier versions bundled. OpenCleaner is an independent project, not affiliated with or endorsed by the Mole project or MacPaw.
@@ -15,11 +15,20 @@ cd macos
 cd ../engine && cargo test             # engine tests (also run in CI on macOS and Windows)
 ```
 
+## Build (Windows 10/11)
+
+```sh
+cd windows
+cargo build --release   # -> windows\target\release\OpenCleaner.exe (icon and manifest embedded)
+```
+
+The Windows app is one executable: native Win32 painted with GDI+ (the same gradient pages, glass panels and big round button as on macOS), calling the engine directly. Pages: Dashboard, System Junk, Installers, Project Junk, Uninstaller (runs each app's own uninstaller), Space Lens (to the Recycle Bin) and History. English only for now.
+
 ## CI and releases
 
-`.github/workflows/opencleaner.yml` tests the engine on macOS and Windows, builds a universal (Apple Silicon + Intel) app on every push and uploads `OpenCleaner-macos.zip` as a workflow artifact.
+`.github/workflows/opencleaner.yml` tests the engine on macOS and Windows, builds the universal (Apple Silicon + Intel) macOS app and the Windows app on every push, and uploads `OpenCleaner-macos.zip` and `OpenCleaner-windows.zip` as workflow artifacts.
 
-- **Release:** bump `VERSION`, commit, then push a matching tag: `git tag v0.1.0 && git push origin v0.1.0`. CI checks the tag matches `VERSION`, then creates a GitHub Release with the app zip.
+- **Release:** bump `VERSION`, commit, then push a matching tag: `git tag v0.1.0 && git push origin v0.1.0`. CI checks the tag matches `VERSION`, then creates a GitHub Release with both app zips.
 - **Signing (optional, recommended):** run `macos/make-signing-cert.sh` once to create the fixed self-signed identity "OpenCleaner Code Signing", then `macos/make-signing-cert.sh --secrets OWNER/REPO` to upload `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD` and `MACOS_SIGN_ID`. A fixed signature keeps Full Disk Access granted across updates; ad-hoc builds lose it every release. It does not remove the first-launch Gatekeeper prompt (right-click → Open); that needs a Developer ID and notarization, not set up yet. Back up `~/.opencleaner-signing`: losing it means users grant access again once.
 
 ## Layout
@@ -37,6 +46,7 @@ cd ../engine && cargo test             # engine tests (also run in CI on macOS a
 | `macos/Sources/OpenCleaner/Engine.swift` | Swift side of the C ABI: `Engine.call` (quick answers) and `Engine.run` (jobs as an `AsyncStream`) |
 | `App.swift` | Window, glass sidebar, theme (gradient backdrop, glass panels, big round button, pill buttons, art slots) |
 | `JunkPage.swift`, `PicksPage.swift`, `MaintenancePages.swift`, `SpaceLens.swift`, `Pages.swift` | System Junk; Installers, Project Junk, Slim Apps and the Uninstaller; Optimization and Touch ID; Space Lens; Dashboard, History, Settings |
+| `windows/src/ui/` | Windows app: window and input (`mod.rs`), painting (`gfx.rs`), pages (`pages.rs`), engine jobs on threads (`jobs.rs`) |
 | `shared/tools.json` | Sidebar tools: title, group, colors, icon, points (how a tool looks; what it does is in the engine) |
 | `Support.swift` | The JSON reader for engine replies, `Tools`, and the on-disk cache of earlier results |
 | `macos/Resources/<lang>.lproj` | Translations. Keys are the English text |

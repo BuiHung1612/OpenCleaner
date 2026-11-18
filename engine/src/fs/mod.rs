@@ -46,7 +46,8 @@ pub struct Entry {
     pub dev: u64,
     /// File id (inode). 0 when unknown.
     pub ino: u64,
-    /// Hard link count; 1 when unknown.
+    /// Hard link count; 0 when the listing does not say (Windows bulk listings): such a file
+    /// may be linked elsewhere, so sizes count it once per file id.
     pub nlink: u32,
     /// Bytes allocated on disk (what `du` counts).
     pub alloc: u64,

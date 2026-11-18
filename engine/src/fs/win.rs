@@ -134,6 +134,8 @@ fn entry_of(rec: &FILE_ID_BOTH_DIR_INFO, name: OsString, volume: u64) -> Entry {
         dev: volume,
         ino: rec.FileId as u64,
         alloc: rec.AllocationSize.max(0) as u64,
+        // this listing has no link count: 0 tells the sizers to count the file once per id
+        nlink: 0,
         len: rec.EndOfFile.max(0) as u64,
         mtime: filetime_to_unix(rec.LastWriteTime as u64),
         atime: filetime_to_unix(rec.LastAccessTime as u64),

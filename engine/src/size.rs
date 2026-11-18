@@ -102,7 +102,7 @@ pub fn measure_with(
         (_, Mode::Freed) => return Ok(report),
         (_, Mode::Allocated) => {
             report.files = 1;
-            if root.nlink <= 1 || links.first_time(root.dev, root.ino) {
+            if root.nlink == 1 || links.first_time(root.dev, root.ino) {
                 report.bytes = root.alloc;
             }
             return Ok(report);
@@ -183,7 +183,9 @@ impl Visitor for Sizer<'_> {
                 if e.kind == Kind::File {
                     self.files.fetch_add(1, Ordering::Relaxed);
                     let size = e.freed();
-                    if e.nlink > 1 {
+                    if e.nlink == 0 && !self.links.first_time(e.dev, e.ino) {
+                        // unknown link count (Windows): once per file id
+                    } else if e.nlink > 1 {
                         let mut map = self.freed_links.lock().unwrap();
                         let slot = map.entry((e.dev, e.ino)).or_insert((0, e.nlink, size));
                         slot.0 += 1;
@@ -195,7 +197,7 @@ impl Visitor for Sizer<'_> {
             }
             _ => {
                 self.files.fetch_add(1, Ordering::Relaxed);
-                if e.nlink <= 1 || self.links.first_time(e.dev, e.ino) {
+                if e.nlink == 1 || self.links.first_time(e.dev, e.ino) {
                     self.add_alloc(e.alloc);
                 }
                 None
@@ -326,7 +328,7 @@ impl Tagged {
     /// A non-directory entry of item `tag`.
     fn add(&self, tag: usize, e: &Entry) {
         if self.mode == Mode::Allocated {
-            if e.nlink <= 1 || self.seen.first_time(e.dev, e.ino) {
+            if e.nlink == 1 || self.seen.first_time(e.dev, e.ino) {
                 self.bytes[tag].fetch_add(e.alloc, Ordering::Relaxed);
             }
             return;
@@ -334,7 +336,14 @@ impl Tagged {
         if e.kind != Kind::File {
             return; // freed: regular files only
         }
-        if e.nlink <= 1 {
+        if e.nlink == 0 {
+            // unknown link count (Windows): once per file id
+            if self.seen.first_time(e.dev, e.ino) {
+                self.bytes[tag].fetch_add(e.freed(), Ordering::Relaxed);
+            }
+            return;
+        }
+        if e.nlink == 1 {
             self.bytes[tag].fetch_add(e.freed(), Ordering::Relaxed);
             return;
         }

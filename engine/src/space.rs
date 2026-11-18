@@ -64,7 +64,7 @@ pub fn list(
         // a directory's own blocks count; a mount point is another volume (0); a hard-linked
         // file counts once
         let counted =
-            walk || (e.kind != Kind::Dir && (e.nlink <= 1 || links.first_time(e.dev, e.ino)));
+            walk || (e.kind != Kind::Dir && (e.nlink == 1 || links.first_time(e.dev, e.ino)));
         parts.push(Part {
             name: e.name.to_string_lossy().into_owned(),
             path: dir.join(&e.name),
@@ -255,7 +255,7 @@ impl Visitor for PartSizer {
             }
             _ => {
                 self.files[i].fetch_add(1, Ordering::Relaxed);
-                if e.nlink <= 1 || self.links.first_time(e.dev, e.ino) {
+                if e.nlink == 1 || self.links.first_time(e.dev, e.ino) {
                     self.sizes[i].fetch_add(e.alloc, Ordering::Relaxed);
                 }
                 None
