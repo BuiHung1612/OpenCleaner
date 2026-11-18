@@ -65,3 +65,14 @@ import Testing
     let trash = rules.groups.array.flatMap(\.rules.array).first { $0.id.string == "trash" }
     #expect(trash?.default.bool == false)
 }
+
+/// Uses the real Trash; harmless: /usr/bin/true cannot move and its copy is taken back.
+@MainActor
+@Test func trashingWhatCannotMoveFailsWithoutLeavingACopy() throws {
+    let trash = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+    let before = (try? FileManager.default.contentsOfDirectory(atPath: trash.path).count) ?? 0
+    #expect(SpaceLensModel.moveToTrash("/usr/bin/true") == false)
+    #expect(FileManager.default.fileExists(atPath: "/usr/bin/true"))
+    let after = (try? FileManager.default.contentsOfDirectory(atPath: trash.path).count) ?? 0
+    #expect(after == before)
+}

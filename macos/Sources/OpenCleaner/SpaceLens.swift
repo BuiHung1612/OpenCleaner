@@ -195,12 +195,30 @@ final class SpaceLensModel: ObservableObject {
         }
     }
 
+    /// Moves one item to the Trash. macOS *copies* what it cannot remove (read-only or
+    /// protected volumes) into the Trash and still reports success: that copy is taken
+    /// back out and the move counts as failed.
+    static func moveToTrash(_ path: String) -> Bool {
+        var result: NSURL?
+        do {
+            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &result)
+        } catch {
+            return false
+        }
+        guard FileManager.default.fileExists(atPath: path) else { return true }
+        if let copy = result?.path,
+           copy.split(separator: "/").contains(where: { $0 == ".Trash" || $0 == ".Trashes" }) {
+            try? FileManager.default.removeItem(atPath: copy)
+        }
+        return false
+    }
+
     /// Selected items go to the Trash (recoverable), never deleted outright.
     func removeSelected() {
         var failed: [String] = []
         let removable = Set(entries.filter(\.selectable.bool).compactMap(\.path.string))
         for path in selection where removable.contains(path) {
-            do { try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil) } catch { failed.append((path as NSString).lastPathComponent) }
+            if !Self.moveToTrash(path) { failed.append((path as NSString).lastPathComponent) }
         }
         selection = []
         error = failed.isEmpty ? nil : String(localized: "Could not move to Trash: \(failed.joined(separator: ", "))")

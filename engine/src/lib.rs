@@ -15,5 +15,6 @@ pub mod rules;
 pub mod size;
 pub mod space;
 pub mod status;
+pub mod trash;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 struct Home {
+    #[allow(dead_code)] // keeps the temporary directory alive
     dir: TempDir,
     ctx: Context,
 }
@@ -31,6 +32,7 @@ impl Home {
     fn p(&self, rel: &str) -> std::path::PathBuf {
         self.ctx.home.join(rel)
     }
+    #[allow(dead_code)] // used by the unix-only tests
     fn outside(&self, rel: &str) -> std::path::PathBuf {
         self.dir.path().join("outside").join(rel)
     }
@@ -376,4 +378,52 @@ fn shipped_rules_never_aim_at_personal_folders() {
 #[allow(dead_code)]
 fn exists(p: &Path) -> bool {
     p.exists()
+}
+
+/// Uses the real Trash: run with `cargo test -- --ignored trash`.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore]
+fn trash_reports_what_it_cannot_move_and_leaves_no_copy() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = TempDir::new();
+    let locked = t.path().join("locked");
+    let name = format!("oc-locked-{}.txt", std::process::id());
+    write(&locked.join(&name), 1000);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let res = oc_engine::trash::move_to_trash(&locked.join(&name));
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        res.is_err(),
+        "a file that could not be moved was reported as trashed"
+    );
+    assert!(locked.join(&name).exists());
+    let trash = Path::new(&std::env::var("HOME").unwrap()).join(".Trash");
+    let leftovers: Vec<_> = std::fs::read_dir(&trash)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("oc-locked-"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "a copy was left in the Trash: {leftovers:?}"
+    );
+
+    // a file on the read-only system volume: macOS copies it to the Trash and says it
+    // trashed it; we must report a failure and leave no copy behind
+    let before = std::fs::read_dir(&trash).unwrap().count();
+    assert!(oc_engine::trash::move_to_trash(Path::new("/usr/bin/true")).is_err());
+    assert!(Path::new("/usr/bin/true").exists());
+    assert_eq!(
+        std::fs::read_dir(&trash).unwrap().count(),
+        before,
+        "a copy of /usr/bin/true was left in the Trash"
+    );
+
+    // and a normal file really goes
+    let free = t.path().join(format!("oc-free-{}.txt", std::process::id()));
+    write(&free, 10);
+    oc_engine::trash::move_to_trash(&free).unwrap();
+    assert!(!free.exists());
+    let _ = std::fs::remove_file(trash.join(free.file_name().unwrap()));
 }
