@@ -70,11 +70,14 @@ import Testing
 @MainActor
 @Test func trashingWhatCannotMoveFailsWithoutLeavingACopy() throws {
     let trash = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
-    let before = (try? FileManager.default.contentsOfDirectory(atPath: trash.path).count) ?? 0
+    let names = { Set((try? FileManager.default.contentsOfDirectory(atPath: trash.path)) ?? []) }
+    let before = names()
     #expect(SpaceLensModel.moveToTrash("/usr/bin/true") == false)
     #expect(FileManager.default.fileExists(atPath: "/usr/bin/true"))
-    let after = (try? FileManager.default.contentsOfDirectory(atPath: trash.path).count) ?? 0
-    #expect(after == before)
+    // the Trash may be created (with its own files) on a fresh machine; what must not
+    // appear is a copy of what could not be moved
+    let copies = names().subtracting(before).filter { $0.hasPrefix("true") }
+    #expect(copies.isEmpty, "copy left in the Trash: \(copies)")
 }
 
 @MainActor
