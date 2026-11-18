@@ -3,51 +3,90 @@
 Free, open-source Mac cleaner with a Liquid Glass UI. macOS first (SwiftUI), Windows next.
 English is the default language; Vietnamese is included.
 
-The cleaning engine is [`mo`](https://github.com/tw93/mole) (GPL-3.0), bundled inside the app, so users install nothing else. OpenCleaner ships it with a few performance patches (`legacy/mo/patches/`), see [Engine patches](#engine-patches). The app runs it as a separate process. OpenCleaner is an independent project, not affiliated with or endorsed by the Mole project or MacPaw.
+The engine is OpenCleaner's own, written in Rust (`engine/`) and linked into the app as a static library: no helper processes, one code base for macOS and Windows. It replaced [`mo`](https://github.com/tw93/mole); a patched mo is still built (`legacy/mo/`) only to compare the two (`bench/compare.sh`) until it is removed. OpenCleaner is an independent project, not affiliated with or endorsed by the Mole project or MacPaw.
 
 ## Build (macOS 26+)
 
 ```sh
 cd macos
-./build.sh            # -> macos/build/OpenCleaner.app   (--debug for a debug build)
-                      #    builds the pinned, patched engine on first run (fetch-engine.sh, needs Go)
-swift run             # quick dev run, English only, no art bundle
+./build.sh            # -> macos/build/OpenCleaner.app   (--debug, --universal)
+                      #    builds the Rust engine library first (engine/build-lib.sh, needs cargo)
+../engine/build-lib.sh && swift run   # quick dev run (rebuild the library after engine changes)
+cd ../engine && cargo test             # engine tests (also run in CI on macOS and Windows)
 ```
 
 ## CI and releases
 
-`.github/workflows/opencleaner.yml` builds a universal (Apple Silicon + Intel) app on every push and uploads `OpenCleaner-macos.zip` as a workflow artifact.
+`.github/workflows/opencleaner.yml` tests the engine on macOS and Windows, builds a universal (Apple Silicon + Intel) app on every push and uploads `OpenCleaner-macos.zip` as a workflow artifact.
 
-- **Release:** bump `VERSION`, commit, then push a matching tag: `git tag v0.1.0 && git push origin v0.1.0`. CI checks the tag matches `VERSION`, then creates a GitHub Release with the app zip and the patched source of the bundled mo engine (GPL-3.0).
+- **Release:** bump `VERSION`, commit, then push a matching tag: `git tag v0.1.0 && git push origin v0.1.0`. CI checks the tag matches `VERSION`, then creates a GitHub Release with the app zip (and, while mo is still bundled, its patched source, GPL-3.0).
 - **Signing (optional, recommended):** run `macos/make-signing-cert.sh` once to create the fixed self-signed identity "OpenCleaner Code Signing", then `macos/make-signing-cert.sh --secrets OWNER/REPO` to upload `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD` and `MACOS_SIGN_ID`. A fixed signature keeps Full Disk Access granted across updates; ad-hoc builds lose it every release. It does not remove the first-launch Gatekeeper prompt (right-click → Open); that needs a Developer ID and notarization, not set up yet. Back up `~/.opencleaner-signing`: losing it means users grant access again once.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `engine/` | **OpenCleaner engine** (Rust): parallel bulk directory reading (`getattrlistbulk` on macOS, `FileIdBothDirectoryInfo` on Windows), sizes, and the JSON requests the app sends. Built by `engine/build-lib.sh` into `engine/target/oc/liboc_engine.a`, linked into the app through `macos/Sources/COcEngine` and `Engine.swift`. `cargo test` in `engine/`; `oce` is the same engine on the command line. Replacing mo step by step |
-| `legacy/mo/VERSION` | mo release bundled in the app (a GitHub tag, e.g. `V1.72.0`) |
-| `legacy/mo/source.sha256` | Checksum of that release's source tarball |
-| `legacy/mo/patches/` | OpenCleaner's changes to mo, applied in name order |
-| `legacy/mo/fetch-engine.sh` | Downloads that release's source, checks it, applies the patches, builds `build/engine-<version>-<hash>/` (mole + lib + bin, universal Go helpers) and, with `--source`, the patched source tarball |
-| `shared/cli.json` | **Every `mo` command line the app uses**, plus the sidebar tools (title, group, colors, icon). Shared by every platform. |
-| `macos/Sources/OpenCleaner/CLI.swift` | Runs `mo`: finds the binary, reads JSON output, streams live output through a pseudo-terminal so password / y-n prompts work |
-| `macos/Sources/OpenCleaner/App.swift` | Window, glass sidebar, theme (gradient backdrop, glass panels, big round button, pill buttons, art slots) |
-| `ToolPage.swift` | Any tool from `cli.json`: intro → Scan (dry run) → review → Run |
-| `SpaceLens.swift` | Disk map: volumes, folder list + bubble chart, move to Trash |
-| `Pages.swift` | Dashboard, Uninstaller, History, Settings |
+| `engine/src/fs/` | Bulk directory reading (`getattrlistbulk` on macOS, `FileIdBothDirectoryInfo` on Windows, readdir+lstat elsewhere) and the parallel tagged walker |
+| `engine/src/size.rs` | du-compatible allocated sizes and "freed" sizes (APFS private size, hard links counted only when all links are inside) |
+| `engine/src/space.rs`, `status.rs` | Space Lens listings and the Dashboard reading |
+| `engine/rules/<platform>.toml` | **Cleaning rules as data**: where junk lives, which app owns it, how old it must be, what is preselected |
+| `engine/src/clean.rs`, `rules.rs` | System Junk: scan → plan (nothing removed) → execute |
+| `engine/src/apps.rs`, `finders.rs`, `slim.rs`, `maintenance.rs` | Uninstaller, Installers, Project Junk, Slim Apps, Optimization and Touch ID |
+| `engine/src/guard.rs`, `picks.rs`, `trash.rs`, `ledger.rs` | The safety rules every removal passes, removal itself, Trash/Recycle Bin, history |
+| `engine/src/api.rs`, `ffi.rs`, `include/oc_engine.h` | JSON requests and events over a small C ABI; `oce` (`src/bin/oce.rs`) is the same engine on the command line |
+| `macos/Sources/OpenCleaner/Engine.swift` | Swift side of the C ABI: `Engine.call` (quick answers) and `Engine.run` (jobs as an `AsyncStream`) |
+| `App.swift` | Window, glass sidebar, theme (gradient backdrop, glass panels, big round button, pill buttons, art slots) |
+| `JunkPage.swift`, `PicksPage.swift`, `MaintenancePages.swift`, `SpaceLens.swift`, `Pages.swift` | System Junk; Installers, Project Junk, Slim Apps and the Uninstaller; Optimization and Touch ID; Space Lens; Dashboard, History, Settings |
+| `shared/cli.json` | Sidebar tools (title, group, colors, icon, points); its mo command lines are legacy |
+| `legacy/mo/`, `CLI.swift` (mo parts), `ToolPage.swift` | The previous engine, kept for the comparison only |
+| `bench/compare.sh` | Head-to-head benchmark, read-only: Rust engine vs mo on this Mac |
 | `macos/Resources/<lang>.lproj` | Translations. Keys are the English text |
 | `macos/Resources/Art/` | Optional illustrations, see below |
 
-## When `mo` changes
+## Engine
 
-**New mo release:** put the new tag in `legacy/mo/VERSION` and its source checksum in `legacy/mo/source.sha256` (`curl -fsSL https://github.com/tw93/mole/archive/refs/tags/<tag>.tar.gz | shasum -a 256`), run `ENGINE_TEST=1 ./fetch-engine.sh --rebuild` (re-export any patch that no longer applies), then `./build.sh`, check that the pages still work, then ship. Nothing else to edit unless the commands changed.
+**What may be removed** is decided in one place (`guard.rs`) for every tool, at scan time and again right before removal:
 
-The app never builds a command line in Swift code:
+- only inside the user's home (an app bundle in `/Applications` for the Uninstaller), never personal folders (Documents, Desktop, Pictures, iCloud Drive, Keychains, Mail, Messages, `.ssh`…), never a kept folder itself (`~/Library/Caches`, `AppData\Local`…);
+- inside the folder the rule or finder found it in, with no symlink anywhere on the way;
+- not while the app that owns it is running;
+- still the same file system object (device, inode, type) that was measured, or it is left alone;
+- each tool opens only what it needs: the Uninstaller an app's preferences, Installers installer files in Downloads, Project Junk known build folders next to their project file.
 
-- **A flag or subcommand was renamed:** edit `shared/cli.json`. To fix an installed app without rebuilding: Settings → *Command list → Customize…* copies the file to `~/Library/Application Support/OpenCleaner/cli.json`, which takes priority. Reopen the app after editing it.
-- **A new tool:** add an entry to `tools` in `cli.json` (`id`, `group`, `title`, `subtitle`, `points`, `icon` (an SF Symbol), `colors`, `preview`, `run`, plus `terminal: true` when it needs arrow-key menus). It appears in the sidebar on its own. Add its strings to `vi.lproj` (`build.sh` warns about missing ones).
-- **JSON output gained or lost fields:** nothing breaks. Output is read with a schema-less `JSON` wrapper, so missing fields show "—".
+Caches are deleted; apps, installers and slimmed originals go to the Trash (put back from Finder). Every attempt is written to `history.jsonl` in the app's support folder. The safety tests are in `engine/tests/clean.rs` and `engine/tests/picks.rs`.
+
+**Adding a cleaning target:** add a `[[rule]]` to `engine/rules/macos.toml` (or `windows.toml`) with `id`, `group`, `title`, `paths` (patterns with `~`, `%VAR%`, `*`), and as needed `target = "self"`, `include`/`exclude` name patterns, `min_age_days`, `running` (owning apps), `item_is_bundle_id`, `default = false` for things worth a look first, and a `note`. More specific rules go before general ones. Add the title and note to `vi.lproj`. `cargo test` checks every shipped rule.
+
+### Rust engine vs mo
+
+`bench/compare.sh` (read-only) on an Apple M2 Mac mini, 8 cores, load average about 5, best of 2 runs:
+
+| Task | mo (legacy) | Rust engine | Speed-up | Peak RAM mo → Rust |
+|---|---:|---:|---:|---:|
+| System Junk preview | 77.8 s | 8.1 s | 9.6× | 159 → 19 MiB |
+| Space Lens: startup disk | 35.5 s | 17.2 s | 2.1× | 83 → 22 MiB |
+| Space Lens: ~/Library | 11.9 s | 4.2 s | 2.8× | 31 → 19 MiB |
+| Space Lens: /Applications | 3.6 s | 1.4 s | 2.6× | 23 → 11 MiB |
+| App list with sizes | 1.9 s | 1.2 s | 1.5× | 14 → 12 MiB |
+| Dashboard reading | 0.85 s | 0.27 s | 3.1× | 23 → 7 MiB |
+| Installers | 0.62 s | 0.01 s | 62× | 6 → 6 MiB |
+
+What each finds is not identical: System Junk rules differ (mo also cleans some system areas with sudo; the Rust rules add developer caches and skip apps that are open), and mo's Space Lens overview counts nested folders twice. The Dashboard figure is a fresh process (it samples CPU for 250 ms); in the app later readings take milliseconds. Directory walks are bound by the kernel, so they gain least.
+
+## Legacy engine (mo)
+
+Kept until the comparison is done, then removed with `legacy/`, the mo parts of `CLI.swift`, `ToolPage.swift` and its CI steps. `legacy/mo/fetch-engine.sh` builds the pinned mo release (`legacy/mo/VERSION`, checked against `legacy/mo/source.sha256`) with the patches below; `bench/compare.sh` uses it.
+
+### mo patches
+
+`legacy/mo/patches/*.patch` are applied on top of the upstream release. Each one keeps mo's own tests passing and adds its own.
+
+- `0001-analyzer-parallel-sizing.patch`: the analyzer (`analyze-go`) measures folders with a parallel, in-process walk built on `getattrlistbulk(2)` instead of `/usr/bin/du`, and reads directory listings with that same call instead of one `lstat` per file. Sizes match `du -skPx` to the KB. Space Lens: the full-disk overview went from 30 s (cut off by a timeout, about 70 GB short) to about 20 s with complete numbers, `~/workspace` from 24 s to 6 s. `--json` now always measures instead of reusing caches up to a week old; the app shows its own previous result while it runs. The same binary also answers `du -sk[cPx]` when run as `du`, and `--freed-kb` (what deleting a tree frees, as clean.sh counts it).
+- `0002-scripts-use-fast-sizes.patch`: mo's scripts use that `du` (`bin/fastdu/du`, first in PATH only when `du` would otherwise be `/usr/bin/du`) and `--freed-kb` instead of their Perl walk. `clean --dry-run`: same result, about 5% faster (78 s to 75 s); its remaining time is shell logic, not measuring.
+
+Both keep the full upstream test suite at the same result as unpatched mo (Go tests, and all 3009 bats tests: identical pass/fail lists on this machine) and add their own Go tests against `du`, `lstat` and the original Perl rule.
+
+To change a patch: unpack the source tarball `legacy/mo/fetch-engine.sh --source` writes, `git init` it, apply the patches, edit, and `git diff` the result back into `legacy/mo/patches/`.
 
 ## Translations
 
@@ -60,19 +99,8 @@ Every page works without art: a missing illustration falls back to an SF Symbol 
 `dashboard`, `spaceLens`, `uninstaller`, `history`, `clean`, `installer`, `purge`, `optimize`, `slim`, `touchid`.
 The app icon is `macos/Resources/AppIcon.png` (1024×1024); `build.sh` turns it into `.icns`.
 
-## Legacy engine (mo) patches
-
-mo stays in `legacy/mo/` until the Rust engine replaces it.
-
-`legacy/mo/patches/*.patch` are applied on top of the upstream release. Each one keeps mo's own tests passing and adds its own.
-
-- `0001-analyzer-parallel-sizing.patch`: the analyzer (`analyze-go`) measures folders with a parallel, in-process walk built on `getattrlistbulk(2)` instead of `/usr/bin/du`, and reads directory listings with that same call instead of one `lstat` per file. Sizes match `du -skPx` to the KB. Space Lens: the full-disk overview went from 30 s (cut off by a timeout, about 70 GB short) to about 20 s with complete numbers, `~/workspace` from 24 s to 6 s. `--json` now always measures instead of reusing caches up to a week old; the app shows its own previous result while it runs. The same binary also answers `du -sk[cPx]` when run as `du`, and `--freed-kb` (what deleting a tree frees, as clean.sh counts it).
-- `0002-scripts-use-fast-sizes.patch`: mo's scripts use that `du` (`bin/fastdu/du`, first in PATH only when `du` would otherwise be `/usr/bin/du`) and `--freed-kb` instead of their Perl walk. `clean --dry-run`: same result, about 5% faster (78 s to 75 s); its remaining time is shell logic, not measuring.
-
-Both keep the full upstream test suite at the same result as unpatched mo (Go tests, and all 3009 bats tests: identical pass/fail lists on this machine) and add their own Go tests against `du`, `lstat` and the original Perl rule.
-
-To change a patch: unpack the source tarball `legacy/mo/fetch-engine.sh --source` writes, `git init` it, apply the patches, edit, and `git diff` the result back into `legacy/mo/patches/`.
-
 ## License
 
-The app's own license is TBD. The bundled engine is GPL-3.0 and modified: `engine/LICENSE` and `engine/SOURCE` (upstream tag plus the patch list) ship inside the app, and every release attaches the exact patched source (`mo-engine-<version>-<hash>-source.tar.gz`), as GPL-3.0 §6 asks.
+The app and its Rust engine: license TBD. The engine's code and rules were written for OpenCleaner without copying mo's code or rule text (some behaviour, such as how freed bytes are counted, was matched to mo on purpose and checked against it), so the license is OpenCleaner's to choose; have it reviewed before relying on that.
+
+While the legacy mo engine is still bundled for the comparison, it is GPL-3.0 and modified: `engine/LICENSE` and `engine/SOURCE` (upstream tag plus the patch list) ship inside the app bundle's mo folder, and every release attaches the exact patched source (`mo-engine-<version>-<hash>-source.tar.gz`), as GPL-3.0 §6 asks. Removing mo removes these obligations.
