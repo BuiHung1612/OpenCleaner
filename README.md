@@ -70,6 +70,8 @@ Measured before mo was removed, with `bench/compare.sh` (read-only; at commit `e
 | Dashboard reading | 0.85 s | 0.27 s | 3.1× | 23 → 7 MiB |
 | Installers | 0.62 s | 0.01 s | 62× | 6 → 6 MiB |
 
+Since then: System Junk preview **3.2 s** (private sizes are looked up only for files whose flags say they can differ; same results), and the Uninstaller's app sizes are remembered until an app changes (**0.02 s** on a repeat).
+
 What each finds is not identical: System Junk rules differ (mo also cleans some system areas with sudo; the Rust rules add developer caches and skip apps that are open), and mo's Space Lens overview counts nested folders twice. The Dashboard figure is a fresh process (it samples CPU for 250 ms); in the app later readings take milliseconds. Directory walks are bound by the kernel, so they gain least.
 
 ## Translations
