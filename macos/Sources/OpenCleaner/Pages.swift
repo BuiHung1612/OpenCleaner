@@ -383,6 +383,9 @@ struct SettingsView: View {
                     .font(.system(size: 12)).foregroundStyle(.dim)
             }
             Section(String(localized: "Engine")) {
+                LabeledContent(String(localized: "OpenCleaner engine")) {
+                    Text(verbatim: Engine.version ?? "—").font(.system(size: 11, design: .monospaced))
+                }
                 LabeledContent(String(localized: "Engine path")) {
                     HStack {
                         Text(verbatim: CLI.binary ?? String(localized: "Not found")).font(.system(size: 11, design: .monospaced))

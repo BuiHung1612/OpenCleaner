@@ -9,6 +9,28 @@ permissions:
   contents: read
 
 jobs:
+  # the Rust engine on both platforms it ships on
+  engine:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            engine/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: Test
+        working-directory: engine
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
   macos:
     # Liquid Glass and swift-tools-version 6.2 need the macOS 26 SDK
     runs-on: macos-26
@@ -42,7 +64,7 @@ jobs:
             macos/.build
             macos/build/engine-*
             macos/build/mo-engine-*-source.tar.gz
-          key: spm-${{ runner.os }}-${{ hashFiles('macos/Package.swift', 'ENGINE_VERSION', 'engine/**', 'macos/fetch-engine.sh') }}
+          key: spm-${{ runner.os }}-${{ hashFiles('macos/Package.swift', 'legacy/mo/**') }}
           restore-keys: spm-${{ runner.os }}-
 
       - name: Import the signing certificate
@@ -61,9 +83,14 @@ jobs:
           rm "$RUNNER_TEMP/cert.p12"
           echo "SIGN_ID=$MACOS_SIGN_ID" >> "$GITHUB_ENV"
 
+      - name: Build the engine library (universal)
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          engine/build-lib.sh --universal
+
       - run: swift test --package-path macos
       - name: Test the patched engine
-        run: ENGINE_TEST=1 macos/fetch-engine.sh --rebuild
+        run: ENGINE_TEST=1 legacy/mo/fetch-engine.sh --rebuild
       - run: macos/build.sh --universal
 
       - name: Check the bundle
@@ -77,7 +104,7 @@ jobs:
         run: |
           ditto -c -k --keepParent macos/build/OpenCleaner.app OpenCleaner-macos.zip
           # GPL-3.0: the exact (patched) source of the bundled mo engine
-          cp "$(macos/fetch-engine.sh --source | tail -1)" .
+          cp "$(legacy/mo/fetch-engine.sh --source | tail -1)" .
 
       - uses: actions/upload-artifact@v7
         with:

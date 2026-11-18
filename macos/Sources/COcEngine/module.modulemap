@@ -1,0 +1,6 @@
+// The Rust engine (engine/), linked as a static library built by engine/build-lib.sh.
+module COcEngine {
+    header "../../../engine/include/oc_engine.h"
+    link "oc_engine"
+    export *
+}

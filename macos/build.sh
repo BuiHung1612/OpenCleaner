@@ -6,17 +6,19 @@ cd "${0:A:h}"
 
 CONFIG=release
 ARCHS=()
+ENGINE_FLAGS=()
 for arg in "$@"; do
   case $arg in
-    --debug) CONFIG=debug ;;
-    --universal) ARCHS=(--arch arm64 --arch x86_64) ;;
+    --debug) CONFIG=debug; ENGINE_FLAGS+=(--debug) ;;
+    --universal) ARCHS=(--arch arm64 --arch x86_64); ENGINE_FLAGS+=(--universal) ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
 VERSION=$(cat ../VERSION)
 STRINGS=$(mktemp -d)
 
-ENGINE=$(./fetch-engine.sh)
+../engine/build-lib.sh "${ENGINE_FLAGS[@]}" >/dev/null  # the Rust engine, linked into the app
+ENGINE=$(../legacy/mo/fetch-engine.sh)  # legacy mo engine, until the Rust engine replaces it
 
 swift build -c $CONFIG "${ARCHS[@]}" \
   -Xswiftc -emit-localized-strings -Xswiftc -emit-localized-strings-path -Xswiftc "$STRINGS"

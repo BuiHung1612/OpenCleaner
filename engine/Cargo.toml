@@ -1,0 +1,30 @@
+[package]
+name = "oc_engine"
+version = "0.1.0"
+edition = "2024"
+description = "OpenCleaner engine: disk scanning, sizing and cleaning for macOS and Windows"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "oce"
+path = "src/bin/oce.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

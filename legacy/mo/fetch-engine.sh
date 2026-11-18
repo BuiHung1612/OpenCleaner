@@ -1,7 +1,7 @@
 #!/bin/zsh
-# Builds the cleaning engine into build/engine-<version>-<patches>/: the pinned mo release
-# (../ENGINE_VERSION), its source checked against ../engine/source.sha256, with every
-# ../engine/patches/*.patch applied, and the Go helpers (analyze, status) compiled as
+# Legacy engine (mo), kept only to compare against the Rust engine until it is retired.
+# Builds it into macos/build/engine-<version>-<patches>/: the pinned mo release (VERSION),
+# its source checked against source.sha256, with every patches/*.patch applied, and the Go helpers (analyze, status) compiled as
 # universal binaries. Needs Go (the toolchain mo's go.mod names is fetched automatically).
 # Re-running is a no-op while the version and patches are unchanged.
 # Prints the engine directory; with --source it also writes the patched source tarball
@@ -9,10 +9,12 @@
 # fresh build; ENGINE_TEST=1 runs the analyzer's Go tests on the patched source first.
 set -euo pipefail
 cd "${0:A:h}"
+HERE=$PWD
+cd ../../macos
 
-VERSION=$(cat ../ENGINE_VERSION)
-PATCHES=(../engine/patches/*.patch(N))
-STAMP=$(cat ../engine/source.sha256 $PATCHES | shasum -a 256 | cut -c1-8)
+VERSION=$(cat $HERE/VERSION)
+PATCHES=($HERE/patches/*.patch(N))
+STAMP=$(cat $HERE/source.sha256 $PATCHES | shasum -a 256 | cut -c1-8)
 OUT=build/engine-$VERSION-$STAMP
 SRC_TAR=build/mo-engine-$VERSION-$STAMP-source.tar.gz
 
@@ -22,7 +24,7 @@ if [[ ! -x $OUT/mole || ${1:-} == --rebuild || ( ${1:-} == --source && ! -f $SRC
   trap 'rm -rf $TMP' EXIT
 
   curl -fsSL "$REPO/archive/refs/tags/$VERSION.tar.gz" -o $TMP/src.tar.gz
-  echo "$(cat ../engine/source.sha256)  $TMP/src.tar.gz" | shasum -a 256 -c - >&2
+  echo "$(cat $HERE/source.sha256)  $TMP/src.tar.gz" | shasum -a 256 -c - >&2
 
   SRC=$TMP/mole-$VERSION
   mkdir -p $SRC

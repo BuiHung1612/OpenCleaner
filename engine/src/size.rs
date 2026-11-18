@@ -1,0 +1,225 @@
+//! Tree sizes.
+//!
+//! - `Allocated`: what `du -skP` reports (with `one_volume`, `du -skPx`): blocks of every
+//!   file and directory, a hard-linked file counted once, symlinks not followed.
+//! - `Freed`: what deleting the tree gives back: regular files at their private size (APFS
+//!   clone blocks shared with files elsewhere stay), and a hard-linked file only when all
+//!   of its links are inside the tree. Never crosses into another volume.
+
+use crate::fs::walk::{self, Visitor};
+use crate::fs::{self, Entry, Kind};
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::path::Path;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    Allocated,
+    Freed,
+}
+
+#[derive(Clone, Debug)]
+pub struct Options {
+    pub mode: Mode,
+    /// Stay on the volume of the root (du -x). `Freed` always does.
+    pub one_volume: bool,
+    /// Report entries that vanish during the walk as failures (du does); otherwise they
+    /// are ignored, as a file deleted mid-walk does not make the size wrong.
+    pub missing_is_error: bool,
+    pub threads: usize,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            mode: Mode::Allocated,
+            one_volume: true,
+            missing_is_error: false,
+            threads: walk::default_threads(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Report {
+    pub bytes: u64,
+    pub files: u64,
+    pub dirs: u64,
+    /// Entries that could not be read; `bytes` covers the rest.
+    pub errors: u64,
+    pub first_error: Option<String>,
+    /// Every failure was a permission denial (the size is then a reliable lower bound).
+    pub permission_only: bool,
+    pub cancelled: bool,
+}
+
+impl Report {
+    pub fn complete(&self) -> bool {
+        self.errors == 0 && !self.cancelled
+    }
+}
+
+/// Hard links seen so far, shared by the operands of one measurement (du counts a hard
+/// link once per run, across all its operands).
+#[derive(Default)]
+pub struct Links(Mutex<HashSet<(u64, u64)>>);
+
+impl Links {
+    fn first_time(&self, dev: u64, ino: u64) -> bool {
+        self.0.lock().unwrap().insert((dev, ino))
+    }
+}
+
+pub fn measure(path: &Path, opts: &Options) -> io::Result<Report> {
+    measure_with(path, opts, &Links::default(), &AtomicBool::new(false))
+}
+
+pub fn measure_with(
+    path: &Path,
+    opts: &Options,
+    links: &Links,
+    cancel: &AtomicBool,
+) -> io::Result<Report> {
+    let root = fs::stat(path)?;
+    let mut report = Report::default();
+    match (root.kind, opts.mode) {
+        (Kind::Dir, _) => {}
+        (Kind::Symlink, Mode::Freed) => return Ok(report),
+        (Kind::File, Mode::Freed) => {
+            report.files = 1;
+            report.bytes = if root.nlink <= 1 { root.freed() } else { 0 };
+            return Ok(report);
+        }
+        (_, Mode::Freed) => return Ok(report),
+        (_, Mode::Allocated) => {
+            report.files = 1;
+            if root.nlink <= 1 || links.first_time(root.dev, root.ino) {
+                report.bytes = root.alloc;
+            }
+            return Ok(report);
+        }
+    }
+
+    let sizer = Sizer {
+        opts,
+        links,
+        bytes: AtomicU64::new(if opts.mode == Mode::Allocated {
+            root.alloc
+        } else {
+            0
+        }),
+        files: AtomicU64::new(0),
+        dirs: AtomicU64::new(1),
+        errors: AtomicU64::new(0),
+        non_permission: AtomicBool::new(false),
+        first_error: Mutex::new(None),
+        freed_links: Mutex::new(HashMap::new()),
+    };
+    walk::walk(path, opts.threads, cancel, &sizer);
+
+    let mut bytes = sizer.bytes.load(Ordering::Relaxed);
+    for (_, (seen, nlink, size)) in sizer.freed_links.into_inner().unwrap() {
+        if seen >= nlink {
+            bytes += size;
+        }
+    }
+    report.bytes = bytes;
+    report.files = sizer.files.load(Ordering::Relaxed);
+    report.dirs = sizer.dirs.load(Ordering::Relaxed);
+    report.errors = sizer.errors.load(Ordering::Relaxed);
+    report.permission_only = report.errors > 0 && !sizer.non_permission.load(Ordering::Relaxed);
+    report.first_error = sizer.first_error.into_inner().unwrap();
+    report.cancelled = cancel.load(Ordering::Relaxed);
+    Ok(report)
+}
+
+/// Freed mode, a hard-linked file: (links seen in the tree, its link count, its size).
+type FreedLink = (u32, u32, u64);
+
+struct Sizer<'a> {
+    opts: &'a Options,
+    links: &'a Links,
+    bytes: AtomicU64,
+    files: AtomicU64,
+    dirs: AtomicU64,
+    errors: AtomicU64,
+    non_permission: AtomicBool,
+    first_error: Mutex<Option<String>>,
+    freed_links: Mutex<HashMap<(u64, u64), FreedLink>>,
+}
+
+impl Visitor for Sizer<'_> {
+    fn entry(&self, dir: &Path, e: &Entry) -> bool {
+        match e.kind {
+            Kind::Dir => {
+                if e.mount_point {
+                    if self.opts.one_volume || self.opts.mode == Mode::Freed {
+                        return false;
+                    }
+                    // the bulk listing describes the directory under the mount: ask the mounted root
+                    match fs::stat(&dir.join(&e.name)) {
+                        Ok(m) => self.add_alloc(m.alloc),
+                        Err(err) => {
+                            self.error(&dir.join(&e.name), err);
+                            return false;
+                        }
+                    }
+                } else if self.opts.mode == Mode::Allocated {
+                    self.add_alloc(e.alloc);
+                }
+                self.dirs.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            _ if self.opts.mode == Mode::Freed => {
+                if e.kind == Kind::File {
+                    self.files.fetch_add(1, Ordering::Relaxed);
+                    let size = e.freed();
+                    if e.nlink > 1 {
+                        let mut map = self.freed_links.lock().unwrap();
+                        let slot = map.entry((e.dev, e.ino)).or_insert((0, e.nlink, size));
+                        slot.0 += 1;
+                    } else {
+                        self.add_alloc(size);
+                    }
+                }
+                false
+            }
+            _ => {
+                self.files.fetch_add(1, Ordering::Relaxed);
+                if e.nlink <= 1 || self.links.first_time(e.dev, e.ino) {
+                    self.add_alloc(e.alloc);
+                }
+                false
+            }
+        }
+    }
+
+    fn error(&self, path: &Path, err: io::Error) {
+        if err.kind() == io::ErrorKind::NotFound && !self.opts.missing_is_error {
+            return;
+        }
+        self.errors.fetch_add(1, Ordering::Relaxed);
+        if err.kind() != io::ErrorKind::PermissionDenied {
+            self.non_permission.store(true, Ordering::Relaxed);
+        }
+        let mut first = self.first_error.lock().unwrap();
+        if first.is_none() {
+            *first = Some(format!("{}: {}", path.display(), err));
+        }
+    }
+}
+
+impl Sizer<'_> {
+    fn add_alloc(&self, n: u64) {
+        self.bytes.fetch_add(n, Ordering::Relaxed);
+    }
+}
+
+/// du-style kibibytes, rounded up.
+pub fn kib(bytes: u64) -> u64 {
+    bytes.div_ceil(1024)
+}

@@ -89,7 +89,7 @@ enum CLI {
 
     static let pathKey = "moPath"
 
-    /// The engine bundled in the app; for `swift run`, the one fetch-engine.sh put in build/.
+    /// The engine bundled in the app; for `swift run`, the one legacy/mo/fetch-engine.sh put in build/.
     static let bundledEngine: String? = {
         let macos = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../build").standardized
         let dev = (try? FileManager.default.contentsOfDirectory(atPath: macos.path))?
