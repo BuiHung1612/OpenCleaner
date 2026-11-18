@@ -48,6 +48,10 @@ enum Request {
     UninstallPlan {
         paths: Vec<PathBuf>,
     },
+    /// Windows: starts the vendor's uninstaller of the app registered under `key`.
+    RunUninstaller {
+        key: String,
+    },
     /// Installer files in Downloads and on the Desktop (`picks`).
     Installers,
     /// Rebuildable build folders in projects (`picks`).
@@ -130,6 +134,23 @@ pub fn call(request: &str) -> Value {
                 .collect();
             json!({"ok": true, "groups": groups})
         }
+        Ok(Request::RunUninstaller { key }) => match apps::run_uninstaller(&key) {
+            Ok(name) => {
+                let mut ledger = ledger::Writer::open(ctx());
+                let now = ledger::now();
+                ledger.write(&ledger::Line::Session {
+                    id: now,
+                    command: "uninstall".into(),
+                    started: now,
+                    finished: now,
+                    items: 1,
+                    bytes: 0,
+                    failed: 0,
+                });
+                json!({"ok": true, "started": name})
+            }
+            Err(e) => json!({"ok": false, "error": e}),
+        },
         Ok(Request::Maintenance) => {
             json!({"ok": true, "tasks": maintenance::tasks(), "touchid": maintenance::touchid_status()})
         }
@@ -192,6 +213,7 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         Request::Rules
         | Request::History { .. }
         | Request::Maintenance
+        | Request::RunUninstaller { .. }
         | Request::Optimize { .. }
         | Request::TouchidScript { .. } => emit(json!({"event": "error", "error": "use call"})),
         Request::Apps => {

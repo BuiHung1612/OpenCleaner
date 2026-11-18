@@ -133,6 +133,7 @@ fn leftovers_match_the_bundle_id_exactly_and_names_only_when_distinctive() {
         version: "1".into(),
         path: h("Applications/AcmeEditor.app"),
         running: false,
+        ..Default::default()
     };
     std::fs::create_dir_all(&app.path).unwrap();
     let picks = apps::uninstall_picks(&app, &ctx, &AtomicBool::new(false));
@@ -169,9 +170,8 @@ fn leftovers_match_the_bundle_id_exactly_and_names_only_when_distinctive() {
     let short = App {
         name: "Go".into(),
         bundle_id: "org.example.go".into(),
-        version: String::new(),
         path: app.path.clone(),
-        running: false,
+        ..Default::default()
     };
     let picks = apps::uninstall_picks(&short, &ctx, &AtomicBool::new(false));
     assert!(!picks.iter().any(|p| p.path.ends_with("Go")));

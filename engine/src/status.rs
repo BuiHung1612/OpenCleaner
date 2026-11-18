@@ -514,12 +514,71 @@ mod platform {
         Some(Duration::from_millis(unsafe { GetTickCount64() }))
     }
 
+    /// Bytes in the Recycle Bins of all drives.
     pub fn trash_size() -> Option<u64> {
-        None
+        use windows_sys::Win32::UI::Shell::{SHQUERYRBINFO, SHQueryRecycleBinW};
+        let mut info: SHQUERYRBINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<SHQUERYRBINFO>() as u32;
+        (unsafe { SHQueryRecycleBinW(std::ptr::null(), &mut info) } == 0)
+            .then_some(info.i64Size.max(0) as u64)
     }
 
+    /// (pid, name, cpu time in ns, working set bytes) of the processes we may inspect.
     pub fn processes() -> Vec<(i32, String, u64, u64)> {
-        Vec::new()
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            TH32CS_SNAPPROCESS,
+        };
+        use windows_sys::Win32::System::ProcessStatus::{
+            K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        let mut out = Vec::new();
+        let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snap == INVALID_HANDLE_VALUE {
+            return out;
+        }
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut ok = unsafe { Process32FirstW(snap, &mut entry) };
+        while ok != 0 {
+            let pid = entry.th32ProcessID;
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+            if !h.is_null() {
+                let (mut created, mut exited, mut kernel, mut user) =
+                    unsafe { std::mem::zeroed::<(FILETIME, FILETIME, FILETIME, FILETIME)>() };
+                let mut mem: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+                mem.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+                let times = unsafe {
+                    GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user)
+                } != 0;
+                let memory = unsafe { K32GetProcessMemoryInfo(h, &mut mem, mem.cb) } != 0;
+                if times {
+                    // FILETIME counts 100 ns
+                    let cpu_ns = (ft(kernel) + ft(user)) * 100;
+                    out.push((
+                        pid as i32,
+                        name,
+                        cpu_ns,
+                        if memory { mem.WorkingSetSize as u64 } else { 0 },
+                    ));
+                }
+                unsafe { CloseHandle(h) };
+            }
+            ok = unsafe { Process32NextW(snap, &mut entry) };
+        }
+        unsafe { CloseHandle(snap) };
+        out
     }
 }
 

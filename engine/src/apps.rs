@@ -11,13 +11,24 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct App {
     pub name: String,
+    /// macOS: CFBundleIdentifier. Windows: the app's key under Uninstall in the registry.
     pub bundle_id: String,
     pub version: String,
+    /// The bundle (macOS) or install folder (Windows, may be empty).
     pub path: PathBuf,
     pub running: bool,
+    /// Windows: who made it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<String>,
+    /// Windows: the size the installer registered, for apps without a known folder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_size: Option<u64>,
+    /// Windows: the vendor's uninstaller command line (the proper way to remove an app).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uninstall: Option<String>,
 }
 
 /// Apps that come with the system, or that are OpenCleaner itself.
@@ -26,6 +37,12 @@ const KEEP: &[&str] = &["com.apple.Safari", "io.github.opencleaner"];
 
 /// Installed apps, by name. Sizes come separately (`sizes`), since reading them takes a
 /// walk of every bundle.
+#[cfg(windows)]
+pub fn list(_ctx: &Context, _running: &Running) -> Vec<App> {
+    win::list()
+}
+
+#[cfg(not(windows))]
 pub fn list(ctx: &Context, running: &Running) -> Vec<App> {
     let mut apps = Vec::new();
     for dir in app_dirs(ctx) {
@@ -65,6 +82,7 @@ pub fn list(ctx: &Context, running: &Running) -> Vec<App> {
     apps
 }
 
+#[cfg(not(windows))]
 fn app_dirs(ctx: &Context) -> Vec<PathBuf> {
     if cfg!(target_os = "macos") {
         vec![
@@ -98,10 +116,11 @@ fn read_app(path: &Path, running: &Running) -> Option<App> {
         running: running.contains(&bundle_id),
         bundle_id,
         path: path.to_path_buf(),
+        ..Default::default()
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn read_app(_path: &Path, _running: &Running) -> Option<App> {
     None
 }
@@ -256,4 +275,186 @@ pub fn uninstall_picks(app: &App, ctx: &Context, cancel: &AtomicBool) -> Vec<Pic
         p.bytes = b;
     }
     picks
+}
+
+/// Starts the vendor's uninstaller for the app registered under `key` (Windows). It runs
+/// on its own, with its own window; OpenCleaner does not wait for it.
+#[cfg(windows)]
+pub fn run_uninstaller(key: &str) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    let app = win::list()
+        .into_iter()
+        .find(|a| a.bundle_id == key)
+        .ok_or("this app is no longer installed")?;
+    let command = app.uninstall.clone().ok_or("this app has no uninstaller")?;
+    std::process::Command::new("cmd.exe")
+        .arg("/C")
+        .raw_arg(&command)
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW: no console behind the uninstaller
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(app.name)
+}
+
+#[cfg(not(windows))]
+pub fn run_uninstaller(_key: &str) -> Result<String, String> {
+    Err("only on Windows; macOS apps go to the Trash".into())
+}
+
+/// Windows: the apps listed under Programs and Features (Uninstall keys of the machine, in
+/// both registry views, and of the user).
+#[cfg(windows)]
+mod win {
+    use super::App;
+    use std::path::PathBuf;
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
+        RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW,
+    };
+
+    const UNINSTALL: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain([0]).collect()
+    }
+
+    fn string(key: HKEY, sub: &[u16], name: &str) -> Option<String> {
+        let name = wide(name);
+        let mut len = 0u32;
+        let probe = unsafe {
+            RegGetValueW(
+                key,
+                sub.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut len,
+            )
+        };
+        if probe != ERROR_SUCCESS || len < 2 {
+            return None;
+        }
+        let mut buf = vec![0u16; len as usize / 2 + 1];
+        let mut bytes = (buf.len() * 2) as u32;
+        let rc = unsafe {
+            RegGetValueW(
+                key,
+                sub.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr().cast(),
+                &mut bytes,
+            )
+        };
+        if rc != ERROR_SUCCESS {
+            return None;
+        }
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        let s = String::from_utf16_lossy(&buf[..end]).trim().to_string();
+        (!s.is_empty()).then_some(s)
+    }
+
+    fn dword(key: HKEY, sub: &[u16], name: &str) -> Option<u32> {
+        let name = wide(name);
+        let mut v = 0u32;
+        let mut len = 4u32;
+        let rc = unsafe {
+            RegGetValueW(
+                key,
+                sub.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                (&mut v as *mut u32).cast(),
+                &mut len,
+            )
+        };
+        (rc == ERROR_SUCCESS).then_some(v)
+    }
+
+    pub fn list() -> Vec<App> {
+        let mut apps: Vec<App> = Vec::new();
+        for (root, view) in [
+            (HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY),
+            (HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY),
+            (HKEY_CURRENT_USER, 0),
+        ] {
+            let mut key: HKEY = std::ptr::null_mut();
+            let path = wide(UNINSTALL);
+            if unsafe { RegOpenKeyExW(root, path.as_ptr(), 0, KEY_READ | view, &mut key) }
+                != ERROR_SUCCESS
+            {
+                continue;
+            }
+            let mut index = 0u32;
+            loop {
+                let mut name = [0u16; 256];
+                let mut len = name.len() as u32;
+                let rc = unsafe {
+                    RegEnumKeyExW(
+                        key,
+                        index,
+                        name.as_mut_ptr(),
+                        &mut len,
+                        std::ptr::null(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                };
+                if rc != ERROR_SUCCESS {
+                    break;
+                }
+                index += 1;
+                let sub: Vec<u16> = name[..len as usize].iter().copied().chain([0]).collect();
+                let key_name = String::from_utf16_lossy(&name[..len as usize]);
+                // updates, parts of other products and system components are not apps to remove
+                if dword(key, &sub, "SystemComponent") == Some(1)
+                    || string(key, &sub, "ParentKeyName").is_some()
+                    || string(key, &sub, "ReleaseType")
+                        .is_some_and(|t| t.contains("Update") || t.contains("Hotfix"))
+                {
+                    continue;
+                }
+                let Some(display) = string(key, &sub, "DisplayName") else {
+                    continue;
+                };
+                let Some(uninstall) = string(key, &sub, "UninstallString")
+                    .or_else(|| string(key, &sub, "QuietUninstallString"))
+                else {
+                    continue;
+                };
+                let location = string(key, &sub, "InstallLocation")
+                    .map(|l| PathBuf::from(l.trim_matches('"')))
+                    .unwrap_or_default();
+                let app = App {
+                    name: display,
+                    bundle_id: key_name,
+                    version: string(key, &sub, "DisplayVersion").unwrap_or_default(),
+                    path: if location.is_dir() {
+                        location
+                    } else {
+                        PathBuf::new()
+                    },
+                    running: false,
+                    publisher: string(key, &sub, "Publisher"),
+                    estimated_size: dword(key, &sub, "EstimatedSize")
+                        .map(|kb| u64::from(kb) * 1024),
+                    uninstall: Some(uninstall),
+                };
+                if !apps
+                    .iter()
+                    .any(|a| a.name == app.name && a.version == app.version)
+                {
+                    apps.push(app);
+                }
+            }
+            unsafe { RegCloseKey(key) };
+        }
+        apps.sort_by_key(|a| a.name.to_lowercase());
+        apps
+    }
 }
