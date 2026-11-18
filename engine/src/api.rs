@@ -3,7 +3,7 @@
 
 use crate::context::Context;
 use crate::rules::RuleSet;
-use crate::{apps, clean, finders, ledger, picks, procs, size, space, status};
+use crate::{apps, clean, finders, ledger, maintenance, picks, procs, size, space, status};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -59,6 +59,19 @@ enum Request {
     Remove {
         plan: u64,
         items: Vec<usize>,
+    },
+    /// Universal apps that Slim Apps can cut down to their arm64 code (`picks`).
+    Slim,
+    /// Optimization tasks and the Touch ID state.
+    Maintenance,
+    /// Runs the chosen tasks that need no password; returns the script for the others
+    /// (`admin_script`, for the app to run with administrator rights).
+    Optimize {
+        tasks: Vec<String>,
+    },
+    /// The script that turns Touch ID for sudo on or off (needs administrator rights).
+    TouchidScript {
+        enable: bool,
     },
     /// Past cleanups, newest first.
     History {
@@ -117,6 +130,17 @@ pub fn call(request: &str) -> Value {
                 .collect();
             json!({"ok": true, "groups": groups})
         }
+        Ok(Request::Maintenance) => {
+            json!({"ok": true, "tasks": maintenance::tasks(), "touchid": maintenance::touchid_status()})
+        }
+        Ok(Request::Optimize { tasks }) => json!({
+            "ok": true,
+            "results": maintenance::run_user(&tasks),
+            "admin_script": maintenance::admin_script(&tasks),
+        }),
+        Ok(Request::TouchidScript { enable }) => {
+            json!({"ok": true, "script": maintenance::touchid_script(enable)})
+        }
         Ok(Request::History { limit }) => {
             let mut v = ledger::sessions(ctx(), limit);
             v["ok"] = json!(true);
@@ -165,9 +189,11 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
                 }
             }
         }
-        Request::Rules | Request::History { .. } => {
-            emit(json!({"event": "error", "error": "use call"}))
-        }
+        Request::Rules
+        | Request::History { .. }
+        | Request::Maintenance
+        | Request::Optimize { .. }
+        | Request::TouchidScript { .. } => emit(json!({"event": "error", "error": "use call"})),
         Request::Apps => {
             let list = apps::list(ctx(), &procs::Running::snapshot());
             emit(json!({"event": "apps", "apps": list}));
@@ -190,6 +216,13 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
                 }
             }
             emit_value("picks", &picks::store("uninstall", all, ctx()), emit);
+        }
+        Request::Slim => {
+            #[cfg(target_os = "macos")]
+            let found = crate::slim::candidates(&apps::list(ctx(), &procs::Running::snapshot()));
+            #[cfg(not(target_os = "macos"))]
+            let found = Vec::new();
+            emit_value("picks", &picks::store("slim", found, ctx()), emit);
         }
         Request::Installers => {
             let found = finders::installers(ctx());

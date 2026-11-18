@@ -12,10 +12,13 @@ pub mod finders;
 pub mod fs;
 pub mod guard;
 pub mod ledger;
+pub mod maintenance;
 pub mod picks;
 pub mod procs;
 pub mod rules;
 pub mod size;
+#[cfg(target_os = "macos")]
+pub mod slim;
 pub mod space;
 pub mod status;
 pub mod trash;

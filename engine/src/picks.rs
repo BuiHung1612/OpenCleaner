@@ -21,6 +21,8 @@ pub enum Action {
     Trash,
     /// Gone for good (rebuildable things only).
     Delete,
+    /// Slim Apps: thin a universal app to its arm64 code (the original goes to the Trash).
+    Slim,
 }
 
 /// One thing the user can pick.
@@ -224,6 +226,7 @@ fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<(), Failure> {
     let result = match pick.action {
         Action::Trash => trash::move_to_trash(&pick.path),
         Action::Delete => remove(&pick.path, id.kind),
+        Action::Slim => slim(&pick.path),
     };
     result.map_err(|e| Failure::Failed(e.to_string()))
 }
@@ -233,4 +236,14 @@ fn remove(path: &Path, kind: Kind) -> std::io::Result<()> {
         Kind::Dir => std::fs::remove_dir_all(path),
         _ => std::fs::remove_file(path),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn slim(path: &Path) -> std::io::Result<()> {
+    crate::slim::slim_app(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn slim(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
