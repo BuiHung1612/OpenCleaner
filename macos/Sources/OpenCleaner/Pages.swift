@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 struct DashboardPage: View {
-    @StateObject private var stream = StatusStream()
+    /// owned by the window, so coming back to the dashboard shows the last reading at once
+    @ObservedObject var stream: StatusStream
     @AppStorage("autoRefresh") private var autoRefresh = false
     @AppStorage("refreshInterval") private var refreshInterval = 5
 
@@ -73,7 +74,7 @@ struct DashboardPage: View {
         // glass tiles live inside this scroll view; a dark scheme here would darken them
         .scrollIndicators(.never)
         .onAppear {
-            stream.refresh()
+            stream.refresh(ifOlderThan: 10)
             if autoRefresh { stream.start(every: refreshInterval) }
         }
         .onDisappear { stream.stop() }
@@ -147,6 +148,9 @@ struct Tile: View {
 
 struct UninstallerPage: View {
     @State private var apps: [JSON]?
+    /// when `apps` was listed; shown while a newer list is loading
+    @State private var listedAt: Date?
+    @State private var refreshing = false
     @State private var error: String?
     @State private var query = ""
     @State private var selection: Set<String> = []
@@ -178,6 +182,10 @@ struct UninstallerPage: View {
                     .glassEffect(.clear.tint(.white.opacity(0.07)), in: .capsule)
                 }
                 .padding(.top, 36)
+
+                if apps != nil, let listedAt, refreshing || error != nil {
+                    RefreshBanner(date: listedAt, error: refreshing ? nil : error)
+                }
 
                 if let apps {
                     let shown = query.isEmpty ? apps : apps.filter { ($0.name.string ?? "").localizedCaseInsensitiveContains(query) }
@@ -259,12 +267,26 @@ struct UninstallerPage: View {
         )
     }
 
+    /// Lists apps (~2.5 s). The previous list, from this visit or an earlier launch, stays on
+    /// screen meanwhile with a banner saying how old it is.
     private func load() async {
+        if apps == nil, let old = CLI.cached("apps") {
+            apps = Self.sorted(old.json)
+            listedAt = old.date
+        }
+        refreshing = true
+        defer { refreshing = false }
         do {
-            apps = try await CLI.json("apps").array.sorted { parseSize($0.size.string) > parseSize($1.size.string) }
+            apps = Self.sorted(try await CLI.json("apps", persist: true))
+            listedAt = Date()
+            error = nil
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private static func sorted(_ list: JSON) -> [JSON] {
+        list.array.sorted { parseSize($0.size.string) > parseSize($1.size.string) }
     }
 }
 

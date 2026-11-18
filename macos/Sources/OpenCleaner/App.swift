@@ -105,6 +105,7 @@ struct MainView: View {
     @State private var module = Module.dashboard
     @State private var version: String?
     @StateObject private var lens = SpaceLensModel()
+    @StateObject private var status = StatusStream()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -174,7 +175,7 @@ struct MainView: View {
 
     @ViewBuilder private var page: some View {
         switch module {
-        case .dashboard: DashboardPage()
+        case .dashboard: DashboardPage(stream: status)
         case .spaceLens: SpaceLensPage(model: lens)
         case .uninstaller: UninstallerPage()
         case .history: HistoryPage()
@@ -379,4 +380,33 @@ func parseSize(_ s: String?) -> Double {
 func reveal(_ path: String?) {
     guard let path else { return }
     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+}
+
+/// Shown while a page displays an older result and a fresh run is under way, so old numbers
+/// never pass for new ones. With `error`, the refresh failed and the old result stays.
+struct RefreshBanner: View {
+    let date: Date
+    var error: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let error {
+                Image(systemName: "exclamationmark.triangle")
+                Text(verbatim: String(localized: "Could not update, showing the result from \(Self.age(date)): \(error)"))
+            } else {
+                ProgressView().controlSize(.small).brightScroller()
+                Text(verbatim: String(localized: "Showing the result from \(Self.age(date)). Updating…"))
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.dim)
+        .lineLimit(1)
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .glassEffect(.clear.tint(.white.opacity(0.07)), in: .capsule)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    static func age(_ date: Date) -> String {
+        date.formatted(.relative(presentation: .named))
+    }
 }

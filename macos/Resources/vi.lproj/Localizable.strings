@@ -120,3 +120,5 @@
 "Version" = "Phiên bản";
 "You have %@. Download and install it now? OpenCleaner will restart." = "Bạn đang dùng bản %@. Tải và cài bản mới ngay? OpenCleaner sẽ tự khởi động lại.";
 "You're up to date" = "Bạn đang dùng bản mới nhất";
+"Showing the result from %@. Updating…" = "Đang hiện kết quả từ %@. Đang cập nhật…";
+"Could not update, showing the result from %@: %@" = "Không cập nhật được, đang hiện kết quả từ %@: %@";

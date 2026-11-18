@@ -4,6 +4,7 @@
 //! missing fields never break decoding.
 
 import AppKit
+import CryptoKit
 import Foundation
 
 @dynamicMemberLookup
@@ -163,8 +164,18 @@ enum CLI {
         }
     }
 
-    static func json(_ key: String, _ vars: [String: [String]] = [:], background: Bool = false) async throws -> JSON {
-        JSON(data: try await output(command(key, vars), background: background))
+    /// `persist` keeps the output on disk so the next launch can show it at once (`cached`).
+    static func json(_ key: String, _ vars: [String: [String]] = [:], background: Bool = false, persist: Bool = false) async throws -> JSON {
+        let args = command(key, vars)
+        let data = try await output(args, background: background)
+        let json = JSON(data: data)
+        if persist, json.raw != nil { try? ResultCache.save(data, for: args) }
+        return json
+    }
+
+    /// The last persisted output of a command and when it was taken, if any.
+    static func cached(_ key: String, _ vars: [String: [String]] = [:]) -> (json: JSON, date: Date)? {
+        ResultCache.load(command(key, vars))
     }
 
     static func version() async -> String? {
@@ -193,6 +204,32 @@ enum CLI {
         } catch {
             NSSound.beep()
         }
+    }
+}
+
+/// Last good JSON of slow commands (a full-disk map takes ~30 s), one file per command line in
+/// ~/Library/Caches. Pages show it immediately, marked as old, while a fresh run replaces it.
+enum ResultCache {
+    static let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("OpenCleaner/results")
+
+    static func url(_ args: [String]) -> URL {
+        let name = SHA256.hash(data: Data(args.joined(separator: "\u{0}").utf8)).map { String(format: "%02x", $0) }.joined()
+        return dir.appendingPathComponent(name + ".json")
+    }
+
+    static func save(_ data: Data, for args: [String]) throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try data.write(to: url(args), options: .atomic)
+    }
+
+    static func load(_ args: [String]) -> (json: JSON, date: Date)? {
+        let url = url(args)
+        guard let data = try? Data(contentsOf: url),
+              let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        else { return nil }
+        let json = JSON(data: data)
+        return json.raw == nil ? nil : (json, date)
     }
 }
 
@@ -374,7 +411,7 @@ final class Session: ObservableObject, Identifiable {
     static let maxLines = 2000
 
     /// Last `n` lines of `s`, with a "…" line in front when earlier ones were dropped.
-    static func tail(_ s: String, lines n: Int) -> String {
+    nonisolated static func tail(_ s: String, lines n: Int) -> String {
         var count = 0
         var i = s.utf8.endIndex
         while i > s.utf8.startIndex {

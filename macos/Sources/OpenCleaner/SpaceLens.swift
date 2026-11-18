@@ -30,12 +30,16 @@ final class SpaceLensModel: ObservableObject {
     @Published var selection: Set<String> = []
     @Published var error: String?
     @Published private var cache: [String: JSON] = [:]
+    /// keys whose `cache` entry came from disk (an earlier launch) and is being re-scanned
+    @Published private var stale: [String: Date] = [:]
 
     var usedLabel: Text? {
         volumes.first(where: \.isStartup).map { Text(verbatim: bytes($0.used)) }
     }
 
     var current: JSON? { stack.last.map { cache[$0 ?? ""] } ?? nil }
+    /// When the shown results were really taken, if they are an older scan being refreshed.
+    var staleDate: Date? { stack.last.map { stale[$0 ?? ""] } ?? nil }
     var entries: [JSON] { current?.entries.array ?? [] }
     var selectedSize: Double {
         entries.filter { selection.contains($0.path.string ?? "") }.compactMap(\.size.double).reduce(0, +)
@@ -87,11 +91,16 @@ final class SpaceLensModel: ObservableObject {
     func load(_ path: String?, force: Bool = false) {
         let key = path ?? ""
         cancelPrefetch()
-        if force { cache[key] = nil }
+        if force { cache[key] = nil; stale[key] = nil }
         error = nil
-        if let ready = cache[key] {
+        if let ready = cache[key], stale[key] == nil {
             prefetchChildren(of: ready)
             return
+        }
+        // show the previous launch's scan right away; the fresh one replaces it
+        if !force, cache[key] == nil, let old = CLI.cached("analyze", Self.vars(key)) {
+            cache[key] = old.json
+            stale[key] = old.date
         }
         Task {
             do {
@@ -102,18 +111,19 @@ final class SpaceLensModel: ObservableObject {
         }
     }
 
-    /// Warms a folder in the background, e.g. the startup disk while the volume picker is shown.
-    func prefetch(_ path: String?) {
-        let key = path ?? ""
-        guard cache[key] == nil, !queue.contains(key) else { return }
-        queue.insert(key, at: 0)
-        drain()
+    /// Starts mapping the startup disk (~30 s) while the volume picker is shown. Full priority:
+    /// the user came to this page to scan, and Scan then joins this run instead of restarting it.
+    func warmStartupDisk() {
+        guard cache[""] == nil || stale[""] != nil, inflight[""] == nil else { return }
+        Task { _ = try? await scan("", background: false) }
     }
 
+    private static func vars(_ key: String) -> [String: [String]] { key.isEmpty ? [:] : ["path": [key]] }
+
     private func scan(_ key: String, background: Bool) async throws -> JSON {
-        if let cached = cache[key] { return cached }
+        if let cached = cache[key], stale[key] == nil { return cached }
         let task = inflight[key] ?? Task {
-            try await CLI.json("analyze", key.isEmpty ? [:] : ["path": [key]], background: background)
+            try await CLI.json("analyze", Self.vars(key), background: background, persist: true)
         }
         if inflight[key] == nil, background { backgroundKeys.insert(key) }
         inflight[key] = task
@@ -126,6 +136,7 @@ final class SpaceLensModel: ObservableObject {
         }
         let json = try await task.value
         cache[key] = json
+        stale[key] = nil
         return json
     }
 
@@ -156,6 +167,7 @@ final class SpaceLensModel: ObservableObject {
         selection = []
         error = failed.isEmpty ? nil : String(localized: "Could not move to Trash: \(failed.joined(separator: ", "))")
         cache = [:]
+        stale = [:]
         volumes = Volume.all()
         load(stack.last ?? nil, force: true)
     }
@@ -198,7 +210,7 @@ struct SpaceLensPage: View {
         }
         .padding(.top, 24)
         // start mapping the startup disk while the user is still looking at this page
-        .onAppear { model.prefetch(nil) }
+        .onAppear { model.warmStartupDisk() }
     }
 
     private var results: some View {
@@ -211,6 +223,10 @@ struct SpaceLensPage: View {
                 Button(String(localized: "Start Over")) { model.startOver() }.buttonStyle(.pill)
             }
             .padding(.top, 36)
+
+            if let date = model.staleDate, model.current != nil {
+                RefreshBanner(date: date, error: model.error)
+            }
 
             if let current = model.current {
                 HStack(spacing: 24) {
