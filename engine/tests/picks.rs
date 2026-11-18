@@ -257,8 +257,8 @@ fn project_junk_needs_its_project_file_and_skips_tracked_and_marks_active() {
             p.path
                 .strip_prefix(&ctx.home)
                 .unwrap()
-                .display()
-                .to_string()
+                .to_string_lossy()
+                .replace('\\', "/")
         })
         .collect();
     assert!(

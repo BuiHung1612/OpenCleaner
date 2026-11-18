@@ -29,7 +29,7 @@ jobs:
         working-directory: engine
         run: |
           cargo clippy --all-targets -- -D warnings
-          cargo test
+          cargo test --no-fail-fast
 
   # the Windows app: native UI (Win32 + GDI+) on the same engine
   windows-app:
