@@ -144,20 +144,14 @@ pub fn invalidate(hwnd: HWND) {
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const TIMER_SPIN: usize = 1;
-const TIMER_DASHBOARD: usize = 2;
-
-/// Keeps a timer running while something animates (busy buttons) or refreshes.
-pub fn timers(hwnd: HWND, spinning: bool, dashboard: bool) {
+/// Keeps a timer running while something animates (busy buttons). The dashboard has no
+/// timer: it reads once, then on the refresh button (or on focus, if chosen in Settings).
+pub fn timers(hwnd: HWND, spinning: bool) {
     unsafe {
         if spinning {
             SetTimer(hwnd, TIMER_SPIN, 40, None);
         } else {
             KillTimer(hwnd, TIMER_SPIN);
-        }
-        if dashboard {
-            SetTimer(hwnd, TIMER_DASHBOARD, 5000, None);
-        } else {
-            KillTimer(hwnd, TIMER_DASHBOARD);
         }
     }
 }
@@ -292,11 +286,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_TIMER => {
-            if wparam == TIMER_DASHBOARD {
-                with(|st| st.refresh_dashboard());
-            }
             invalidate(hwnd);
             0
+        }
+        WM_ACTIVATE => {
+            // low word: WA_INACTIVE (0) when another window takes the focus
+            if wparam & 0xFFFF != 0 {
+                with(|st| st.on_activate());
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         jobs::WM_ENGINE => {
             let posted = unsafe { Box::from_raw(lparam as *mut jobs::Posted) };

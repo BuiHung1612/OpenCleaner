@@ -198,6 +198,7 @@ pub enum Action {
     AppsUninstall,
     AppsReload,
     FastToggle,
+    FocusRefreshToggle,
 }
 
 impl Action {
@@ -213,6 +214,7 @@ impl Action {
                 | Action::AppToggle(_)
                 | Action::SpaceToggle(_)
                 | Action::FastToggle
+                | Action::FocusRefreshToggle
         )
     }
 }
@@ -223,6 +225,8 @@ impl Action {
 struct Dash {
     status: Value,
     job: Option<Job>,
+    /// when the last reading was asked for (focus refreshes skip readings under 10 s old)
+    read_at: Option<std::time::Instant>,
 }
 
 #[derive(Default)]
@@ -428,12 +432,15 @@ pub struct State {
     history: History,
     /// Settings: scans and removals take every core
     fast: bool,
+    /// re-read the dashboard when the window comes to the front (off: only the button)
+    refresh_on_focus: bool,
     /// this paint's tick boxes, unclipped, in list order (keyboard focus moves along them)
     toggles: Vec<(R, Action)>,
     focus: Option<Action>,
 }
 
 const FAST_VALUE: &str = "FastScans";
+const FOCUS_REFRESH_VALUE: &str = "RefreshOnFocus";
 
 /// Tells the engine how hard to work; returns `fast`.
 fn set_fast(fast: bool) -> bool {
@@ -463,6 +470,7 @@ impl State {
             apps: Apps::default(),
             history: History::default(),
             fast: set_fast(super::reg_dword(super::SETTINGS_KEY, FAST_VALUE) == Some(1)),
+            refresh_on_focus: super::reg_dword(super::SETTINGS_KEY, FOCUS_REFRESH_VALUE) == Some(1),
             toggles: Vec::new(),
             focus: None,
         }
@@ -505,7 +513,7 @@ impl State {
     }
 
     fn update_timers(&self) {
-        timers(self.hwnd, self.busy(), self.module == Module::Dashboard);
+        timers(self.hwnd, self.busy());
     }
 
     // ------------------------------------------------------------ input
@@ -565,7 +573,8 @@ impl State {
 
     pub fn on_show_module(&mut self) {
         match self.module {
-            Module::Dashboard => self.refresh_dashboard(),
+            // read once; after that only the refresh button (or focus, if the user chose it)
+            Module::Dashboard if self.dash.read_at.is_none() => self.refresh_dashboard(),
             Module::Uninstaller if !self.apps.loaded && self.apps.job.is_none() => self.load_apps(),
             Module::History => self.load_history(),
             _ => {}
@@ -627,8 +636,17 @@ impl State {
         None
     }
 
+    /// The window came to the front: a new reading if the user asked for that.
+    pub fn on_activate(&mut self) {
+        let stale = self.dash.read_at.is_none_or(|t| t.elapsed().as_secs() >= 10);
+        if self.refresh_on_focus && self.module == Module::Dashboard && stale {
+            self.refresh_dashboard();
+        }
+    }
+
     pub fn refresh_dashboard(&mut self) {
         if self.dash.job.is_none() {
+            self.dash.read_at = Some(std::time::Instant::now());
             self.dash.job = Some(jobs::start(self.hwnd, json!({"op": "status"})));
             self.update_timers();
         }
@@ -1655,24 +1673,44 @@ impl State {
         let panel = R::new(page.x + 18.0, y, page.w - 36.0, 168.0);
         c.glass(panel, 20.0);
         c.text(R::new(panel.x + 20.0, panel.y + 12.0, 200.0, 20.0), "Engine", 13.0, true, dim(), Align::Left);
-        let row = R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0);
-        if self.hot(row) {
-            c.rounded(row, 10.0, Some(argb(fg(), 16)), None);
-        }
-        c.text(R::new(row.x + 10.0, row.y, row.w - 100.0, row.h), "Faster scans", 15.0, true, fg(), Align::Left);
-        // a switch: track and knob
-        let track = R::new(row.right() - 58.0, row.y + 7.0, 44.0, 22.0);
-        c.rounded(track, 11.0, Some(if self.fast { argb(mint(), 255) } else { argb(fg(), 50) }), None);
-        let knob_x = if self.fast { track.right() - 11.0 } else { track.x + 11.0 };
-        c.circle(knob_x, track.y + 11.0, 8.0, Some(argb(WHITE, 255)), None);
-        self.hit(row, Action::FastToggle);
+        self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Faster scans", self.fast, Action::FastToggle);
         c.para(
-            R::new(panel.x + 20.0, row.bottom() + 8.0, panel.w - 40.0, 54.0),
+            R::new(panel.x + 20.0, panel.y + 82.0, panel.w - 40.0, 54.0),
             "Off (recommended): scans and removals give way to your other apps, so the PC stays smooth. On: they take every CPU core to finish sooner, and other apps may lag or freeze until they are done.",
             13.0,
             dim(),
         );
         c.text(R::new(panel.x + 20.0, panel.bottom() - 30.0, panel.w - 40.0, 20.0), &format!("OpenCleaner engine {}", self.version), 12.0, false, dim(), Align::Left);
+
+        let panel = R::new(page.x + 18.0, panel.bottom() + 16.0, page.w - 36.0, 150.0);
+        c.glass(panel, 20.0);
+        c.text(R::new(panel.x + 20.0, panel.y + 12.0, 200.0, 20.0), "Dashboard", 13.0, true, dim(), Align::Left);
+        self.switch_row(
+            c,
+            R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0),
+            "Refresh when the app comes to the front",
+            self.refresh_on_focus,
+            Action::FocusRefreshToggle,
+        );
+        c.para(
+            R::new(panel.x + 20.0, panel.y + 82.0, panel.w - 40.0, 60.0),
+            "Off (recommended): the dashboard reads once when you first open it; press Refresh (or F5) for new numbers, so they may be minutes old. On: numbers are fresh whenever you come back, but every switch back costs a short CPU sample and a redraw (at most once per 10 seconds).",
+            13.0,
+            dim(),
+        );
+    }
+
+    /// A settings row with a switch (track and knob) on the right.
+    fn switch_row(&mut self, c: &mut Canvas, row: R, label: &str, on: bool, action: Action) {
+        if self.hot(row) {
+            c.rounded(row, 10.0, Some(argb(fg(), 16)), None);
+        }
+        c.text(R::new(row.x + 10.0, row.y, row.w - 100.0, row.h), label, 15.0, true, fg(), Align::Left);
+        let track = R::new(row.right() - 58.0, row.y + 7.0, 44.0, 22.0);
+        c.rounded(track, 11.0, Some(if on { argb(mint(), 255) } else { argb(fg(), 50) }), None);
+        let knob_x = if on { track.right() - 11.0 } else { track.x + 11.0 };
+        c.circle(knob_x, track.y + 11.0, 8.0, Some(argb(WHITE, 255)), None);
+        self.hit(row, action);
     }
 }
 
@@ -1899,6 +1937,12 @@ pub fn perform(hwnd: HWND, action: Action) {
             with(|st| {
                 st.fast = set_fast(!st.fast);
                 super::set_reg_dword(super::SETTINGS_KEY, FAST_VALUE, st.fast as u32);
+            });
+        }
+        Action::FocusRefreshToggle => {
+            with(|st| {
+                st.refresh_on_focus = !st.refresh_on_focus;
+                super::set_reg_dword(super::SETTINGS_KEY, FOCUS_REFRESH_VALUE, st.refresh_on_focus as u32);
             });
         }
         Action::AppsReload => {

@@ -99,7 +99,6 @@
 "%@ · preview" = "%@ · xem trước";
 "%lld seconds" = "%lld giây";
 "Every" = "Chu kỳ";
-"Off: the dashboard reads once when the app opens or comes to the front. Use the refresh button for a new reading." = "Khi tắt: Tổng quan chỉ đọc một lần lúc mở app hoặc khi app được đưa lên trước. Bấm nút làm mới để đọc lại.";
 "Refresh" = "Làm mới";
 "Refresh automatically" = "Tự động làm mới";
 "Updated %@" = "Cập nhật lúc %@";
@@ -271,3 +270,7 @@
 "Watch the Trash and Downloads" = "Theo dõi Thùng rác và Tải về";
 "Weekly" = "Hằng tuần";
 "Your startup disk is almost full" = "Ổ khởi động sắp đầy";
+"By default the dashboard reads once, the first time you open it. Press the refresh button for new numbers, so they may be minutes old." = "Mặc định bảng điều khiển chỉ đọc số liệu một lần, khi bạn mở lần đầu. Bấm nút tải lại để có số mới, nên số liệu có thể cũ vài phút.";
+"Refresh when the app comes to the front" = "Tự tải lại khi quay lại ứng dụng";
+"On: numbers are fresh whenever you come back to the app. Cost: every switch back takes a short CPU sample and redraws the dashboard (at most once per 10 seconds), which uses a little battery." = "Bật: số liệu luôn mới mỗi khi bạn quay lại ứng dụng. Đánh đổi: mỗi lần quay lại sẽ đo CPU một chút và vẽ lại bảng điều khiển (tối đa 10 giây một lần), tốn thêm một ít pin.";
+"On: live numbers while the dashboard is on screen (paused when hidden). Cost: the app keeps working in the background the whole time, which uses CPU and battery and adds a little load to what it measures." = "Bật: số liệu cập nhật liên tục khi bảng điều khiển đang hiện (tạm dừng khi bị che). Đánh đổi: ứng dụng chạy liên tục suốt thời gian đó, tốn CPU và pin, và tự làm tăng nhẹ chính tải mà nó đang đo.";

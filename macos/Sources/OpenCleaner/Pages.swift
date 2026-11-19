@@ -6,6 +6,7 @@ struct DashboardPage: View {
     @ObservedObject var stream: StatusStream
     @AppStorage("autoRefresh") private var autoRefresh = false
     @AppStorage("refreshInterval") private var refreshInterval = 5
+    @AppStorage("refreshOnFocus") private var refreshOnFocus = false
 
     var body: some View {
         let s = stream.snapshot
@@ -70,12 +71,13 @@ struct DashboardPage: View {
         // glass tiles live inside this scroll view; a dark scheme here would darken them
         .scrollIndicators(.never)
         .onAppear {
-            stream.refresh(ifOlderThan: 10)
+            // read once; after that only the refresh button, or what Settings turned on
+            if stream.updatedAt == nil { stream.refresh() }
             if autoRefresh { stream.start(every: refreshInterval) }
         }
         .onDisappear { stream.stop() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            stream.refresh(ifOlderThan: 10)
+            if refreshOnFocus { stream.refresh(ifOlderThan: 10) }
         }
         // nobody is looking: stop the collector instead of redrawing glass every few seconds
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { note in
@@ -210,12 +212,17 @@ struct SettingsView: View {
                 Button(String(localized: "Check for Updates…")) { Task { await Updater.check(manual: true) } }
             }
             Section(String(localized: "Dashboard")) {
+                Text("By default the dashboard reads once, the first time you open it. Press the refresh button for new numbers, so they may be minutes old.")
+                    .font(.system(size: 12)).foregroundStyle(.dim)
+                Toggle(String(localized: "Refresh when the app comes to the front"), isOn: $refreshOnFocus)
+                Text("On: numbers are fresh whenever you come back to the app. Cost: every switch back takes a short CPU sample and redraws the dashboard (at most once per 10 seconds), which uses a little battery.")
+                    .font(.system(size: 12)).foregroundStyle(.dim)
                 Toggle(String(localized: "Refresh automatically"), isOn: $autoRefresh)
                 Picker(String(localized: "Every"), selection: $refreshInterval) {
                     ForEach([3, 5, 10, 30], id: \.self) { Text("\($0) seconds").tag($0) }
                 }
                 .disabled(!autoRefresh)
-                Text("Off: the dashboard reads once when the app opens or comes to the front. Use the refresh button for a new reading.")
+                Text("On: live numbers while the dashboard is on screen (paused when hidden). Cost: the app keeps working in the background the whole time, which uses CPU and battery and adds a little load to what it measures.")
                     .font(.system(size: 12)).foregroundStyle(.dim)
             }
             AutomationSettings()
