@@ -10,6 +10,9 @@ final class JunkModel: ObservableObject {
     /// The latest plan summary from the engine (partial while scanning).
     @Published private(set) var plan = JSON(nil)
     @Published var selected: Set<String> = []
+    /// items unticked inside a selected rule (paths)
+    @Published var excluded: Set<String> = []
+    @Published var expanded: Set<String> = []
     @Published private(set) var outcome = JSON(nil)
     @Published private(set) var cleanProgress = JSON(nil)
     @Published private(set) var error: String?
@@ -19,7 +22,48 @@ final class JunkModel: ObservableObject {
     var rules: [JSON] { groups.flatMap(\.rules.array) }
     var selectedBytes: Double {
         rules.filter { selected.contains($0.id.string ?? "") && $0.status.string == "ready" }
-            .compactMap(\.bytes.double).reduce(0, +)
+            .map { rule in
+                (rule.bytes.double ?? 0) - Self.items(rule)
+                    .filter { excluded.contains($0.path) }.map(\.bytes).reduce(0, +)
+            }
+            .reduce(0, +)
+    }
+
+    /// The items a rule found, biggest first (as the engine lists them).
+    static func items(_ rule: JSON) -> [(path: String, bytes: Double)] {
+        rule.paths.array.compactMap { pair in
+            let p = pair.array
+            guard p.count == 2, let path = p[0].string else { return nil }
+            return (path, p[1].double ?? 0)
+        }
+    }
+
+    func toggleRule(_ rule: JSON) {
+        guard let id = rule.id.string else { return }
+        let paths = Set(Self.items(rule).map(\.path))
+        if selected.contains(id) && paths.isDisjoint(with: excluded) {
+            selected.remove(id)
+        } else {
+            selected.insert(id)
+        }
+        excluded.subtract(paths)
+    }
+
+    func toggleItem(_ path: String, in rule: JSON) {
+        guard let id = rule.id.string else { return }
+        if !selected.contains(id) {
+            // ticking one item of an unticked rule: that item only
+            selected.insert(id)
+            excluded.formUnion(Self.items(rule).map(\.path).filter { $0 != path })
+        } else if excluded.contains(path) {
+            excluded.remove(path)
+        } else {
+            excluded.insert(path)
+            if Self.items(rule).allSatisfy({ excluded.contains($0.path) }) {
+                selected.remove(id)
+                excluded.subtract(Self.items(rule).map(\.path))
+            }
+        }
     }
 
     func scan() {
@@ -27,9 +71,11 @@ final class JunkModel: ObservableObject {
         phase = .scanning
         plan = JSON(nil)
         error = nil
+        excluded = []
+        expanded = []
         job = Task {
             var final = JSON(nil)
-            for await event in Engine.run(["op": "scan"]) {
+            for await event in Engine.run(["op": "scan", "list": true]) {
                 switch event.event.string {
                 case "progress": plan = event
                 case "plan": final = event
@@ -54,7 +100,7 @@ final class JunkModel: ObservableObject {
         cleanProgress = JSON(nil)
         job = Task {
             var final = JSON(nil)
-            for await event in Engine.run(["op": "clean", "plan": Int(planID), "rules": Array(selected)]) {
+            for await event in Engine.run(["op": "clean", "plan": Int(planID), "rules": Array(selected), "skip": Array(excluded)]) {
                 switch event.event.string {
                 case "progress": cleanProgress = event
                 case "cleaned": final = event
@@ -79,6 +125,8 @@ final class JunkModel: ObservableObject {
         plan = JSON(nil)
         outcome = JSON(nil)
         selected = []
+        excluded = []
+        expanded = []
         error = nil
     }
 }
@@ -170,27 +218,71 @@ struct JunkPage: View {
         let id = rule.id.string ?? ""
         let ready = rule.status.string == "ready" && model.phase == .review
         let on = model.selected.contains(id)
-        return HStack(alignment: .top, spacing: 12) {
-            Image(systemName: on && ready ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 17))
-                .opacity(ready ? 1 : 0.35)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tr(rule.title.string ?? id)).font(.system(size: 14, weight: .medium))
-                if let app = rule.in_use_by.string, rule.status.string == "in_use" {
-                    Text("Skipped while \(app) is open").font(.system(size: 12)).foregroundStyle(Color(hex: "#FFD54F"))
-                } else if let note = rule.note.string, !note.isEmpty {
-                    Text(tr(note)).font(.system(size: 12)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
+        let items = JunkModel.items(rule)
+        let partial = on && items.contains { model.excluded.contains($0.path) }
+        let open = model.expanded.contains(id)
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: partial ? "minus.circle.fill" : on && ready ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 17))
+                    .opacity(ready ? 1 : 0.35)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tr(rule.title.string ?? id)).font(.system(size: 14, weight: .medium))
+                    if let app = rule.in_use_by.string, rule.status.string == "in_use" {
+                        Text("Skipped while \(app) is open").font(.system(size: 12)).foregroundStyle(Color(hex: "#FFD54F"))
+                    } else if let note = rule.note.string, !note.isEmpty {
+                        Text(tr(note)).font(.system(size: 12)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer()
+                if rule.status.string != "in_use" {
+                    Text(verbatim: bytes(rule.bytes.double ?? 0)).font(.system(size: 14)).monospacedDigit()
+                }
+                if ready && !items.isEmpty {
+                    Button {
+                        if open { model.expanded.remove(id) } else { model.expanded.insert(id) }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(String(localized: "Show items"))
                 }
             }
-            Spacer()
-            Text(verbatim: bytes(rule.bytes.double ?? 0)).font(.system(size: 14)).monospacedDigit()
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard ready else { return }
+                model.toggleRule(rule)
+            }
+            if open && ready {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(items, id: \.path) { item in itemRow(item, in: rule) }
+                }
+                .padding(.leading, 29).padding(.bottom, 6)
+            }
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(on && ready ? 0.12 : 0)))
+    }
+
+    private func itemRow(_ item: (path: String, bytes: Double), in rule: JSON) -> some View {
+        let on = model.selected.contains(rule.id.string ?? "") && !model.excluded.contains(item.path)
+        let url = URL(fileURLWithPath: item.path)
+        return HStack(spacing: 10) {
+            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 14))
+            Text(verbatim: url.deletingLastPathComponent().lastPathComponent + "/" + url.lastPathComponent)
+                .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                .help(item.path)
+            Spacer()
+            Text(verbatim: bytes(item.bytes)).font(.system(size: 12)).monospacedDigit().foregroundStyle(.dim)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 4)
         .contentShape(Rectangle())
-        .onTapGesture {
-            guard ready else { return }
-            if on { model.selected.remove(id) } else { model.selected.insert(id) }
+        .onTapGesture { model.toggleItem(item.path, in: rule) }
+        .contextMenu {
+            Button(String(localized: "Show in Finder")) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
         }
     }
 
@@ -213,8 +305,7 @@ struct JunkPage: View {
                 .padding(18)
                 .glassPanel()
             } else {
-                ProgressView(value: model.cleanProgress.removed.double ?? 0, total: max(model.cleanProgress.total.double ?? 1, 1))
-                    .brightScroller()
+                RemovalProgress(progress: model.cleanProgress)
             }
             Spacer()
         }
@@ -241,6 +332,29 @@ struct JunkPage: View {
             } else if model.phase == .review {
                 Text(verbatim: bytes(model.selectedBytes)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
             }
+        }
+    }
+}
+
+/// How far a removal is: a bar over the items, the one being removed now, bytes freed.
+struct RemovalProgress: View {
+    let progress: JSON
+
+    var body: some View {
+        let p = progress
+        let done = ["removed", "skipped", "failed"].compactMap { p[$0].double }.reduce(0, +)
+        let total = max(p.total.double ?? 1, 1)
+        VStack(alignment: .leading, spacing: 8) {
+            ProgressView(value: min(done, total), total: total).brightScroller()
+            HStack {
+                if let current = p.current.string {
+                    Text("Removing \(URL(fileURLWithPath: current).lastPathComponent)")
+                        .lineLimit(1).truncationMode(.middle).help(current)
+                }
+                Spacer()
+                Text("\(Int(done)) of \(Int(total)) · \(bytes(p.bytes.double ?? 0)) freed").monospacedDigit()
+            }
+            .font(.system(size: 12)).foregroundStyle(.dim)
         }
     }
 }

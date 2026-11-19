@@ -18,6 +18,10 @@ enum Engine {
 
     static var version: String? { call(["op": "version"]).version.string }
 
+    /// Settings key: scans take every core at normal priority instead of making room.
+    static let fastKey = "fastScans"
+    static func setFast(_ fast: Bool) { _ = call(["op": "priority", "fast": fast]) }
+
     /// A long request as a job: every event until "done". Ending the stream early (the
     /// consumer stops or its task is cancelled) cancels the job.
     static func run(_ request: [String: Any]) -> AsyncStream<JSON> {

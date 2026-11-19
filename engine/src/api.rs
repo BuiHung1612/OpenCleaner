@@ -14,6 +14,10 @@ use std::sync::atomic::AtomicBool;
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Request {
     Version,
+    /// Fast scans: every core at normal priority (off: leave room for the user's work).
+    Priority {
+        fast: bool,
+    },
     /// Dashboard reading (CPU since the previous reading).
     Status,
     Size {
@@ -36,10 +40,13 @@ enum Request {
         #[serde(default)]
         list: bool,
     },
-    /// Remove the items of `rules` from a scanned plan: `progress`, then `cleaned`.
+    /// Remove the items of `rules` from a scanned plan, except the paths in `skip`:
+    /// `progress`, then `cleaned`.
     Clean {
         plan: u64,
         rules: Vec<String>,
+        #[serde(default)]
+        skip: Vec<std::path::PathBuf>,
     },
     /// Installed apps at once (`apps`), then their sizes as they are measured (`sizes`).
     Apps,
@@ -116,6 +123,10 @@ pub fn call(request: &str) -> Value {
     match parse(request) {
         Err(e) => e,
         Ok(Request::Version) => json!({"ok": true, "version": crate::VERSION}),
+        Ok(Request::Priority { fast }) => {
+            crate::fs::walk::FAST.store(fast, std::sync::atomic::Ordering::Relaxed);
+            json!({"ok": true})
+        }
         Ok(Request::Status) => {
             let mut v = serde_json::to_value(status::read()).unwrap_or(Value::Null);
             v["ok"] = json!(true);
@@ -181,6 +192,8 @@ pub fn call(request: &str) -> Value {
 
 /// Runs a request as a job, reporting each event; the last one is `{"event":"done"}`.
 pub fn run(request: &str, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
+    // scans and removals yield the CPU and the disk to whatever the user is doing
+    crate::fs::walk::background();
     match parse(request) {
         Err(e) => emit(e),
         Ok(req) => run_request(req, cancel, emit),
@@ -191,6 +204,10 @@ pub fn run(request: &str, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
 fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
     match req {
         Request::Version => emit(json!({"event": "version", "version": crate::VERSION})),
+        Request::Priority { fast } => {
+            crate::fs::walk::FAST.store(fast, std::sync::atomic::Ordering::Relaxed);
+            emit(json!({"event": "priority", "fast": fast}));
+        }
         Request::Status => {
             let mut v = serde_json::to_value(status::read()).unwrap_or(Value::Null);
             v["event"] = json!("status");
@@ -296,14 +313,14 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             let plan = clean::scan_with(ctx(), rule_set(), &running, list, cancel, &mut progress);
             emit_value("plan", &plan, emit);
         }
-        Request::Clean { plan, rules } => {
+        Request::Clean { plan, rules, skip } => {
             let mut progress = |o: &clean::Outcome, total: u64| {
                 let mut v = serde_json::to_value(o).unwrap_or(Value::Null);
                 v["event"] = json!("progress");
                 v["total"] = json!(total);
                 emit(v);
             };
-            match clean::execute(ctx(), plan, &rules, cancel, &mut progress) {
+            match clean::execute(ctx(), plan, &rules, &skip, cancel, &mut progress) {
                 Ok(outcome) => emit_value("cleaned", &outcome, emit),
                 Err(e) => emit(json!({"event": "cleaned", "error": e})),
             }

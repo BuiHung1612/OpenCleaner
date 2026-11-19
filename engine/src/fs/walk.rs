@@ -20,7 +20,12 @@ pub trait Visitor: Sync {
     fn error(&self, path: &Path, tag: u32, err: io::Error);
 }
 
-/// Worker threads: I/O bound, so more than the core count keeps the disk queue full.
+/// Fast mode: scans take every core at normal priority. Off (the default), they leave a
+/// quarter of the cores free and run below interactive work, so the machine stays smooth.
+pub static FAST: AtomicBool = AtomicBool::new(false);
+
+/// Worker threads: one per core when fast, three per four cores otherwise. More threads
+/// were no faster (the time goes to the kernel reading directories).
 pub fn default_threads() -> usize {
     if let Some(n) = std::env::var("OC_THREADS")
         .ok()
@@ -31,7 +36,11 @@ pub fn default_threads() -> usize {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    (cores * 2).clamp(4, 64)
+    if FAST.load(Ordering::Relaxed) {
+        cores.clamp(4, 64)
+    } else {
+        (cores * 3 / 4).clamp(2, 48)
+    }
 }
 
 struct Queue {
@@ -89,6 +98,7 @@ fn worker(
     cancel: &AtomicBool,
     visitor: &dyn Visitor,
 ) {
+    background();
     let mut subdirs = Vec::new();
     loop {
         let (dir, tag) = {
@@ -129,5 +139,24 @@ fn worker(
         drop(q);
         // wake idle workers for the new directories, and everyone when the walk is done
         ready.notify_all();
+    }
+}
+
+/// Runs this thread below interactive work: the machine stays responsive during a scan
+/// or a removal, and the disk serves other apps first when they need it.
+pub fn background() {
+    if FAST.load(Ordering::Relaxed) {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0);
+    }
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+        };
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     }
 }

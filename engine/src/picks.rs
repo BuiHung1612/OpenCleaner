@@ -125,6 +125,9 @@ pub struct Outcome {
     /// Per item, in request order: "removed", "skipped: why" or "failed: why".
     pub results: Vec<String>,
     pub cancelled: bool,
+    /// The item being worked on now (progress events only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<PathBuf>,
 }
 
 /// Acts on the items at `indexes` of list `plan`, each re-checked right before.
@@ -147,7 +150,8 @@ pub fn execute(
     let mut ledger = ledger::Writer::open(ctx);
     let session = ledger::now();
     let mut out = Outcome::default();
-    let mut last = Instant::now();
+    // the first item is reported at once: a big folder can take a while
+    let mut last = Instant::now() - Duration::from_secs(1);
     let total = indexes.len() as u64;
     for &i in indexes {
         if cancel.load(Ordering::Relaxed) {
@@ -159,6 +163,11 @@ pub fn execute(
             out.skipped += 1;
             continue;
         };
+        if last.elapsed() >= Duration::from_millis(150) {
+            out.current = Some(pick.path.clone());
+            progress(&out, total);
+            last = Instant::now();
+        }
         let result = act(pick, &running, ctx);
         let (word, reason) = match &result {
             Ok(()) => {
@@ -189,11 +198,8 @@ pub fn execute(
             result: word.into(),
             reason,
         });
-        if last.elapsed() >= Duration::from_millis(150) {
-            progress(&out, total);
-            last = Instant::now();
-        }
     }
+    out.current = None;
     ledger.write(&Line::Session {
         id: session,
         command,

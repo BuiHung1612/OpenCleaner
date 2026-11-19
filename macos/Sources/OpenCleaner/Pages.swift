@@ -219,6 +219,7 @@ struct SettingsView: View {
     @AppStorage("refreshInterval") private var refreshInterval = 5
     @AppStorage("language") private var language = ""
     @AppStorage(Updater.autoKey) private var checkUpdates = true
+    @AppStorage(Engine.fastKey) private var fastScans = false
     @State private var languageChanged = false
 
     var body: some View {
@@ -250,6 +251,10 @@ struct SettingsView: View {
                     .font(.system(size: 12)).foregroundStyle(.dim)
             }
             Section(String(localized: "Engine")) {
+                Toggle(String(localized: "Faster scans"), isOn: $fastScans)
+                    .onChange(of: fastScans) { Engine.setFast(fastScans) }
+                Text("Off (recommended): scans and removals give way to your other apps, so the Mac stays smooth. On: they take every CPU core to finish sooner, and other apps may lag or freeze until they are done.")
+                    .font(.system(size: 12)).foregroundStyle(.dim)
                 LabeledContent(String(localized: "OpenCleaner engine")) {
                     Text(verbatim: Engine.version ?? "—").font(.system(size: 11, design: .monospaced))
                 }

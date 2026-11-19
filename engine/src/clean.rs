@@ -189,6 +189,8 @@ pub fn scan_with(
     items.retain(|i| i.bytes > 0);
     tally(&mut summaries, &items, &sizes_of(&items));
     if list {
+        let mut items = items.clone();
+        items.sort_by_key(|i| std::cmp::Reverse(i.bytes));
         for item in &items {
             summaries[item.rule]
                 .paths
@@ -341,15 +343,19 @@ pub struct Outcome {
     pub failed: u64,
     pub first_failure: Option<String>,
     pub cancelled: bool,
+    /// The item being worked on now (progress events only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<PathBuf>,
 }
 
-/// Removes the items of `rule_ids` from plan `plan_id`. Each item is checked again first:
+/// Removes the items of `rule_ids` from plan `plan_id`, except those in `skip`. Each item is checked again first:
 /// its app is not running now, the guards still accept the path, and it is still the
 /// same file system object that was measured.
 pub fn execute(
     ctx: &Context,
     plan_id: u64,
     rule_ids: &[String],
+    skip: &[PathBuf],
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&Outcome, u64),
 ) -> Result<Outcome, String> {
@@ -364,14 +370,15 @@ pub fn execute(
     let running = Running::snapshot();
     let selected: Vec<&Item> = items
         .iter()
-        .filter(|i| rule_ids.contains(&rules[i.rule].id))
+        .filter(|i| rule_ids.contains(&rules[i.rule].id) && !skip.contains(&i.path))
         .collect();
     let total = selected.len() as u64;
 
     let mut ledger = ledger::Writer::open(ctx);
     let session = ledger::now();
     let mut out = Outcome::default();
-    let mut last = Instant::now();
+    // the first item is reported at once: a big folder can take a while
+    let mut last = Instant::now() - Duration::from_secs(1);
     for item in selected {
         if cancel.load(Ordering::Relaxed) {
             out.cancelled = true;
@@ -383,6 +390,11 @@ pub fn execute(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        if last.elapsed() >= Duration::from_millis(150) {
+            out.current = Some(item.path.clone());
+            progress(&out, total);
+            last = Instant::now();
+        }
         let refusal = if let Some(app) = running.any(&rule.running) {
             Some(format!("{app} is running"))
         } else if rule.item_is_bundle_id && running.contains(&name) {
@@ -423,11 +435,8 @@ pub fn execute(
             result: result.into(),
             reason,
         });
-        if last.elapsed() >= Duration::from_millis(150) {
-            progress(&out, total);
-            last = Instant::now();
-        }
     }
+    out.current = None;
     ledger.write(&Line::Session {
         id: session,
         command: "clean".into(),

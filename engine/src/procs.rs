@@ -3,11 +3,12 @@
 //! macOS: the bundle id of every app bundle a running process lives in (helpers inside
 //! an app count as that app). Windows: lower-cased executable names.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default)]
 pub struct Running {
-    names: HashSet<String>,
+    /// lower-cased id or executable name → the name to show (the app's name)
+    names: HashMap<String, String>,
 }
 
 impl Running {
@@ -20,29 +21,33 @@ impl Running {
     /// For tests: pretend these are running.
     pub fn of(names: &[&str]) -> Running {
         Running {
-            names: names.iter().map(|n| n.to_ascii_lowercase()).collect(),
+            names: names
+                .iter()
+                .map(|n| (n.to_ascii_lowercase(), n.to_string()))
+                .collect(),
         }
     }
 
     /// Is any of `ids` running? Compared case-insensitively.
+    /// The name of the first of `ids` that runs (case-insensitive), as people know it.
     pub fn any(&self, ids: &[String]) -> Option<String> {
         ids.iter()
-            .find(|id| self.names.contains(&id.to_ascii_lowercase()))
+            .find_map(|id| self.names.get(&id.to_ascii_lowercase()))
             .cloned()
     }
 
     pub fn contains(&self, id: &str) -> bool {
-        self.names.contains(&id.to_ascii_lowercase())
+        self.names.contains_key(&id.to_ascii_lowercase())
     }
 }
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
-    pub fn running() -> HashSet<String> {
-        let mut out = HashSet::new();
+    pub fn running() -> HashMap<String, String> {
+        let mut out = HashMap::new();
         let mut bundles: HashMap<PathBuf, Option<String>> = HashMap::new();
         for pid in pids() {
             let Some(exe) = pid_path(pid) else { continue };
@@ -55,11 +60,14 @@ mod platform {
                     .entry(bundle.to_path_buf())
                     .or_insert_with(|| bundle_id(bundle));
                 if let Some(id) = id {
-                    out.insert(id.to_ascii_lowercase());
+                    let app = bundle.file_stem().unwrap_or_default().to_string_lossy();
+                    out.insert(id.to_ascii_lowercase(), app.into_owned());
                 }
             }
             if let Some(name) = exe.file_name() {
-                out.insert(name.to_string_lossy().to_ascii_lowercase());
+                let name = name.to_string_lossy();
+                out.entry(name.to_ascii_lowercase())
+                    .or_insert_with(|| name.into_owned());
             }
         }
         out
@@ -100,15 +108,15 @@ mod platform {
 
 #[cfg(windows)]
 mod platform {
-    use std::collections::HashSet;
+    use std::collections::HashMap;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     };
 
-    pub fn running() -> HashSet<String> {
-        let mut out = HashSet::new();
+    pub fn running() -> HashMap<String, String> {
+        let mut out = HashMap::new();
         let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
         if snap == INVALID_HANDLE_VALUE {
             return out;
@@ -122,7 +130,9 @@ mod platform {
                 .iter()
                 .position(|&c| c == 0)
                 .unwrap_or(entry.szExeFile.len());
-            out.insert(String::from_utf16_lossy(&entry.szExeFile[..len]).to_ascii_lowercase());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            let shown = name.strip_suffix(".exe").unwrap_or(&name).to_string();
+            out.insert(name.to_ascii_lowercase(), shown);
             ok = unsafe { Process32NextW(snap, &mut entry) };
         }
         unsafe { CloseHandle(snap) };
@@ -132,7 +142,7 @@ mod platform {
 
 #[cfg(not(any(target_os = "macos", windows)))]
 mod platform {
-    pub fn running() -> std::collections::HashSet<String> {
+    pub fn running() -> std::collections::HashMap<String, String> {
         Default::default()
     }
 }

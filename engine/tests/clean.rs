@@ -56,11 +56,21 @@ fn rule<'a>(plan: &'a PlanSummary, id: &str) -> Option<&'a clean::RuleSummary> {
 }
 
 fn run(h: &Home, plan: &PlanSummary, ids: &[&str]) -> clean::Outcome {
+    run_except(h, plan, ids, &[])
+}
+
+fn run_except(
+    h: &Home,
+    plan: &PlanSummary,
+    ids: &[&str],
+    skip: &[std::path::PathBuf],
+) -> clean::Outcome {
     let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
     clean::execute(
         &h.ctx,
         plan.plan,
         &ids,
+        skip,
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -103,6 +113,27 @@ fn scan_measures_and_removes_nothing_then_clean_removes_only_selected() {
         h.p("logs/old.log").exists(),
         "an unselected rule keeps its files"
     );
+}
+
+#[test]
+fn listed_items_come_biggest_first_and_unticked_ones_stay() {
+    let h = Home::new();
+    write(&h.p("Library/Caches/app.small/data.bin"), 10_000);
+    write(&h.p("Library/Caches/app.big/data.bin"), 300_000);
+    let plan = clean::scan_with(
+        &h.ctx,
+        &rules(CACHE_RULE),
+        &Running::default(),
+        true,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    );
+    let listed = rule(&plan, "c").unwrap().paths.clone().unwrap();
+    assert!(listed[0].0.ends_with("app.big") && listed[1].0.ends_with("app.small"));
+    let out = run_except(&h, &plan, &["c"], &[h.p("Library/Caches/app.small")]);
+    assert_eq!(out.removed, 1);
+    assert!(!h.p("Library/Caches/app.big").exists());
+    assert!(h.p("Library/Caches/app.small/data.bin").exists());
 }
 
 #[test]
@@ -318,6 +349,7 @@ fn an_expired_plan_cannot_be_executed() {
         &h.ctx,
         999_999,
         &["c".into()],
+        &[],
         &AtomicBool::new(false),
         &mut |_, _| {},
     );

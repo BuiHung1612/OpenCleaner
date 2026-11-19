@@ -11,6 +11,7 @@ struct OpenCleanerApp: App {
         // needed when launched as a bare executable (`swift run`); a no-op inside the .app
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate()
+        Engine.setFast(UserDefaults.standard.bool(forKey: Engine.fastKey))
     }
 
     var body: some Scene {

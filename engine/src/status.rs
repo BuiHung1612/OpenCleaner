@@ -209,6 +209,61 @@ mod platform {
         fn getloadavg(loadavg: *mut f64, nelem: c_int) -> c_int;
     }
 
+    /// The name people know the Mac by ("Mac mini (2023)"); Apple silicon Macs keep it in
+    /// the device tree. Intel Macs do not: the caller falls back to hw.model.
+    fn product_name() -> Option<String> {
+        use std::ffi::{c_char, c_void};
+        #[link(name = "IOKit", kind = "framework")]
+        unsafe extern "C" {
+            fn IORegistryEntryFromPath(main_port: u32, path: *const c_char) -> u32;
+            fn IORegistryEntryCreateCFProperty(
+                entry: u32,
+                key: *const c_void,
+                allocator: *const c_void,
+                options: u32,
+            ) -> *const c_void;
+            fn IOObjectRelease(object: u32) -> i32;
+        }
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            fn CFStringCreateWithCString(
+                alloc: *const c_void,
+                s: *const c_char,
+                encoding: u32,
+            ) -> *const c_void;
+            fn CFGetTypeID(cf: *const c_void) -> usize;
+            fn CFDataGetTypeID() -> usize;
+            fn CFDataGetLength(data: *const c_void) -> isize;
+            fn CFDataGetBytePtr(data: *const c_void) -> *const u8;
+            fn CFRelease(cf: *const c_void);
+        }
+        unsafe {
+            let entry = IORegistryEntryFromPath(0, c"IODeviceTree:/product".as_ptr());
+            if entry == 0 {
+                return None;
+            }
+            let key =
+                CFStringCreateWithCString(std::ptr::null(), c"product-name".as_ptr(), 0x0800_0100);
+            let data = IORegistryEntryCreateCFProperty(entry, key, std::ptr::null(), 0);
+            CFRelease(key);
+            IOObjectRelease(entry);
+            if data.is_null() {
+                return None;
+            }
+            let name = (CFGetTypeID(data) == CFDataGetTypeID()).then(|| {
+                let bytes = std::slice::from_raw_parts(
+                    CFDataGetBytePtr(data),
+                    CFDataGetLength(data).max(0) as usize,
+                );
+                String::from_utf8_lossy(bytes)
+                    .trim_end_matches('\0')
+                    .to_string()
+            });
+            CFRelease(data);
+            name.filter(|n| !n.is_empty())
+        }
+    }
+
     fn sysctl_string(name: &str) -> String {
         let c = CString::new(name).unwrap();
         let mut len = 0usize;
@@ -354,7 +409,7 @@ mod platform {
     pub fn hardware() -> Hardware {
         let total: u64 = sysctl_value("hw.memsize").unwrap_or(0);
         Hardware {
-            model: sysctl_string("hw.model"),
+            model: product_name().unwrap_or_else(|| sysctl_string("hw.model")),
             cpu_model: sysctl_string("machdep.cpu.brand_string"),
             total_ram: format_gb(total),
             os_version: format!("macOS {}", sysctl_string("kern.osproductversion")),

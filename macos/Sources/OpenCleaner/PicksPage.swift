@@ -201,6 +201,7 @@ struct PicksPage: View {
                     switch model.phase {
                     case .finding: Spacer()
                     case .done: PicksOutcome(outcome: model.outcome, error: model.error); Spacer()
+                    case .acting: RemovalProgress(progress: model.progress); PicksList(model: model)
                     default: PicksList(model: model)
                     }
                 }
@@ -338,7 +339,8 @@ struct UninstallerPage: View {
 
             switch picks.phase {
             case .idle: appList
-            case .finding, .acting: Spacer()
+            case .finding: Spacer()
+            case .acting: RemovalProgress(progress: picks.progress); Spacer()
             case .review: PicksList(model: picks)
             case .done: PicksOutcome(outcome: picks.outcome, error: picks.error); Spacer()
             }

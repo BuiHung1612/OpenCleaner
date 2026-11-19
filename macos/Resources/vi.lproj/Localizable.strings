@@ -225,3 +225,8 @@
 "Intel code" = "Mã Intel";
 "Open now: quit it first" = "Đang mở: hãy thoát trước";
 "Looking through caches, logs and app data…" = "Đang xem bộ nhớ đệm, nhật ký và dữ liệu ứng dụng…";
+"Show items" = "Xem từng mục";
+"Removing %@" = "Đang xóa %@";
+"%lld of %lld · %@ freed" = "%1$lld/%2$lld · đã giải phóng %3$@";
+"Faster scans" = "Quét nhanh hơn";
+"Off (recommended): scans and removals give way to your other apps, so the Mac stays smooth. On: they take every CPU core to finish sooner, and other apps may lag or freeze until they are done." = "Tắt (khuyên dùng): quét và xóa nhường CPU cho các ứng dụng khác để máy luôn mượt. Bật: dùng toàn bộ nhân CPU để xong sớm hơn, nhưng trong lúc chạy các ứng dụng khác có thể bị giật, lag hoặc treo tạm thời. Hãy cân nhắc trước khi bật.";

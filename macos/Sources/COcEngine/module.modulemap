@@ -2,5 +2,6 @@
 module COcEngine {
     header "../../../engine/include/oc_engine.h"
     link "oc_engine"
+    link framework "IOKit"
     export *
 }
