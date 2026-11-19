@@ -11,6 +11,8 @@ pub struct Status {
     pub hardware: Hardware,
     /// e.g. "3d 4h"
     pub uptime: String,
+    /// The same in seconds, for the app to word in the user's language
+    pub uptime_secs: Option<u64>,
     pub cpu: Cpu,
     pub memory: Memory,
     pub disks: Vec<Disk>,
@@ -126,6 +128,7 @@ pub fn read() -> Status {
     Status {
         hardware: platform::hardware(),
         uptime: platform::uptime().map(format_uptime).unwrap_or_default(),
+        uptime_secs: platform::uptime().map(|d| d.as_secs()),
         trash_size: platform::trash_size(),
         top_processes: procs,
         cpu,
@@ -155,6 +158,28 @@ fn format_uptime(d: Duration) -> String {
     } else {
         format!("{minutes}m")
     }
+}
+
+/// Only digits and dots ("2.1.328"): a version, not a name (some tools install each
+/// version as an executable named after it).
+fn version_like(name: &str) -> bool {
+    name.contains(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+/// A process name people recognise: for a version-like name, the nearest folder of its
+/// executable that is a name ("claude" for ~/.local/share/claude/versions/2.1.328).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn process_name(name: String, exe: impl FnOnce() -> Option<std::path::PathBuf>) -> String {
+    if !version_like(&name) {
+        return name;
+    }
+    let Some(exe) = exe() else { return name };
+    exe.iter()
+        .rev()
+        .filter_map(|c| c.to_str())
+        .find(|c| !version_like(c) && !matches!(*c, "versions" | "bin" | "MacOS" | "Current"))
+        .map_or(name, str::to_owned)
 }
 
 fn format_gb(bytes: u64) -> String {
@@ -407,6 +432,15 @@ mod platform {
         (!r.permission_only || r.bytes > 0).then_some(r.bytes)
     }
 
+    /// Only asked for version-like names (see `process_name`).
+    fn pid_path(pid: i32) -> Option<std::path::PathBuf> {
+        use std::os::unix::ffi::OsStringExt;
+        let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        buf.truncate(n.max(0) as usize);
+        (n > 0).then(|| std::ffi::OsString::from_vec(buf).into())
+    }
+
     /// (pid, name, cpu time in ns, resident bytes) of every process we may inspect.
     pub fn processes() -> Vec<(i32, String, u64, u64)> {
         let mut tb = libc::mach_timebase_info { numer: 0, denom: 0 };
@@ -444,6 +478,7 @@ mod platform {
             let mut name = [0u8; 256];
             let len = unsafe { libc::proc_name(pid, name.as_mut_ptr().cast(), name.len() as u32) };
             let name = String::from_utf8_lossy(&name[..len.max(0) as usize]).into_owned();
+            let name = super::process_name(name, || pid_path(pid));
             // task times are Mach absolute time units (not ns on Apple Silicon)
             let ticks = info.pti_total_user as u128 + info.pti_total_system as u128;
             out.push((
@@ -642,5 +677,25 @@ mod platform {
     }
     pub fn processes() -> Vec<(i32, String, u64, u64)> {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn version_named_processes_take_their_folder_name() {
+        let claude = || {
+            Some(PathBuf::from(
+                "/Users/a/.local/share/claude/versions/2.1.328",
+            ))
+        };
+        assert_eq!(process_name("2.1.328".into(), claude), "claude");
+        assert_eq!(process_name("Safari".into(), || unreachable!()), "Safari");
+        assert_eq!(process_name("1.0".into(), || None), "1.0");
+        assert!(!version_like("..."));
+        assert!(!version_like("node22"));
     }
 }

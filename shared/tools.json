@@ -36,7 +36,7 @@
       "title": "Project Junk",
       "subtitle": "Remove rebuildable build folders: node_modules, target, build, dist and more.",
       "points": [
-        "Skips projects touched in the last 7 days",
+        "Lists projects touched in the last 7 days but leaves them unticked",
         "Protects Git-tracked files"
       ],
       "icon": "hammer",

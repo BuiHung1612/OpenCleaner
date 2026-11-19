@@ -321,6 +321,11 @@ struct SpaceLensPage: View {
                     .keyboardShortcut("[", modifiers: .command)
                 Text(breadcrumb).font(.app(15, weight: .semibold)).lineLimit(1).truncationMode(.head)
                 Spacer()
+                // `force` drops only this page's copy: the engine scan still takes unchanged
+                // folders from its FSEvents-checked directory cache (dircache.rs). A home
+                // folder that is slow here is slow there too: its event history since the
+                // oldest record (up to a day) can be too long to replay within the replay's
+                // 10 s budget, and the cache then falls back to stat-ing every folder.
                 Button { model.load(model.stack.last ?? nil, force: true) } label: {
                     Label(String(localized: "Scan Again"), systemImage: "arrow.clockwise").labelStyle(.iconOnly)
                 }
@@ -387,6 +392,8 @@ struct SpaceLensPage: View {
 
     private var breadcrumb: String {
         guard let last = model.stack.last else { return "" }
+        // the overview's "Home" row, opened, is titled the same
+        if last == NSHomeDirectory() { return String(localized: "Home") }
         return last.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? model.volume?.name ?? "/"
     }
 
@@ -487,7 +494,7 @@ struct EntryRow: View {
 
     var body: some View {
         let path = entry.path.string ?? ""
-        let name = entry.name.string ?? "?"
+        let name = entry.displayName
         HStack(spacing: 12) {
             // overview rows (Home, Applications…) are summaries: never offered for removal
             Button(action: toggle) {
@@ -496,9 +503,6 @@ struct EntryRow: View {
             .buttonStyle(.plain)
             .opacity(entry.selectable.bool ? 1 : 0)
             .disabled(!entry.selectable.bool)
-            .accessibilityHidden(!entry.selectable.bool)
-            .accessibilityLabel(String(localized: "Select \(name)"))
-            .accessibilityValue(selected ? String(localized: "Selected") : String(localized: "Not selected"))
             Image(nsImage: fileIcon(path)).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: name).font(.app(14, weight: .medium)).lineLimit(1)
@@ -519,9 +523,25 @@ struct EntryRow: View {
         .onHover { inside in
             if inside { hover.path = path } else if hover.path == path { hover.path = nil }
         }
+        // one VoiceOver element per row: "<name>, <size>", opened with the default action
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: "\(name), \(bytes(entry.size.double))"))
+        .accessibilityValue(entry.selectable.bool ? (selected ? String(localized: "Selected") : String(localized: "Not selected")) : "")
+        .accessibilityAddTraits(entry.is_dir.bool ? .isButton : [])
+        .accessibilityAction(.default, open)
         .accessibilityAction(named: String(localized: "Open"), open)
+        .accessibilityAction(named: selected ? String(localized: "Deselect") : String(localized: "Select"), toggle)
         .peekable(path)
         .contextMenu { FileMenu(path: path) }
+    }
+}
+
+extension JSON {
+    /// A Space Lens entry's name; the overview's rows (never selectable) are the engine's
+    /// English area names ("Home", "Applications"…), shown in the user's language.
+    var displayName: String {
+        let name = self.name.string ?? "?"
+        return self.selectable.bool ? name : tr(name)
     }
 }
 
@@ -541,7 +561,7 @@ struct BubbleItem: Identifiable {
         guard total > 0 else { return [] }
         let big = sized.prefix(14).filter { ($0.size.double ?? 0) >= total * 0.015 }
         var items = big.enumerated().map { i, e in
-            BubbleItem(id: e.path.string ?? "\(i)", name: e.name.string ?? "?", size: e.size.double ?? 0, entry: e)
+            BubbleItem(id: e.path.string ?? "\(i)", name: e.displayName, size: e.size.double ?? 0, entry: e)
         }
         let rest = total - big.compactMap(\.size.double).reduce(0, +)
         if rest >= total * 0.015 {

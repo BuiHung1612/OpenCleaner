@@ -160,7 +160,8 @@ struct PartRows: View {
                 Text(verbatim: child.name.string ?? URL(fileURLWithPath: path).lastPathComponent)
                     .font(.app(12)).lineLimit(1).truncationMode(.middle).help(path)
                 Spacer()
-                Text(verbatim: bytes(child.size.double ?? 0)).font(.app(12)).monospacedDigit().foregroundStyle(.dim)
+                Text(verbatim: sizeText(child.size.double ?? 0, selected: parts.bytes(path, whole: child.size.double ?? 0), partial: partial))
+                    .font(.app(12)).monospacedDigit().foregroundStyle(.dim)
                 if child.is_dir.bool && Parts.canOpen(path) {
                     OpenButton(open: opened) { open(path) }
                 } else {
@@ -168,7 +169,7 @@ struct PartRows: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
-            .checkRow(on) { toggle(path) }
+            .checkRow(on, partial: partial) { toggle(path) }
             .peekable(path)
             .contextMenu { FileMenu(path: path) }
             if opened {

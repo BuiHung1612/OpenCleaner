@@ -56,7 +56,10 @@ struct DevToolsPage: View {
                         EmptyState(symbol: "hammer", title: String(localized: "No developer tools found"),
                                    message: String(localized: "Docker and Xcode's simulators are not set up on this Mac."))
                     } else {
-                        if l.docker.string != "missing" {
+                        if l.docker.string == "missing" {
+                            section(String(localized: "Docker"))
+                            Text("Docker is not installed").font(.app(13)).foregroundStyle(.dim).padding(.horizontal, 12)
+                        } else {
                             let context = l.docker_context.string ?? ""
                             section(context.isEmpty ? String(localized: "Docker") : "Docker · \(context)")
                             if l.docker.string == "stopped" {
@@ -69,7 +72,8 @@ struct DevToolsPage: View {
                         }
                         if l.simulators.bool {
                             section(String(localized: "iOS Simulators"))
-                            Text("Simulators use \(bytes(l.devices_bytes.double)) in ~/Library/Developer/CoreSimulator/Devices")
+                            // the devices only; runtimes are listed below, each with its own size
+                            Text("Simulator devices use \(bytes(l.devices_bytes.double)) in ~/Library/Developer/CoreSimulator/Devices")
                                 .font(.app(13)).foregroundStyle(.dim).padding(.horizontal, 12)
                             ForEach(group("simulators"), id: \.id.string) { row($0) }
                         }

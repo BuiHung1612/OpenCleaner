@@ -149,7 +149,9 @@ pub fn candidates(apps: &[App]) -> Vec<Pick> {
         pick.bytes = saving;
         // installed by a .pkg (owned by root): listed, never ticked for the user, and said why
         let can_write = writable(&app.path);
-        pick.detail = if !can_write {
+        pick.detail = if !can_write && app.running {
+            "Open now · needs administrator rights".into()
+        } else if !can_write {
             "Needs administrator rights".into()
         } else if app.running {
             "Open now: quit it first".into()

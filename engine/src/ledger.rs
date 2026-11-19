@@ -69,6 +69,21 @@ pub enum Line {
     },
 }
 
+impl Line {
+    /// A session that did nothing (all skipped): not worth a row in the History.
+    fn is_empty_session(&self) -> bool {
+        matches!(
+            self,
+            Line::Session {
+                items: 0,
+                bytes: 0,
+                failed: 0,
+                ..
+            }
+        )
+    }
+}
+
 /// Appends lines; history is best effort and never stops a cleanup.
 pub struct Writer {
     file: Option<fs::File>,
@@ -87,6 +102,9 @@ impl Writer {
     }
 
     pub fn write(&mut self, line: &Line) {
+        if line.is_empty_session() {
+            return;
+        }
         if let (Some(f), Ok(text)) = (self.file.as_mut(), serde_json::to_string(line)) {
             let _ = writeln!(f, "{text}");
         }
@@ -111,6 +129,8 @@ pub fn sessions(ctx: &Context, limit: usize) -> Value {
                 trashed.push(json!({"from": path, "to": to}));
             }
             Line::Item { .. } | Line::Startup { .. } => {}
+            // written before empty sessions were left out
+            l if l.is_empty_session() => {}
             Line::Session {
                 command,
                 started,
@@ -218,5 +238,35 @@ mod tests {
             json!({"month": "2026-12", "bytes": 15, "sessions": 2})
         );
         assert_eq!(m[1], json!({"month": "2027-01", "bytes": 7, "sessions": 1}));
+    }
+
+    #[test]
+    fn sessions_that_did_nothing_are_left_out() {
+        let dir = std::env::temp_dir().join(format!("oc-ledger-{}", std::process::id()));
+        let ctx = Context {
+            home: dir.clone(),
+            vars: Default::default(),
+            data_dir: dir.clone(),
+        };
+        let session = |items, bytes, failed| Line::Session {
+            id: 1,
+            command: "slim".into(),
+            started: 1,
+            finished: 1,
+            items,
+            bytes,
+            failed,
+        };
+        let mut w = Writer::open(&ctx);
+        w.write(&session(0, 0, 0));
+        w.write(&session(0, 0, 1));
+        w.write(&session(2, 10, 0));
+        drop(w);
+        // an empty one from before the rule
+        let mut f = OpenOptions::new().append(true).open(path(&ctx)).unwrap();
+        writeln!(f, "{}", serde_json::to_string(&session(0, 0, 0)).unwrap()).unwrap();
+        let s = sessions(&ctx, 10);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(s["sessions"].as_array().unwrap().len(), 2);
     }
 }

@@ -66,7 +66,7 @@
 "See what takes up space on each drive as an interactive map, then send what you don't need to the Trash." = "Xem thứ gì chiếm dung lượng trên từng ổ qua bản đồ tương tác, rồi chuyển những gì không cần vào Thùng rác.";
 "Send" = "Gửi";
 "Show in Finder" = "Hiện trong Finder";
-"Skips projects touched in the last 7 days" = "Bỏ qua dự án có thay đổi trong 7 ngày gần đây";
+"Lists projects touched in the last 7 days but leaves them unticked" = "Dự án có thay đổi trong 7 ngày gần đây vẫn được liệt kê nhưng không được đánh dấu";
 "Slim Apps" = "Thu gọn ứng dụng";
 "Some folders could not be read fully; sizes are at least this big." = "Một số thư mục không đọc hết được; dung lượng thực tế ít nhất bằng số hiển thị.";
 "Space Lens" = "Space Lens";
@@ -111,7 +111,7 @@
 "Later" = "Để sau";
 "Open Release Page" = "Mở trang phát hành";
 "You have %@. Download the new version from the release page." = "Bạn đang dùng bản %@. Hãy tải bản mới ở trang phát hành.";
-"OpenCleaner quit unexpectedly last time" = "Lần trước OpenCleaner bị thóat đột ngột";
+"OpenCleaner quit unexpectedly last time" = "Lần trước OpenCleaner bị thoát đột ngột";
 "Report it on GitHub? You can review the crash details before posting." = "Báo lỗi trên GitHub? Bạn có thể xem lại thông tin sự cố trước khi gửi.";
 "Report on GitHub" = "Báo lỗi trên GitHub";
 "OpenCleaner %@ is available" = "Đã có OpenCleaner %@";
@@ -187,7 +187,7 @@
 "Looking for what these apps left behind…" = "Đang tìm những gì các ứng dụng này để lại…";
 "Looking…" = "Đang tìm…";
 "Nothing found." = "Không tìm thấy gì.";
-"Open now: quit it before uninstalling" = "Đang mở: hãy thóat ứng dụng trước khi gỡ";
+"Open now: quit it before uninstalling" = "Đang mở: hãy thoát ứng dụng trước khi gỡ";
 "Review" = "Xem lại";
 "Review what goes to the Trash. Nothing has been removed yet." = "Xem lại những gì sẽ vào Thùng rác. Chưa xóa gì cả.";
 "Working…" = "Đang xử lý…";
@@ -410,8 +410,8 @@
 "Run Selected" = "Chạy mục đã chọn";
 "All %lld tasks done." = "Đã xong cả %lld việc.";
 "%lld of %lld tasks done." = "Xong %1$lld/%2$lld việc.";
-"Load is normal" = "Tải CPU bình thường";
-"Busy: more work than cores" = "Bận: nhiều việc hơn số nhân CPU";
+"Load average is normal" = "Tải trung bình ở mức bình thường";
+"Load average high: more work than cores" = "Tải trung bình cao: nhiều việc hơn số nhân CPU";
 "Load average %@ on %lld cores" = "Tải trung bình %1$@ trên %2$lld nhân";
 "Not measured" = "Chưa đo được";
 "Needs Full Disk Access" = "Cần quyền Truy cập toàn bộ ổ đĩa";
@@ -431,7 +431,7 @@
 "Docker" = "Docker";
 "Docker is not running" = "Docker không chạy";
 "iOS Simulators" = "iOS Simulator";
-"Simulators use %@ in ~/Library/Developer/CoreSimulator/Devices" = "Các simulator chiếm %@ trong ~/Library/Developer/CoreSimulator/Devices";
+"Simulator devices use %@ in ~/Library/Developer/CoreSimulator/Devices" = "Các thiết bị simulator chiếm %@ trong ~/Library/Developer/CoreSimulator/Devices";
 "No developer tools found" = "Không tìm thấy công cụ lập trình";
 "Docker and Xcode's simulators are not set up on this Mac." = "Docker và simulator của Xcode chưa được cài trên máy Mac này.";
 "Run the cleanup of %lld items? What they remove cannot be put back." = "Chạy dọn dẹp %lld mục? Những gì bị xóa không thể khôi phục.";
@@ -488,3 +488,20 @@
 "Not allowed" = "Chưa cho phép";
 "Asked when needed" = "Hỏi khi cần";
 "Could not prepare the change." = "Không chuẩn bị được thay đổi.";
+
+/* QA pass */
+"Partly selected" = "Đã chọn một phần";
+"%@ of %@ selected" = "Đã chọn %1$@ trên %2$@";
+"Home" = "Thư mục người dùng";
+"System Library" = "Thư viện hệ thống";
+"System & other" = "Hệ thống & khác";
+"Turn Off %@" = "Tắt %@";
+"Turn On %@" = "Bật %@";
+"Docker is not installed" = "Chưa cài Docker";
+"Screenshot · today" = "Ảnh chụp màn hình · hôm nay";
+"%@ · today" = "%@ · hôm nay";
+"shares its data with the other copy: removing it frees no space" = "dùng chung dữ liệu với bản còn lại: xóa nó không giải phóng thêm dung lượng";
+"Open now · needs administrator rights" = "Đang mở · cần quyền quản trị";
+"Select" = "Chọn";
+"Deselect" = "Bỏ chọn";
+"%lld failed" = "%lld lỗi";

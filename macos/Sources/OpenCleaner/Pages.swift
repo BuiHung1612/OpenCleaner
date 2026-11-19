@@ -28,7 +28,7 @@ struct DashboardPage: View {
                     .help(String(localized: "Refresh"))
                 }
                 HStack(spacing: 16) {
-                    if let up = s.uptime.string { Text("Up for \(up)") }
+                    if let up = s.uptime_secs.double.map(duration) ?? s.uptime.string { Text("Up for \(up)") }
                     if let t = stream.updatedAt { Text("Updated \(t.formatted(date: .omitted, time: .standard))") }
                 }
                 .font(.app(13)).foregroundStyle(.dim)
@@ -41,9 +41,9 @@ struct DashboardPage: View {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 4), spacing: 16) {
                         Tile(replay: stream.replay, title: String(localized: "CPU"), icon: "cpu", value: percent(s.cpu.usage.double), fraction: (s.cpu.usage.double ?? 0) / 100,
                              detail: Self.load(s.cpu))
-                            .help(s.cpu.load1.double.map { String(localized: "Load average \(String(format: "%.1f", $0)) on \(Int(s.cpu.cores.double ?? 0)) cores") } ?? "")
+                            .help(s.cpu.load1.double.map { String(localized: "Load average \($0.formatted(.number.precision(.fractionLength(1)))) on \(Int(s.cpu.cores.double ?? 0)) cores") } ?? "")
                         Tile(replay: stream.replay, title: String(localized: "Memory"), icon: "memorychip", value: percent(s.memory.used_percent.double), fraction: (s.memory.used_percent.double ?? 0) / 100,
-                             detail: "\(bytes(s.memory.used.double)) / \(bytes(s.memory.total.double))")
+                             detail: "\(memBytes(s.memory.used.double)) / \(memBytes(s.memory.total.double))")
                         let disk = s.disks.array.first { $0.mount.string == "/" }
                         Tile(replay: stream.replay, title: String(localized: "Disk"), icon: "internaldrive", value: percent(disk?.used_percent.double), fraction: (disk?.used_percent.double ?? 0) / 100,
                              detail: String(localized: "\(bytes(disk.flatMap { d in d.total.double.flatMap { t in d.used.double.map { t - $0 } } })) free"))
@@ -61,7 +61,7 @@ struct DashboardPage: View {
                         HStack {
                             Text(verbatim: p.name.string ?? "?").lineLimit(1)
                             Spacer()
-                            Text(verbatim: "\(percent(p.cpu.double)) CPU · \(bytes(p.memory_bytes.double))").monospacedDigit().foregroundStyle(.dim)
+                            Text(verbatim: "\(percent(p.cpu.double)) CPU · \(memBytes(p.memory_bytes.double))").monospacedDigit().foregroundStyle(.dim)
                         }
                         .font(.app(13))
                     }
@@ -128,7 +128,7 @@ struct DashboardPage: View {
             ForEach(tips, id: \.text) { tip in
                 Button { Automation.shared.openModule = tip.module } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: tip.symbol).frame(width: 22)
+                        Image(systemName: tip.symbol).frame(width: 22).accessibilityHidden(true)
                         Text(verbatim: tip.text)
                         Spacer()
                         Image(systemName: "chevron.right").foregroundStyle(.dim)
@@ -144,11 +144,12 @@ struct DashboardPage: View {
         .glassPanel()
     }
 
-    /// Load average in words: more runnable work than cores means the Mac is busy.
+    /// The load average in words (not the CPU percentage above it, which can be high while
+    /// the load is normal): more runnable work than cores means the Mac is busy.
     static func load(_ cpu: JSON) -> String? {
         guard let load = cpu.load1.double else { return nil }
         let cores = max(cpu.cores.double ?? 1, 1)
-        return load > cores ? String(localized: "Busy: more work than cores") : String(localized: "Load is normal")
+        return load > cores ? String(localized: "Load average high: more work than cores") : String(localized: "Load average is normal")
     }
 
     /// Unknown size: macOS hides the Trash from apps without Full Disk Access.
@@ -238,12 +239,17 @@ struct HistoryPage: View {
                     ForEach(Array((sessions ?? []).enumerated()), id: \.offset) { _, s in
                         HStack {
                             Image(systemName: Self.icon(s.command.string ?? "")).frame(width: 22).foregroundStyle(.dim)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(verbatim: Self.title(s.command.string ?? "?")).font(.app(14, weight: .semibold))
                                 Text(verbatim: Self.when(s)).font(.app(12)).foregroundStyle(.dim)
                             }
                             Spacer()
                             Text("\(Int(s.items.double ?? 0)) items · \(bytes(s.bytes.double))").monospacedDigit()
+                            // a run where everything failed (an app that needs admin rights) says so
+                            if let failed = s.failed.double, failed > 0 {
+                                Text("\(Int(failed)) failed").monospacedDigit().foregroundStyle(Color.warn)
+                            }
                             // what this session moved to the Trash and is still there
                             if !s.trashed.array.isEmpty {
                                 Button(String(localized: "Put Back")) { Task { await putBack(s.trashed.array) } }
@@ -323,7 +329,8 @@ struct HistoryPage: View {
                 Text("All time: \(bytes(allTime))").font(.app(13)).foregroundStyle(.dim)
             }
             Chart(Array(months.suffix(12)), id: \.month.string) { m in
-                BarMark(x: .value("Month", Self.label(m.month.string)), y: .value("Freed", m.bytes.double ?? 0))
+                // a lone month would otherwise draw one bar across the whole chart
+                BarMark(x: .value("Month", Self.label(m.month.string)), y: .value("Freed", m.bytes.double ?? 0), width: .fixed(48))
                     .foregroundStyle(.white.opacity(0.85))
                     .cornerRadius(4)
             }
@@ -377,6 +384,13 @@ struct SettingsView: View {
         }
         .frame(width: 560 * max(1, TextScale.shared.value))
         .font(TextScale.shared.value == 1 ? nil : .app(13))
+        // opens on the screen the main window is on, not wherever macOS last put it
+        .background(WindowProbe { settings in
+            guard let main = NSApp.windows.first(where: { $0.identifier?.rawValue.contains("main") == true && $0.isVisible }),
+                  let screen = main.screen, settings.screen != screen else { return }
+            let area = screen.visibleFrame
+            settings.setFrameTopLeftPoint(NSPoint(x: area.midX - settings.frame.width / 2, y: area.maxY - 80))
+        })
         // the main window tints everything white for its gradients; Settings is a plain system window
         .tint(.accentColor)
     }
@@ -437,7 +451,9 @@ private struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
-        .scrollIndicators(.hidden)  // each tab fits its window
+        // each tab fits its window; .hidden still shows them when a mouse is attached
+        // (System Settings › Show scroll bars: Automatic)
+        .scrollIndicators(.never)
         .task { engineVersion = await Engine.ask(["op": "version"]).version.string }
     }
 
@@ -511,7 +527,9 @@ private struct CleaningSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
-        .scrollIndicators(.hidden)  // each tab fits its window
+        // each tab fits its window; .hidden still shows them when a mouse is attached
+        // (System Settings › Show scroll bars: Automatic)
+        .scrollIndicators(.never)
         .task {
             let reply = await Engine.ask(["op": "exclusions"])
             exclusions = reply.paths.strings
@@ -566,7 +584,9 @@ private struct DashboardSettings: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
-        .scrollIndicators(.hidden)  // each tab fits its window
+        // each tab fits its window; .hidden still shows them when a mouse is attached
+        // (System Settings › Show scroll bars: Automatic)
+        .scrollIndicators(.never)
     }
 }
 

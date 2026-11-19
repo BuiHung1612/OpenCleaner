@@ -41,6 +41,49 @@ fn display_name(program: &str, label: &str) -> String {
         .unwrap_or_else(|| label.to_string())
 }
 
+/// A launchd job's name: the app any of its arguments lives in; else, for a job run
+/// through a shell or interpreter ("sh -c …"), the first program path it runs; else the
+/// program's file name; else the label.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn job_name(exe: &str, args: &[String], label: &str) -> String {
+    const RUNNERS: [&str; 10] = [
+        "sh",
+        "bash",
+        "zsh",
+        "env",
+        "python3",
+        "python",
+        "osascript",
+        "open",
+        "perl",
+        "ruby",
+    ];
+    let words: Vec<&str> = args
+        .iter()
+        .flat_map(|a| a.split_whitespace())
+        .map(|w| w.trim_matches(|c| c == '"' || c == '\''))
+        .collect();
+    let in_app = words.iter().map(Path::new).find_map(|p| {
+        p.ancestors()
+            .find(|a| a.extension().is_some_and(|e| e == "app"))
+    });
+    if let Some(app) = in_app {
+        return display_name(&app.to_string_lossy(), label);
+    }
+    let runner = |w: &str| {
+        Path::new(w)
+            .file_name()
+            .is_some_and(|n| RUNNERS.contains(&n.to_string_lossy().as_ref()))
+    };
+    if !runner(exe) {
+        return display_name(exe, label);
+    }
+    words
+        .iter()
+        .find(|w| w.starts_with('/') && !runner(w))
+        .map_or_else(|| label.to_string(), |w| display_name(w, label))
+}
+
 /// A file that may be turned off: a plain file sitting directly in `dir`, inside the
 /// home, with no link on the way (the System Junk guards, with `dir` as the root).
 pub fn check_user_file(ctx: &Context, path: &Path, dir: &Path) -> Result<(), Refusal> {
@@ -151,6 +194,25 @@ mod tests {
         assert_eq!(restore_type(None, "C:\\x.exe"), 1);
         assert_eq!(restore_type(Some(7), "C:\\x.exe"), 1, "never another type");
     }
+
+    #[test]
+    fn jobs_run_through_a_shell_are_named_after_what_they_run() {
+        use super::job_name;
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let sh = args(&["/bin/sh", "-c", "exec '/opt/tools/bin/syncd' --quiet"]);
+        assert_eq!(job_name("/bin/sh", &sh, "com.x.sync"), "syncd");
+        let app = args(&[
+            "/bin/sh",
+            "-c",
+            "/Applications/Foo.app/Contents/MacOS/helper",
+        ]);
+        assert_eq!(job_name("/bin/sh", &app, "l"), "Foo");
+        assert_eq!(
+            job_name("/bin/sh", &args(&["/bin/sh", "-c", "echo hi"]), "com.x.y"),
+            "com.x.y"
+        );
+        assert_eq!(job_name("/usr/local/bin/tool", &[], "l"), "tool");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -197,7 +259,7 @@ mod mac {
             args.join(" ")
         };
         Some(Item {
-            name: display_name(&exe, &label),
+            name: job_name(&exe, &args, &label),
             path: path.to_path_buf(),
             label,
             program,
@@ -228,6 +290,9 @@ mod mac {
         for dir in ["/Library/LaunchAgents", "/Library/LaunchDaemons"] {
             out.extend(list_dir(Path::new(dir), "system"));
         }
+        // the same job installed twice (an agent and a daemon, or user and system): once
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|i| seen.insert((i.label.clone(), i.program.clone())));
         out
     }
 

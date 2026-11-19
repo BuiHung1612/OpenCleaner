@@ -19,6 +19,17 @@ struct OpenCleanerApp: App {
     var body: some Scene {
         Window("OpenCleaner", id: "main") {
             MainView()
+                // SwiftUI saves the frame under the window's id but opens it centered on the
+                // main screen again: put it back where it was (a screen gone since: left alone)
+                .background(WindowProbe { window in
+                    guard let saved = UserDefaults.standard.string(forKey: "NSWindow Frame main") else { return }
+                    let f = saved.split(separator: " ").prefix(4).compactMap { Double($0) }
+                    guard f.count == 4 else { return }
+                    let frame = NSRect(x: f[0], y: f[1], width: f[2], height: f[3])
+                    if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) {
+                        window.setFrame(frame, display: true)
+                    }
+                })
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1080, height: 720)
@@ -43,8 +54,9 @@ struct MenuBarIcon: View {
     var body: some View {
         if let image = Bundle.main.image(forResource: "MenuBarIcon") {
             Image(nsImage: { image.isTemplate = true; return image }())
+                .accessibilityLabel(Text(verbatim: "OpenCleaner"))
         } else {
-            Image(systemName: "sparkles")
+            Image(systemName: "sparkles").accessibilityLabel(Text(verbatim: "OpenCleaner"))
         }
     }
 }
@@ -343,13 +355,14 @@ extension View {
     }
 
     /// A row ticked by clicking anywhere on it: one VoiceOver element, announced as a button
-    /// that is selected or not.
-    func checkRow(_ on: Bool, toggle: @escaping () -> Void) -> some View {
+    /// that is selected, partly selected (some of what it holds) or not.
+    func checkRow(_ on: Bool, partial: Bool = false, toggle: @escaping () -> Void) -> some View {
         contentShape(Rectangle())
             .onTapGesture(perform: toggle)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-            .accessibilityValue(on ? String(localized: "Selected") : String(localized: "Not selected"))
+            .accessibilityValue(partial ? String(localized: "Partly selected")
+                                : on ? String(localized: "Selected") : String(localized: "Not selected"))
             .accessibilityAction(.default, toggle)
     }
 }
@@ -375,16 +388,20 @@ struct Art: View {
     var size: CGFloat = 260
 
     var body: some View {
-        if let image = Self.image(id) {
-            Image(nsImage: image).resizable().scaledToFit().frame(width: size, height: size)
-        } else {
-            Image(systemName: symbol)
-                .font(.app(size * 0.34, weight: .light))
-                .symbolRenderingMode(.hierarchical)
-                .frame(width: size * 0.72, height: size * 0.72)
-                .glassEffect(.clear.tint(.white.opacity(0.06)), in: .circle)
-                .frame(width: size, height: size)
+        // decoration: VoiceOver would read the symbol's name ("Scissors", "Hammer")
+        Group {
+            if let image = Self.image(id) {
+                Image(nsImage: image).resizable().scaledToFit().frame(width: size, height: size)
+            } else {
+                Image(systemName: symbol)
+                    .font(.app(size * 0.34, weight: .light))
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: size * 0.72, height: size * 0.72)
+                    .glassEffect(.clear.tint(.white.opacity(0.06)), in: .circle)
+                    .frame(width: size, height: size)
+            }
         }
+        .accessibilityHidden(true)
     }
 
     /// Loaded once per id: bodies re-run on every live-output tick, and a PNG read each time adds up.
@@ -432,7 +449,7 @@ struct BigButton: View {
                 if busy {
                     ProgressView().controlSize(.large).brightScroller()
                 } else {
-                    Text(title).font(.app(17, weight: .semibold))
+                    Text(title).font(.system(size: Self.fitting(title, size: 17 * TextScale.shared.value, width: 80), weight: .semibold))
                         .multilineTextAlignment(.center).minimumScaleFactor(0.7).padding(12)
                 }
             }
@@ -445,6 +462,14 @@ struct BigButton: View {
         .disabled(busy)
         .keyboardShortcut(busy || !returnKey ? nil : .defaultAction)
         .accessibilityLabel(busy ? String(localized: "Working…") : title)
+    }
+
+    /// `size`, or smaller so the longest word fits `width`: lines break between words only
+    /// ("Run Selected" at Extra Large would otherwise split "Selected").
+    static func fitting(_ title: String, size: CGFloat, width: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: size, weight: .semibold)
+        let widest = title.split(separator: " ").map { (String($0) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return widest > width ? (size * width / widest).rounded(.down) : size
     }
 }
 
@@ -620,16 +645,74 @@ struct Intro: View {
     }
 }
 
+/// File and disk sizes (decimal units, like Finder). Zero reads "0 KB", not "Zero KB".
 func bytes(_ n: Double?) -> String {
     guard let n else { return "—" }
-    return ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file)
+    return byteFormatter(.file, zeroKB: n == 0).string(fromByteCount: Int64(n))
+}
+
+/// Memory (binary units, like Activity Monitor): 16 GB of RAM reads "16 GB", not "17.18 GB".
+func memBytes(_ n: Double?) -> String {
+    guard let n else { return "—" }
+    return byteFormatter(.memory, zeroKB: n == 0).string(fromByteCount: Int64(n))
 }
 
 /// No decimals ("443 GB"): for tight spots like the sidebar.
 func shortBytes(_ n: Double) -> String {
-    let f = ByteCountFormatter()
+    let f = byteFormatter(.file, zeroKB: n == 0)
     f.isAdaptive = false
     return f.string(fromByteCount: Int64(n))
+}
+
+private func byteFormatter(_ style: ByteCountFormatter.CountStyle, zeroKB: Bool) -> ByteCountFormatter {
+    let f = ByteCountFormatter()
+    f.countStyle = style
+    if zeroKB {
+        f.allowsNonnumericFormatting = false
+        f.allowedUnits = .useKB
+    }
+    return f
+}
+
+/// "1.2 GB of 3 GB selected" for a row partly ticked, else its full size.
+func sizeText(_ full: Double, selected: Double, partial: Bool) -> String {
+    partial ? String(localized: "\(bytes(selected)) of \(bytes(full)) selected") : bytes(full)
+}
+
+/// A time span in the app's language, two units at most ("1 day, 8 hr" / "1 ngày, 8 giờ").
+func duration(_ seconds: Double) -> String {
+    let f = DateComponentsFormatter()
+    f.unitsStyle = .short
+    f.allowedUnits = seconds >= 86_400 ? [.day, .hour] : [.hour, .minute]
+    f.maximumUnitCount = 2
+    var calendar = Calendar.current
+    calendar.locale = Locale(identifier: Bundle.main.preferredLocalizations.first ?? "en")
+    f.calendar = calendar
+    return f.string(from: seconds) ?? ""
+}
+
+/// Runs `found` with the window this view is in, once it is in one.
+struct WindowProbe: NSViewRepresentable {
+    let found: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView { Probe(found: found) }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class Probe: NSView {
+        let found: (NSWindow) -> Void
+        init(found: @escaping (NSWindow) -> Void) {
+            self.found = found
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // after SwiftUI has placed the window
+            if let window { DispatchQueue.main.async { self.found(window) } }
+        }
+    }
 }
 
 func percent(_ n: Double?) -> String {

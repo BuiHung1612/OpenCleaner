@@ -84,6 +84,7 @@ struct StartupPage: View {
                 Text("Off").font(.app(12)).foregroundStyle(.dim)
             } else {
                 Button("Turn Off") { asking = item }.buttonStyle(.pill)
+                    .accessibilityLabel(String(localized: "Turn Off \(item.name.string ?? "")"))
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -98,6 +99,7 @@ struct StartupPage: View {
             }
             Spacer()
             Button("Turn On") { Task { await turnOn(item) } }.buttonStyle(.pill)
+                .accessibilityLabel(String(localized: "Turn On \(item.name.string ?? "")"))
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
     }

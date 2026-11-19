@@ -141,7 +141,7 @@ struct OptimizePage: View {
             for id in admin { results[id] = mark }
             if memory, mark == "✓" {
                 let after = await Self.freeMemory()
-                memoryNote = String(localized: "Free memory: \(bytes(before)) before, \(bytes(after)) after")
+                memoryNote = String(localized: "Free memory: \(memBytes(before)) before, \(memBytes(after)) after")
             }
         }
         running = false

@@ -145,12 +145,19 @@ enum PickText {
             return String(localized: "Not opened for \(Int(days)) days")
         }
         if let days = item.age_days.double, let kind = item.kind.string {
+            if Int(days) == 0 {
+                return kind == "screenshot" ? String(localized: "Screenshot · today") : String(localized: "\(kind) · today")
+            }
             return kind == "screenshot"
                 ? String(localized: "Screenshot · \(Int(days)) days old")
                 : String(localized: "\(kind) · \(Int(days)) days old")
         }
         if let place = item.place.string {
-            return flags.contains("kept") ? String(localized: "\(place) · oldest, kept") : place
+            if flags.contains("kept") { return String(localized: "\(place) · oldest, kept") }
+            // an APFS clone: its blocks are shared, so the Trash gets nothing back
+            return item.bytes.double == 0
+                ? place + " · " + String(localized: "shares its data with the other copy: removing it frees no space")
+                : place
         }
         if let kind = item.kind.string {
             var text = tr(kind)
@@ -256,13 +263,14 @@ struct PicksList: View {
                     Text(verbatim: PickText.detail(item)).font(.app(12)).foregroundStyle(.dim).lineLimit(1)
                 }
                 Spacer()
-                Text(verbatim: bytes(model.parts.bytes(path, whole: item.bytes.double ?? 0))).font(.app(14)).monospacedDigit()
+                Text(verbatim: sizeText(item.bytes.double ?? 0, selected: model.parts.bytes(path, whole: item.bytes.double ?? 0), partial: partial))
+                    .font(.app(14)).monospacedDigit()
                 if model.phase == .review && Parts.canOpen(path) {
                     OpenButton(open: open) { model.toggleOpen(path) }
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .checkRow(on) { if model.phase == .review { model.toggle(i) } }
+            .checkRow(on, partial: partial) { if model.phase == .review { model.toggle(i) } }
             .peekable(path)
             .contextMenu { FileMenu(path: path) }
             if open && model.phase == .review {
@@ -380,7 +388,8 @@ struct PicksPage: View {
         switch model.phase {
         case .idle: ""
         case .finding: String(localized: "Looking…")
-        case .review: String(localized: "\(model.items.count) found, \(bytes(model.list.bytes.double ?? 0)). Nothing has been removed yet.")
+        case .review: model.items.isEmpty ? String(localized: "Nothing found.")
+            : String(localized: "\(model.items.count) found, \(bytes(model.list.bytes.double ?? 0)). Nothing has been removed yet.")
         case .acting: String(localized: "Working…")
         case .done: String(localized: "Done: \(bytes(model.outcome.bytes.double ?? 0)) freed")
         }
@@ -521,7 +530,8 @@ struct UninstallerPage: View {
     }
 
     private var search: some View {
-        SearchField(prompt: String(localized: "Search apps"), text: $model.query).frame(width: 240)
+        // grows with the text size, so the prompt is not cut at Extra Large
+        SearchField(prompt: String(localized: "Search apps"), text: $model.query).frame(width: 240 * max(1, TextScale.shared.value))
     }
 
     @ViewBuilder private var appList: some View {
@@ -554,6 +564,13 @@ struct UninstallerPage: View {
         return [open, place, app.version.string].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
+    /// Two apps of one name are told apart by their bundles' file names ("Codex" and
+    /// "Codex Beta" both showing as "Codex").
+    static func title(_ app: JSON) -> String {
+        guard app.twin.bool, let path = app.path.string else { return app.name.string ?? "?" }
+        return ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+    }
+
     private func appRow(_ app: JSON) -> some View {
         let path = app.path.string ?? ""
         let on = model.chosen.contains(path)
@@ -561,7 +578,7 @@ struct UninstallerPage: View {
             Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.app(17))
             Image(nsImage: fileIcon(path)).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: app.name.string ?? "?").font(.app(14, weight: .medium))
+                Text(verbatim: Self.title(app)).font(.app(14, weight: .medium))
                 Text(verbatim: Self.subtitle(app))
                     .font(.app(12)).foregroundStyle(app.running.bool ? Color.warn : .dim)
             }

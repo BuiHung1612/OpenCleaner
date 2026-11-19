@@ -27,13 +27,15 @@ final class JunkModel {
     var rules: [JSON] { groups.flatMap(\.rules.array) }
     var selectedBytes: Double {
         rules.filter { selected.contains($0.id.string ?? "") && $0.status.string == "ready" }
-            .map { rule in
-                let items = Self.items(rule)
-                guard !items.isEmpty else { return rule.bytes.double ?? 0 }
-                return items.filter { !excluded.contains($0.path) }
-                    .map { parts.bytes($0.path, whole: $0.bytes) }.reduce(0, +)
-            }
-            .reduce(0, +)
+            .map(selectedBytes(of:)).reduce(0, +)
+    }
+
+    /// What goes of a ticked rule: all of it, less the items unticked inside it.
+    func selectedBytes(of rule: JSON) -> Double {
+        let items = Self.items(rule)
+        guard !items.isEmpty else { return rule.bytes.double ?? 0 }
+        return items.filter { !excluded.contains($0.path) }
+            .map { parts.bytes($0.path, whole: $0.bytes) }.reduce(0, +)
     }
 
     /// The items a rule found, biggest first (as the engine lists them).
@@ -308,7 +310,8 @@ struct JunkPage: View {
                 }
                 Spacer()
                 if rule.status.string != "in_use" {
-                    Text(verbatim: bytes(rule.bytes.double ?? 0)).font(.app(14)).monospacedDigit()
+                    Text(verbatim: sizeText(rule.bytes.double ?? 0, selected: model.selectedBytes(of: rule), partial: partial))
+                        .font(.app(14)).monospacedDigit()
                 }
                 if ready && !items.isEmpty {
                     Button {
@@ -325,7 +328,7 @@ struct JunkPage: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
-            .checkRow(on && ready) {
+            .checkRow(on && ready, partial: partial) {
                 guard ready else { return }
                 model.toggleRule(rule)
             }
@@ -351,7 +354,8 @@ struct JunkPage: View {
                     .font(.app(12)).lineLimit(1).truncationMode(.middle)
                     .help(item.path)
                 Spacer()
-                Text(verbatim: bytes(model.parts.bytes(item.path, whole: item.bytes))).font(.app(12)).monospacedDigit().foregroundStyle(.dim)
+                Text(verbatim: sizeText(item.bytes, selected: model.parts.bytes(item.path, whole: item.bytes), partial: partial))
+                    .font(.app(12)).monospacedDigit().foregroundStyle(.dim)
                 if Parts.canOpen(item.path) {
                     OpenButton(open: open) { model.toggleOpen(item.path) }
                 } else {
@@ -359,7 +363,7 @@ struct JunkPage: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
-            .checkRow(on) { model.toggleItem(item.path, in: rule) }
+            .checkRow(on, partial: partial) { model.toggleItem(item.path, in: rule) }
             .peekable(item.path)
             .contextMenu { FileMenu(path: item.path) }
             if open {

@@ -117,7 +117,7 @@ pub fn overview(
             });
         }
     }
-    // a root inside another root (~/Library in ~) is sized once, as its own part
+    // a root inside another root is sized once, as its own part
     for p in &parts {
         if let (Some(parent), Some(name)) = (p.path.parent(), p.path.file_name())
             && parts.iter().any(|q| q.path == parent)
@@ -482,10 +482,9 @@ impl Visitor for PartSizer {
 
 #[cfg(target_os = "macos")]
 fn overview_roots() -> Vec<(String, PathBuf)> {
-    let home = home();
+    // ~/Library stays inside Home: opening Home then lists it, and the sizes add up
     vec![
-        ("Home".into(), home.clone()),
-        ("User Library".into(), home.join("Library")),
+        ("Home".into(), home()),
         ("Applications".into(), PathBuf::from("/Applications")),
         ("System Library".into(), PathBuf::from("/Library")),
     ]
