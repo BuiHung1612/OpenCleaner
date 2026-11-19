@@ -7,6 +7,7 @@ import SwiftUI
 
 @main
 struct OpenCleanerApp: App {
+    @AppStorage(Automation.menuBarKey) private var menuBar = true
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     init() {
         // needed when launched as a bare executable (`swift run`); a no-op inside the .app
@@ -31,6 +32,34 @@ struct OpenCleanerApp: App {
         Settings {
             SettingsView()
         }
+
+        // actions only: numbers there would go stale between readings
+        MenuBarExtra(isInserted: $menuBar) { QuickMenu() } label: { MenuBarIcon() }
+    }
+}
+
+/// The broom from design/MenuBarIcon.png as a template image (macOS tints it for the bar).
+struct MenuBarIcon: View {
+    var body: some View {
+        if let image = Bundle.main.image(forResource: "MenuBarIcon") {
+            Image(nsImage: { image.isTemplate = true; return image }())
+        } else {
+            Image(systemName: "sparkles")
+        }
+    }
+}
+
+struct QuickMenu: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button(String(localized: "Clean System Junk…")) { Task { await Automation.shared.cleanNow() } }
+        Button(String(localized: "Open OpenCleaner")) {
+            openWindow(id: "main")
+            NSApp.activate()
+        }
+        Divider()
+        Button(String(localized: "Quit OpenCleaner")) { NSApp.terminate(nil) }
     }
 }
 

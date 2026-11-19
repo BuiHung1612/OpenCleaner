@@ -377,6 +377,7 @@ struct Note: View {
 
 private struct GeneralSettings: View {
     @AppStorage("language") private var language = ""
+    @AppStorage(Automation.menuBarKey) private var menuBar = true
     @AppStorage(Updater.autoKey) private var checkUpdates = true
     @State private var languageChanged = false
     @State private var engineVersion: String?
@@ -397,6 +398,7 @@ private struct GeneralSettings: View {
                 Picker(String(localized: "Text size"), selection: $textScale.value) {
                     ForEach(TextScale.choices, id: \.scale) { Text($0.name).tag($0.scale) }
                 }
+                Toggle(String(localized: "Show in menu bar"), isOn: $menuBar)
             } footer: {
                 if languageChanged {
                     HStack {

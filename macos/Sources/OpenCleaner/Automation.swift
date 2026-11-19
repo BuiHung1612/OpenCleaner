@@ -35,6 +35,7 @@ final class Automation: ObservableObject {
     static let autoCleanKey = "autoClean", periodKey = "autoCleanPeriod", lastCleanKey = "autoCleanLast"
     static let lowDiskKey = "lowDiskAlert", lowDiskGBKey = "lowDiskGB", lowDiskNotifiedKey = "lowDiskNotified"
     static let watchKey = "watchFolders", watchGBKey = "watchGB"
+    static let menuBarKey = "showMenuBar"
 
     private var busy = false
     /// The page the main window should show next (set by a notification click).
@@ -89,6 +90,24 @@ final class Automation: ObservableObject {
         // stamped before running: a failing clean is retried next period, not every hour
         defaults.set(Date(), forKey: Self.lastCleanKey)
         guard let found = await Self.scan() else { return }
+        await finish(found)
+    }
+
+    /// The menu's "Clean System Junk…": scan, show the size, clean only after OK.
+    func cleanNow() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let found = await Self.scan() else {
+            return Self.notify(String(localized: "Nothing to clean"), "")
+        }
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Remove \(bytes(found.bytes)) of junk? This cannot be undone.")
+        alert.informativeText = String(localized: "Only the items selected by default. The Trash is not emptied.")
+        alert.addButton(withTitle: String(localized: "Clean"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         await finish(found)
     }
 
@@ -157,7 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in Automation.shared.start() }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// The menu bar item keeps the app (and its schedule) running after the window closes.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !(UserDefaults.standard.object(forKey: Automation.menuBarKey) as? Bool ?? true)
+    }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {

@@ -468,3 +468,10 @@
 "Large" = "Lớn";
 "Extra Large" = "Rất lớn";
 "Checked while OpenCleaner is open." = "Chỉ kiểm tra khi OpenCleaner đang mở.";
+"Clean System Junk…" = "Dọn rác hệ thống…";
+"Open OpenCleaner" = "Mở OpenCleaner";
+"Quit OpenCleaner" = "Thoát OpenCleaner";
+"Show in menu bar" = "Hiện trên thanh menu";
+"Nothing to clean" = "Không có gì để dọn";
+"Only the items selected by default. The Trash is not emptied." = "Chỉ các mục được chọn sẵn. Thùng rác không bị dọn.";
+"Cancel" = "Hủy";

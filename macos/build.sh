@@ -35,6 +35,7 @@ cp "$BIN" $APP/Contents/MacOS/
 cp ../shared/tools.json $APP/Contents/Resources/
 cp -R Resources/*.lproj $APP/Contents/Resources/
 [[ -d Resources/Art ]] && cp -R Resources/Art $APP/Contents/Resources/
+cp Resources/MenuBarIcon.png Resources/MenuBarIcon@2x.png $APP/Contents/Resources/
 ICON_KEY=""
 if [[ -f Resources/AppIcon.icns ]]; then  # art and icon are generated from design/ by design/export.py
   cp Resources/AppIcon.icns $APP/Contents/Resources/
