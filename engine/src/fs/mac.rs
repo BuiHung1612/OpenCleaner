@@ -8,6 +8,7 @@ use std::ffi::{CString, OsString};
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Requested attributes. The kernel packs the returned ones in bit order within each
 // group, ATTR_CMN_RETURNED_ATTRS first and ATTR_CMN_ERROR right after it.
@@ -80,7 +81,12 @@ impl Drop for Fd {
 
 /// Lists `dir`. Returns `ErrorKind::Unsupported` before visiting anything when the volume
 /// has no `getattrlistbulk` (the caller then falls back to readdir + lstat).
-pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
+pub fn read_dir(
+    dir: &Path,
+    detail: Detail,
+    cancel: &AtomicBool,
+    visit: &mut dyn FnMut(&Entry),
+) -> io::Result<()> {
     let path = c_path(dir)?;
     let fd = unsafe {
         libc::open(
@@ -97,6 +103,10 @@ pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io
         let mut buf = buf.borrow_mut();
         let mut first = true;
         loop {
+            // between batches: a huge directory stops promptly once the walk is cancelled
+            if cancel.load(Ordering::Relaxed) {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
             let n = unsafe {
                 libc::getattrlistbulk(
                     fd.0,

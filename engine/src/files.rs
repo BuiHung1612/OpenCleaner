@@ -214,35 +214,154 @@ pub fn duplicates(ctx: &Context, min_mib: u64, cancel: &AtomicBool) -> Vec<Pick>
             by_len.entry(f.2.len).or_default().push(f);
         }
     }
+    let mut hashes = HashCache::load(&ctx.data_dir);
     let mut picks = Vec::new();
     for (_, same_len) in by_len.into_iter().filter(|(_, v)| v.len() > 1) {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        for same_head in split_by(same_len, |p| hash(p, Some(64 * 1024))) {
-            for same in split_by(same_head, |p| hash(p, None)) {
+        for same_head in split_by(same_len, |f| hashes.get(f, HEAD)) {
+            for same in split_by(same_head, |f| hashes.get(f, FULL)) {
                 for set in confirm(same) {
                     picks.extend(set_picks(set, ctx));
                 }
             }
         }
     }
+    if !cancel.load(Ordering::Relaxed) {
+        hashes.store(&ctx.data_dir);
+    }
     picks.sort_by(|a, b| b.bytes.cmp(&a.bytes).then(a.group.cmp(&b.group)));
     picks
 }
 
 /// Groups of two or more with the same key; unreadable files drop out.
-fn split_by(files: Vec<Found>, key: impl Fn(&Path) -> Option<u64>) -> Vec<Vec<Found>> {
+fn split_by(files: Vec<Found>, mut key: impl FnMut(&Found) -> Option<u64>) -> Vec<Vec<Found>> {
     let mut groups: HashMap<u64, Vec<Found>> = HashMap::new();
     for f in files {
-        if let Some(k) = key(&f.0) {
+        if let Some(k) = key(&f) {
             groups.entry(k).or_default().push(f);
         }
     }
     groups.into_values().filter(|g| g.len() > 1).collect()
 }
 
+/// Which hash of a file: of its first 64 KiB, or of all of it.
+const HEAD: usize = 0;
+const FULL: usize = 1;
+const HEAD_LEN: u64 = 64 * 1024;
+
+/// (volume, file id, length, mtime): a file whose id, length and mtime are unchanged is
+/// taken to hold the same bytes as when it was hashed.
+type HashKey = (u64, u64, u64, i64);
+
+/// Duplicates hash cache: the head and full hash of each file hashed by the last run, so
+/// the next run reads only new or changed files. A hash only groups candidates; every set
+/// is still compared byte for byte (`confirm`), so a stale or forged entry can hide a copy
+/// but never put a different file on the removal list.
+///
+/// File: JSON lines in the data dir. The first line is `probe()`: `DefaultHasher`'s
+/// algorithm may change between Rust releases, and then every stored hash is dropped.
+/// Every other line is `[dev, ino, len, mtime, head, full]`. Reading stops at the first
+/// line that does not parse (a damaged tail is cut off, what precedes it is kept). The
+/// file holds only what the last finished run used, so it never outgrows the user's
+/// candidate files.
+struct HashCache {
+    old: HashMap<HashKey, [Option<u64>; 2]>,
+    new: HashMap<HashKey, [Option<u64>; 2]>,
+    /// files changed within the last seconds may change again with the same mtime: not kept
+    hot_after: i64,
+}
+
+type HashLine = (u64, u64, u64, i64, Option<u64>, Option<u64>);
+
+fn hash_file(dir: &Path) -> PathBuf {
+    dir.join("dup-hashes-v1.jsonl")
+}
+
+fn probe() -> u64 {
+    let mut h = std::hash::DefaultHasher::new();
+    h.write(b"OpenCleaner duplicates hash cache");
+    h.finish()
+}
+
+impl HashCache {
+    fn load(dir: &Path) -> Self {
+        let mut old = HashMap::new();
+        let text = std::fs::read(hash_file(dir)).unwrap_or_default();
+        let mut lines = text.split(|&b| b == b'\n');
+        if lines
+            .next()
+            .and_then(|l| serde_json::from_slice::<u64>(l).ok())
+            == Some(probe())
+        {
+            for line in lines {
+                let Ok((dev, ino, len, mtime, head, full)) =
+                    serde_json::from_slice::<HashLine>(line)
+                else {
+                    break; // end of file, or a damaged tail
+                };
+                old.insert((dev, ino, len, mtime), [head, full]);
+            }
+        }
+        HashCache {
+            old,
+            new: HashMap::new(),
+            hot_after: now() - 2,
+        }
+    }
+
+    /// The `which` hash of `f`: from the cache when the file is unchanged, else read.
+    fn get(&mut self, f: &Found, which: usize) -> Option<u64> {
+        let e = &f.2;
+        let key = (e.dev, e.ino, e.len, e.mtime);
+        let cacheable = e.ino != 0 && e.mtime < self.hot_after;
+        if cacheable {
+            if let Some(h) = self.new.get(&key).and_then(|v| v[which]) {
+                return Some(h);
+            }
+            if let Some(v) = self.old.get(&key)
+                && let Some(h) = v[which]
+            {
+                self.new.entry(key).or_default()[which] = Some(h);
+                return Some(h);
+            }
+        }
+        let h = hash(&f.0, (which == HEAD).then_some(HEAD_LEN))?;
+        if cacheable {
+            self.new.entry(key).or_default()[which] = Some(h);
+        }
+        Some(h)
+    }
+
+    fn store(&self, dir: &Path) {
+        let mut out = format!("{}\n", probe());
+        for (&(dev, ino, len, mtime), &[head, full]) in &self.new {
+            let line: HashLine = (dev, ino, len, mtime, head, full);
+            if let Ok(s) = serde_json::to_string(&line) {
+                out.push_str(&s);
+                out.push('\n');
+            }
+        }
+        let tmp = dir.join(format!(".dup-hashes-{}.tmp", std::process::id()));
+        if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&tmp, out).is_ok() {
+            let _ = std::fs::rename(&tmp, hash_file(dir));
+        }
+    }
+}
+
+thread_local! {
+    static HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Files this thread read to hash them (for tests: a cached hash is not counted).
+#[doc(hidden)]
+pub fn files_hashed() -> usize {
+    HASHED.with(|c| c.get())
+}
+
 fn hash(path: &Path, limit: Option<u64>) -> Option<u64> {
+    HASHED.with(|c| c.set(c.get() + 1));
     let file = std::fs::File::open(path).ok()?;
     let mut reader: Box<dyn Read> = match limit {
         Some(n) => Box::new(file.take(n)),
