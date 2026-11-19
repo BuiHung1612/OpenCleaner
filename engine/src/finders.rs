@@ -32,8 +32,37 @@ pub fn installers(ctx: &Context) -> Vec<Pick> {
         let root = ctx.home.join(folder);
         collect_installers(&root, &root, 0, folder, &mut out);
     }
+    #[cfg(target_os = "macos")]
+    macos_installers(&mut out);
     out.sort_by_key(|p| std::cmp::Reverse(p.bytes));
     out
+}
+
+/// "Install macOS ….app" left in /Applications after an upgrade (12 GB or more each).
+#[cfg(target_os = "macos")]
+fn macos_installers(out: &mut Vec<Pick>) {
+    let apps = Path::new("/Applications");
+    let Ok(entries) = std::fs::read_dir(apps) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with("Install macOS") && name.ends_with(".app")) {
+            continue;
+        }
+        let path = entry.path();
+        let mut pick = Pick::new(
+            path.clone(),
+            apps.to_path_buf(),
+            Purpose::Installers,
+            Action::Trash,
+        );
+        pick.bytes = size::freed_many(&[path], &AtomicBool::new(false), &mut |_| {})[0];
+        pick.group = "Applications".into();
+        pick.detail = "macOS installer · downloaded again from the App Store when needed".into();
+        pick.preselect = true;
+        out.push(pick);
+    }
 }
 
 fn collect_installers(root: &Path, dir: &Path, depth: u32, group: &str, out: &mut Vec<Pick>) {

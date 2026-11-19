@@ -402,7 +402,11 @@ fn shipped_rules_never_aim_at_personal_folders() {
     ] {
         for r in RuleSet::parse(pack).unwrap().rules {
             for p in &r.paths {
-                let lower = p.to_ascii_lowercase();
+                // whole path components: "Mail Downloads" is not the Downloads folder
+                let parts: Vec<String> = p
+                    .split(['/', '\\'])
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect();
                 for bad in [
                     "documents",
                     "desktop",
@@ -412,7 +416,7 @@ fn shipped_rules_never_aim_at_personal_folders() {
                     "keychains",
                     ".ssh",
                 ] {
-                    assert!(!lower.contains(bad), "{}: {p}", r.id);
+                    assert!(!parts.iter().any(|c| c == bad), "{}: {p}", r.id);
                 }
             }
         }

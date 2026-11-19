@@ -5,6 +5,7 @@
 //!   oce space [PATH]                                       Space Lens listing (JSON); no PATH: overview
 //!   oce scan                                               System Junk preview (removes nothing)
 //!   oce call '<request json>'                              same requests as the app
+//!   oce run '<request json>'                               a job: one event per line
 
 use oc_engine::size::{self, Mode};
 use std::path::PathBuf;
@@ -115,13 +116,18 @@ fn main() -> ExitCode {
             eprintln!("oce {cmd}: {:.2}s", start.elapsed().as_secs_f64());
             ExitCode::SUCCESS
         }
+        Some("run") if args.len() == 2 => {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            oc_engine::api::run(&args[1], &cancel, &mut |event| println!("{event}"));
+            ExitCode::SUCCESS
+        }
         Some("call") if args.len() == 2 => {
             println!("{}", oc_engine::api::call(&args[1]));
             ExitCode::SUCCESS
         }
         _ => {
             eprintln!(
-                "usage: oce version | oce size [--freed] [--all-volumes] [--json] PATH... | oce call JSON"
+                "usage: oce version | oce size [--freed] [--all-volumes] [--json] PATH... | oce call JSON | oce run JSON"
             );
             ExitCode::from(2)
         }

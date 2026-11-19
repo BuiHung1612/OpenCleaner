@@ -68,6 +68,52 @@ default = false
 note = "Downloaded dependencies and build caches. The next build downloads and rebuilds them."
 
 [[rule]]
+id = "dev.pip"
+group = "developer"
+title = "pip cache"
+paths = ["%LOCALAPPDATA%/pip/cache"]
+target = "self"
+note = "Downloaded Python packages; pip fetches them again."
+
+[[rule]]
+id = "dev.yarn"
+group = "developer"
+title = "Yarn cache"
+paths = ["%LOCALAPPDATA%/Yarn/Cache"]
+target = "self"
+note = "Downloaded packages; yarn fetches them again."
+
+[[rule]]
+id = "dev.cargo"
+group = "developer"
+title = "Cargo downloads"
+paths = ["%USERPROFILE%/.cargo/registry/cache", "%USERPROFILE%/.cargo/registry/src"]
+target = "self"
+default = false
+note = "Downloaded crate archives and sources; cargo fetches them again."
+
+[[rule]]
+id = "dev.nuget"
+group = "developer"
+title = "NuGet packages"
+paths = ["%USERPROFILE%/.nuget/packages"]
+target = "self"
+default = false
+note = "Downloaded .NET packages. The next restore downloads them again."
+
+[[rule]]
+id = "system.shadercache"
+group = "system"
+title = "Graphics shader caches"
+paths = [
+  "%LOCALAPPDATA%/D3DSCache",
+  "%LOCALAPPDATA%/NVIDIA/DXCache",
+  "%LOCALAPPDATA%/NVIDIA/GLCache",
+  "%LOCALAPPDATA%/AMD/DxCache",
+]
+note = "Compiled shaders. Games rebuild them; the first launch after cleaning may stutter."
+
+[[rule]]
 id = "system.temp"
 group = "system"
 title = "Temporary files"

@@ -68,6 +68,18 @@ enum Request {
     },
     /// Installer files in Downloads and on the Desktop (`picks`).
     Installers,
+    /// Files of at least `min_mib` MiB idle for `days` days, and old screenshots (`picks`).
+    LargeOld {
+        #[serde(default = "large_mib")]
+        min_mib: u64,
+        #[serde(default = "idle_days")]
+        days: i64,
+    },
+    /// Identical files of at least `min_mib` MiB in the user's folders (`picks`).
+    Duplicates {
+        #[serde(default = "one")]
+        min_mib: u64,
+    },
     /// Rebuildable build folders in projects (`picks`).
     Projects {
         #[serde(default)]
@@ -117,6 +129,18 @@ fn rule_set() -> &'static RuleSet {
 
 fn allocated() -> size::Mode {
     size::Mode::Allocated
+}
+
+fn large_mib() -> u64 {
+    500
+}
+
+fn idle_days() -> i64 {
+    180
+}
+
+fn one() -> u64 {
+    1
 }
 
 fn parse(request: &str) -> Result<Request, Value> {
@@ -288,6 +312,14 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             emit(
                 json!({"event": "removed", "removed": removed, "failed": failed.len(), "failures": failed}),
             );
+        }
+        Request::LargeOld { min_mib, days } => {
+            let found = crate::files::large_old(ctx(), min_mib, days, cancel);
+            emit_value("picks", &picks::store("large_old", found, ctx()), emit);
+        }
+        Request::Duplicates { min_mib } => {
+            let found = crate::files::duplicates(ctx(), min_mib, cancel);
+            emit_value("picks", &picks::store("duplicates", found, ctx()), emit);
         }
         Request::Installers => {
             let found = finders::installers(ctx());

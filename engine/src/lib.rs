@@ -8,6 +8,7 @@ pub mod apps;
 pub mod clean;
 pub mod context;
 pub mod ffi;
+pub mod files;
 pub mod finders;
 pub mod fs;
 pub mod guard;

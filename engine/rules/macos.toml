@@ -241,6 +241,105 @@ exclude = ["huggingface", "torch", "lm-studio", "ollama", "whisper", "pre-commit
 default = false
 note = "Caches of command-line tools. Model downloads (Hugging Face, PyTorch…) are not included."
 
+[[rule]]
+id = "dev.xcode.archives"
+group = "developer"
+title = "Old Xcode archives"
+paths = ["~/Library/Developer/Xcode/Archives"]
+min_age_days = 90
+default = false
+note = "App builds you archived more than 90 days ago. Keep the ones whose crash logs you still need to read."
+
+[[rule]]
+id = "dev.cocoapods"
+group = "developer"
+title = "CocoaPods cache"
+paths = ["~/Library/Caches/CocoaPods"]
+target = "self"
+note = "Downloaded pods; pod install fetches them again."
+
+[[rule]]
+id = "dev.yarn"
+group = "developer"
+title = "Yarn cache"
+paths = ["~/Library/Caches/Yarn"]
+target = "self"
+note = "Downloaded packages; yarn fetches them again."
+
+[[rule]]
+id = "dev.pip"
+group = "developer"
+title = "pip cache"
+paths = ["~/Library/Caches/pip"]
+target = "self"
+note = "Downloaded Python packages; pip fetches them again."
+
+[[rule]]
+id = "dev.homebrew"
+group = "developer"
+title = "Homebrew downloads"
+paths = ["~/Library/Caches/Homebrew"]
+target = "self"
+note = "Downloaded bottles and source archives. Installed packages stay."
+
+[[rule]]
+id = "dev.go"
+group = "developer"
+title = "Go build cache"
+paths = ["~/Library/Caches/go-build"]
+target = "self"
+note = "Compiled packages; the next go build compiles them again."
+
+[[rule]]
+id = "dev.maven"
+group = "developer"
+title = "Maven repository"
+paths = ["~/.m2/repository"]
+target = "self"
+default = false
+note = "Downloaded Java dependencies. The next build downloads them again."
+
+[[rule]]
+id = "dev.android"
+group = "developer"
+title = "Android SDK cache"
+paths = ["~/.android/cache"]
+target = "self"
+note = "Downloaded SDK metadata; Android Studio fetches it again."
+
+[[rule]]
+id = "dev.pub"
+group = "developer"
+title = "Flutter / Dart packages"
+paths = ["~/.pub-cache/hosted"]
+default = false
+note = "Downloaded Dart packages. Run flutter pub get in a project to fetch them again."
+
+# --- Apple devices & Mail -------------------------------------------------------------
+
+[[rule]]
+id = "system.ios.updates"
+group = "system"
+title = "iPhone and iPad software updates"
+paths = ["~/Library/iTunes/iPhone Software Updates", "~/Library/iTunes/iPad Software Updates"]
+note = "System updates Finder downloaded for your devices. Downloaded again when needed."
+
+[[rule]]
+id = "system.ios.backups"
+group = "system"
+title = "iPhone and iPad backups"
+paths = ["~/Library/Application Support/MobileSync/Backup"]
+default = false
+note = "Local device backups. Remove only backups you no longer need (open a row to see each one); this cannot be undone."
+
+[[rule]]
+id = "system.mail.downloads"
+group = "system"
+title = "Mail attachments you opened"
+paths = ["~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads"]
+running = ["com.apple.mail"]
+note = "Copies Mail made when you opened attachments. The attachments stay in your mail."
+
 # --- user caches & logs (general, after the specific rules above) ---------------------
 
 [[rule]]
