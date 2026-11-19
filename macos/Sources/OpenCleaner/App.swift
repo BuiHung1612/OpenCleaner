@@ -131,7 +131,7 @@ struct MainView: View {
         .tint(.white)
         .animation(.easeInOut(duration: 0.35), value: module)
         .task { version = Engine.version }
-        .task { Updater.startAutomaticChecks() }
+        .task { Updater.startAutomaticChecks(); CrashReports.offer() }
     }
 
     /// A floating glass panel, not a system sidebar, so the module gradient shows through it.

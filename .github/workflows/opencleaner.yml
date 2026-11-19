@@ -76,6 +76,9 @@ jobs:
           sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
           swift --version
 
+      - name: Missing Vietnamese strings (warning only)
+        run: swift macos/check-strings.swift vi || true
+
       - name: Tag must match VERSION
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -141,7 +144,17 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # dist/ holds the app zips built by the macos and windows-app jobs
+      # Homebrew cask and winget manifests for this release, attached as assets (submitted by hand: packaging/README.md)
+      - name: Render package manifests
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          render() { sed -e "s/{{VERSION}}/$VERSION/g" -e "s/{{SHA256}}/$2/g" "$1" > "dist/$(basename "$1")"; }
+          MAC=$(sha256sum dist/OpenCleaner-macos.zip | cut -d' ' -f1)
+          WIN=$(sha256sum dist/OpenCleaner-windows.zip | cut -d' ' -f1)
+          render packaging/homebrew/opencleaner.rb "$MAC"
+          for f in packaging/winget/*.yaml; do render "$f" "${WIN^^}"; done
+          ! grep -l '{{' dist/opencleaner.rb dist/*.yaml # every placeholder filled
+      # dist/ holds the app zips built by the macos and windows-app jobs, and the manifests
       - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

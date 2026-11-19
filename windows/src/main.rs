@@ -3,11 +3,14 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod github;
 #[cfg(windows)]
 mod ui;
 
 #[cfg(windows)]
 fn main() {
+    github::install_panic_hook();
+    std::thread::spawn(github::on_launch);
     ui::run();
 }
 

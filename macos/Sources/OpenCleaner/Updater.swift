@@ -1,6 +1,7 @@
 //! Self-update from GitHub Releases, same flow as VKeyEngine: check 10 s after launch and then
-//! daily (can be turned off), ask, download the release zip, unpack it, and let a small script
-//! swap the bundles once this process has quit, then reopen the app.
+//! daily (can be turned off), ask, download the release zip, unpack and verify it, move the old
+//! bundle to the Trash, put the new one in its place and reopen the app once this process has quit.
+//! An ad-hoc signed copy has no identity to check an update against, so it only opens the release page.
 
 import AppKit
 import Foundation
@@ -41,8 +42,13 @@ enum Updater {
         let (data, response) = try await URLSession.shared.data(for: request)
         // 404: nothing published yet
         if (response as? HTTPURLResponse)?.statusCode == 404 { return nil }
-        let json = JSON(data: data)
-        guard let tag = json.tag_name.string else { throw Failure(String(localized: "Unexpected reply from GitHub.")) }
+        guard let release = release(from: JSON(data: data)) else { throw Failure(String(localized: "Unexpected reply from GitHub.")) }
+        return release
+    }
+
+    /// The version and macOS zip of a `releases/latest` reply.
+    static func release(from json: JSON) -> Release? {
+        guard let tag = json.tag_name.string else { return nil }
         let url = json.assets.array.first { $0.name.string == asset }?.browser_download_url.string.flatMap(URL.init(string:))
         return Release(version: String(tag.drop { $0 == "v" }), download: url)
     }
@@ -63,13 +69,19 @@ enum Updater {
                 if manual { alert(String(localized: "You're up to date"), String(localized: "OpenCleaner \(current) is the newest version.")) }
                 return
             }
+            let download = signer(of: Bundle.main.bundleURL)?.adHoc == false ? release.download : nil
             let ask = NSAlert()
             ask.messageText = String(localized: "OpenCleaner \(release.version) is available")
-            ask.informativeText = String(localized: "You have \(current). Download and install it now? OpenCleaner will restart.")
-            ask.addButton(withTitle: String(localized: "Install"))
+            if download != nil {
+                ask.informativeText = String(localized: "You have \(current). Download and install it now? OpenCleaner will restart.")
+                ask.addButton(withTitle: String(localized: "Install and Relaunch"))
+            } else {
+                ask.informativeText = String(localized: "You have \(current). Download the new version from the release page.")
+                ask.addButton(withTitle: String(localized: "Open Release Page"))
+            }
             ask.addButton(withTitle: String(localized: "Later"))
             guard ask.runModal() == .alertFirstButtonReturn else { return }
-            guard let url = release.download else {
+            guard let url = download else {
                 NSWorkspace.shared.open(releasesPage)
                 return
             }
@@ -92,7 +104,8 @@ enum Updater {
         let errorDescription: String?
     }
 
-    /// Downloads and unpacks the new app, checks it, then starts the swap script that waits for us to quit.
+    /// Downloads and unpacks the new app, checks it, swaps the bundles (old one to the Trash) and
+    /// starts a script that reopens the app once we have quit.
     @MainActor static func install(from url: URL) async throws {
         do {
             let app = Bundle.main.bundleURL
@@ -110,16 +123,25 @@ enum Updater {
             guard run("/usr/bin/ditto", ["-x", "-k", zip.path, dir.path]) != nil,
                   FileManager.default.fileExists(atPath: newApp.appendingPathComponent("Contents/MacOS/OpenCleaner").path)
             else { throw Failure(String(localized: "The download is damaged.")) }
+            guard Bundle(url: newApp)?.bundleIdentifier == Bundle.main.bundleIdentifier else {
+                throw Failure(String(localized: "The download is not signed by OpenCleaner. It was not installed."))
+            }
             try verifySameSigner(current: app, new: newApp)
 
-            let script = """
-            while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
-            rm -rf "$2.old" && mv "$2" "$2.old" && mv "$3" "$2" && rm -rf "$2.old"
-            open "$2"
-            """
+            // a running app's bundle can be moved; this process keeps its open files until it quits
+            var trashed: NSURL?
+            try FileManager.default.trashItem(at: app, resultingItemURL: &trashed)
+            do {
+                try FileManager.default.moveItem(at: newApp, to: app)
+            } catch {
+                if let trashed { try? FileManager.default.moveItem(at: trashed as URL, to: app) }
+                throw error
+            }
+
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/sh")
-            p.arguments = ["-c", script, "sh", String(ProcessInfo.processInfo.processIdentifier), app.path, newApp.path]
+            p.arguments = ["-c", #"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; open "$2""#,
+                           "sh", String(ProcessInfo.processInfo.processIdentifier), app.path]
             try p.run() // a child of launchd once we quit, so it outlives us
         } catch let e as InstallFailure {
             throw e
@@ -128,17 +150,36 @@ enum Updater {
         }
     }
 
-    /// When this app carries a real signing identity, the update must satisfy the same designated
-    /// requirement, so a tampered zip can't replace it. Ad-hoc builds have nothing stable to compare.
+    /// Who signed a bundle, from `codesign -dvv`: the certificate chain names and the Team ID
+    /// ("not set" for a self-signed certificate). No authority at all means ad-hoc.
+    struct Signer: Equatable {
+        let authorities: [String]
+        let team: String?
+        var adHoc: Bool { authorities.isEmpty }
+    }
+
+    static func signer(fromCodesign text: String) -> Signer {
+        let lines = text.split(separator: "\n")
+        func values(_ key: String) -> [String] { lines.filter { $0.hasPrefix(key) }.map { String($0.dropFirst(key.count)) } }
+        return Signer(authorities: values("Authority="), team: values("TeamIdentifier=").first)
+    }
+
+    static func signer(of app: URL) -> Signer? {
+        run("/usr/bin/codesign", ["-dvv", app.path]).map(signer(fromCodesign:)) // -dvv lists the Authority lines
+    }
+
+    /// The update must be signed by the same identity as this app and satisfy its designated
+    /// requirement (which pins the certificate, not just its name), so a tampered zip can't replace it.
     static func verifySameSigner(current: URL, new: URL) throws {
-        guard let out = run("/usr/bin/codesign", ["-d", "-r-", current.path]),
+        let notOurs = Failure(String(localized: "The download is not signed by OpenCleaner. It was not installed."))
+        guard let mine = signer(of: current), !mine.adHoc,
+              let out = run("/usr/bin/codesign", ["-d", "-r-", current.path]),
               let line = out.split(separator: "\n").first(where: { $0.hasPrefix("designated => ") })
-        else { return }
+        else { throw notOurs }
         let requirement = String(line.dropFirst("designated => ".count))
-        if requirement.hasPrefix("cdhash") { return }
-        guard run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R", "=" + requirement, new.path]) != nil else {
-            throw Failure(String(localized: "The download is not signed by OpenCleaner. It was not installed."))
-        }
+        guard signer(of: new) == mine,
+              run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R", "=" + requirement, new.path]) != nil
+        else { throw notOurs }
     }
 
     /// stdout + stderr of a tool, or nil when it fails.
