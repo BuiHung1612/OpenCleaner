@@ -1,8 +1,9 @@
 import QuickLook
 import SwiftUI
 
-/// Listed folders the user opened, their children (from the engine), and the children kept
-/// ticked. A folder missing from `ticked` goes whole; present, only those children go.
+/// Listed folders the user opened (at any depth), their children (from the engine), and
+/// the children kept ticked. A ticked folder missing from `ticked` goes whole; present,
+/// only those children go. Only ticked folders that are partly ticked have an entry.
 struct Parts {
     var open: Set<String> = []
     var children: [String: [JSON]] = [:]
@@ -15,32 +16,70 @@ struct Parts {
             && !NSWorkspace.shared.isFilePackage(atPath: path)
     }
 
-    /// Bytes going from `parent`: its own size when whole, else its ticked children.
-    func bytes(_ parent: String, whole: Double) -> Double {
-        guard let t = ticked[parent] else { return whole }
-        return (children[parent] ?? []).filter { t.contains($0.path.string ?? "") }
-            .compactMap(\.size.double).reduce(0, +)
+    private func kids(_ folder: String) -> [String] { (children[folder] ?? []).compactMap(\.path.string) }
+
+    /// Bytes going from `folder`: its own size when whole, else what goes of its ticked children.
+    func bytes(_ folder: String, whole: Double) -> Double {
+        guard isPartial(folder) else { return whole }
+        return (children[folder] ?? []).filter { isTicked($0.path.string ?? "", in: folder) }
+            .map { bytes($0.path.string ?? "", whole: $0.size.double ?? 0) }.reduce(0, +)
     }
 
-    func isPartial(_ parent: String) -> Bool { ticked[parent] != nil }
-    func isTicked(_ child: String, in parent: String) -> Bool { ticked[parent]?.contains(child) ?? true }
-
-    /// Ticks or unticks one child of a ticked folder. False when none is left: the caller
-    /// unticks the folder itself.
-    mutating func toggle(_ child: String, in parent: String) -> Bool {
-        let all = Set((children[parent] ?? []).compactMap(\.path.string))
-        var t = ticked[parent] ?? all
-        if t.contains(child) { t.remove(child) } else { t.insert(child) }
-        ticked[parent] = t == all || t.isEmpty ? nil : t
-        return !t.isEmpty
+    /// Some of what is inside `folder`, at any depth, is unticked.
+    func isPartial(_ folder: String) -> Bool {
+        ticked[folder] != nil || ticked.keys.contains { $0.hasPrefix(folder + "/") }
     }
 
-    /// Ticking a child of an unticked folder: that child only.
-    mutating func only(_ child: String, in parent: String) {
-        ticked[parent] = (children[parent]?.count ?? 0) > 1 ? [child] : nil
+    func isTicked(_ child: String, in folder: String) -> Bool { ticked[folder]?.contains(child) ?? true }
+
+    /// Ticks or unticks `item` (with all it holds), somewhere inside the listed folder
+    /// `root`, which is ticked or not (`rootOn`). False when nothing of `root` is left
+    /// ticked: the caller unticks `root` itself.
+    mutating func toggle(_ item: String, root: String, rootOn: Bool) -> Bool {
+        guard item.hasPrefix(root + "/") else { return rootOn }
+        // the folders from root down to item's parent, and the next step from each
+        var chain = [root]
+        for name in item.dropFirst(root.count + 1).split(separator: "/").dropLast() {
+            chain.append(chain[chain.count - 1] + "/" + name)
+        }
+        let steps = Array(chain.dropFirst()) + [item]
+        var on = rootOn
+        for (folder, next) in zip(chain, steps) { on = on && isTicked(next, in: folder) }
+        whole(item)
+        if on {
+            // untick it; a folder left with nothing ticked is unticked in turn
+            for (folder, next) in zip(chain, steps).reversed() {
+                var t = ticked[folder] ?? Set(kids(folder))
+                t.remove(next)
+                if !t.isEmpty {
+                    ticked[folder] = t
+                    return true
+                }
+                whole(folder)
+            }
+            return false
+        }
+        // tick it, and the way down to it: a folder that was off gets this one only
+        on = rootOn
+        for (folder, next) in zip(chain, steps) {
+            let wasOn = on
+            on = on && isTicked(next, in: folder)
+            var t = wasOn ? ticked[folder] ?? Set(kids(folder)) : []
+            t.insert(next)
+            ticked[folder] = t == Set(kids(folder)) ? nil : t
+        }
+        return true
     }
 
-    mutating func whole(_ parent: String) { ticked[parent] = nil }
+    /// `folder` goes whole (or not at all): forget the ticks inside it.
+    mutating func whole(_ folder: String) {
+        ticked = ticked.filter { $0.key != folder && !$0.key.hasPrefix(folder + "/") }
+    }
+
+    /// What goes of a partly ticked `folder`: the deepest fully ticked items inside it.
+    func leaves(_ folder: String) -> [String] {
+        kids(folder).filter { isTicked($0, in: folder) }.flatMap { isPartial($0) ? leaves($0) : [$0] }
+    }
 
     /// Opens or closes `parent`; the first time, `loaded` receives its children.
     mutating func toggleOpen(_ parent: String, loaded: @escaping @MainActor ([JSON]) -> Void) {
@@ -59,9 +98,10 @@ struct Parts {
         }
     }
 
-    /// The `parts` argument of a remove/clean request, for the folders in `chosen`.
-    func request(_ chosen: (String) -> Bool) -> [String: [String]] {
-        ticked.filter { chosen($0.key) }.mapValues { Array($0) }
+    /// The `parts` argument of a remove/clean request, for the listed folders in `chosen`
+    /// that go in part.
+    func request(_ chosen: some Sequence<String>) -> [String: [String]] {
+        Dictionary(chosen.filter(isPartial).map { ($0, leaves($0)) }, uniquingKeysWith: { a, _ in a })
     }
 }
 
@@ -84,24 +124,18 @@ struct OpenButton: View {
     }
 }
 
-/// The children of an opened folder. Only the first level has checkboxes: the engine takes
-/// direct children of a listed folder as parts, so deeper levels are for looking only.
+/// The children of an opened folder, with a checkbox at every depth.
 struct PartRows: View {
     let parent: String
     let parts: Parts
     /// the folder itself is ticked (whole or in part)
     let parentOn: Bool
-    var depth = 0
     let toggle: (String) -> Void
     let open: (String) -> Void
 
     var body: some View {
         if let kids = parts.children[parent] {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if depth == 1 && !kids.isEmpty {
-                    Text("Only the first level can be ticked; deeper folders are for looking.")
-                        .font(.system(size: 11)).foregroundStyle(.dim).padding(.horizontal, 12).padding(.vertical, 2)
-                }
                 ForEach(kids, id: \.path.string) { child in row(child) }
                 if kids.isEmpty { Text("Empty").font(.system(size: 12)).foregroundStyle(.dim).padding(8) }
             }
@@ -117,10 +151,11 @@ struct PartRows: View {
     private func row(_ child: JSON) -> some View {
         let path = child.path.string ?? ""
         let on = parentOn && parts.isTicked(path, in: parent)
+        let partial = on && parts.isPartial(path)
         let opened = parts.open.contains(path)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 14)).opacity(depth == 0 ? 1 : 0)
+                Image(systemName: partial ? "minus.circle.fill" : on ? "checkmark.circle.fill" : "circle").font(.system(size: 14))
                 Image(nsImage: fileIcon(path)).resizable().frame(width: 18, height: 18)
                 Text(verbatim: child.name.string ?? URL(fileURLWithPath: path).lastPathComponent)
                     .font(.system(size: 12)).lineLimit(1).truncationMode(.middle).help(path)
@@ -133,11 +168,11 @@ struct PartRows: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
-            .checkRow(on) { if depth == 0 { toggle(path) } }
+            .checkRow(on) { toggle(path) }
             .peekable(path)
             .contextMenu { FileMenu(path: path) }
             if opened {
-                PartRows(parent: path, parts: parts, parentOn: false, depth: depth + 1, toggle: toggle, open: open)
+                PartRows(parent: path, parts: parts, parentOn: on, toggle: toggle, open: open)
                     .padding(.leading, 24)
             }
         }

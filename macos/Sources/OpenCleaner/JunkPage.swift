@@ -64,8 +64,8 @@ final class JunkModel {
     func toggleChild(_ child: String, of path: String, in rule: JSON) {
         if !isOn(path, in: rule) {
             toggleItem(path, in: rule)
-            parts.only(child, in: path)
-        } else if !parts.toggle(child, in: path) {
+            _ = parts.toggle(child, root: path, rootOn: false)
+        } else if !parts.toggle(child, root: path, rootOn: true) {
             toggleItem(path, in: rule)
         }
     }
@@ -138,7 +138,7 @@ final class JunkModel {
                 .subtracting(excluded)
             let request: [String: Any] = [
                 "op": "clean", "plan": Int(planID), "rules": Array(selected), "skip": Array(excluded),
-                "parts": parts.request { chosen.contains($0) },
+                "parts": parts.request(chosen),
             ]
             var shown = Date.distantPast
             for await event in Engine.run(request) {

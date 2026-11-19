@@ -54,7 +54,8 @@ pub fn check_user_file(ctx: &Context, path: &Path, dir: &Path) -> Result<(), Ref
     Ok(())
 }
 
-fn record(ctx: &Context, item: &Item) {
+/// Writes the history lines of an item turned off (`trashed`: where its file went).
+fn record(ctx: &Context, item: &Item, trashed: Option<PathBuf>) {
     let mut ledger = ledger::Writer::open(ctx);
     let now = ledger::now();
     ledger.write(&Line::Startup {
@@ -62,6 +63,7 @@ fn record(ctx: &Context, item: &Item) {
         path: item.path.clone(),
         label: item.label.clone(),
         program: item.program.clone(),
+        trashed,
     });
     ledger.write(&Line::Session {
         id: now,
@@ -74,8 +76,41 @@ fn record(ctx: &Context, item: &Item) {
     });
 }
 
+/// What OpenCleaner turned off, oldest first, the latest record of each item only, with
+/// where its file went in the Trash.
+#[cfg(any(target_os = "macos", windows))]
+fn records(ctx: &Context) -> Vec<(Item, Option<PathBuf>)> {
+    let mut out: Vec<(Item, Option<PathBuf>)> = Vec::new();
+    for line in ledger::lines(ctx) {
+        if let Line::Startup {
+            path,
+            label,
+            program,
+            trashed,
+            ..
+        } = line
+        {
+            out.retain(|(i, _)| !(i.path == path && i.label == label));
+            out.push((
+                Item {
+                    name: display_name(&program, &label),
+                    path,
+                    label,
+                    program,
+                    scope: "user",
+                    enabled: false,
+                },
+                trashed,
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(target_os = "macos")]
-pub use mac::{agents_dir, disable, list, permissions, read_plist, read_tcc};
+pub use mac::{
+    agents_dir, disable, enable, list, permissions, put_back, read_plist, read_tcc, turned_off,
+};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -162,8 +197,62 @@ mod mac {
             .arg(format!("gui/{uid}"))
             .arg(path)
             .output();
-        crate::trash::move_to_trash(path).map_err(|e| e.to_string())?;
-        record(ctx, &item);
+        let trashed = crate::trash::move_to_trash(path).map_err(|e| e.to_string())?;
+        record(ctx, &item, trashed);
+        Ok(())
+    }
+
+    /// The plist of a record in the Trash: where the history says, or (older records) the
+    /// same name in the home Trash, if it still holds that agent.
+    fn trashed_copy(ctx: &Context, item: &Item, trashed: &Option<PathBuf>) -> Option<PathBuf> {
+        let p = match trashed {
+            Some(t) => t.clone(),
+            None => ctx.home.join(".Trash").join(item.path.file_name()?),
+        };
+        (read_plist(&p, "user")?.label == item.label).then_some(p)
+    }
+
+    /// Items OpenCleaner turned off that can be turned back on: the plist is in the Trash
+    /// and nothing took its place. Newest first.
+    pub fn turned_off(ctx: &Context) -> Vec<Item> {
+        records(ctx)
+            .into_iter()
+            .rev()
+            .filter(|(i, t)| {
+                std::fs::symlink_metadata(&i.path).is_err() && trashed_copy(ctx, i, t).is_some()
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Moves a plist OpenCleaner turned off back from the Trash to where it was: only
+    /// directly into the user's LaunchAgents, never over something that is there now.
+    pub fn put_back(ctx: &Context, path: &Path) -> Result<(), String> {
+        let dir = agents_dir(ctx);
+        if path.parent() != Some(dir.as_path()) {
+            return Err("not directly in the startup folder".into());
+        }
+        guard::check_for(path, &dir, ctx, Purpose::Clean)?;
+        let (item, trashed) = records(ctx)
+            .into_iter()
+            .rev()
+            .find(|(i, _)| i.path == path)
+            .ok_or("not turned off by OpenCleaner")?;
+        let from = trashed_copy(ctx, &item, &trashed).ok_or("no longer in the Trash")?;
+        crate::trash::put_back(path, &from).map_err(|e| e.to_string())
+    }
+
+    /// Turns an item OpenCleaner turned off back on: its plist back in place, then loaded
+    /// (`launchctl bootstrap`). `_label` is for Windows Run values.
+    pub fn enable(ctx: &Context, path: &Path, _label: &str) -> Result<(), String> {
+        put_back(ctx, path)?;
+        let uid = unsafe { libc::getuid() };
+        // not loaded now (already loaded, or refused): it still starts at the next login
+        let _ = Command::new("/bin/launchctl")
+            .arg("bootstrap")
+            .arg(format!("gui/{uid}"))
+            .arg(path)
+            .output();
         Ok(())
     }
 
@@ -227,7 +316,7 @@ mod mac {
 }
 
 #[cfg(windows)]
-pub use win::{disable, list};
+pub use win::{disable, enable, list, turned_off};
 
 #[cfg(windows)]
 mod win {
@@ -235,9 +324,60 @@ mod win {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
-        RRF_NOEXPAND, RRF_RT_REG_BINARY, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey,
-        RegDeleteKeyValueW, RegEnumValueW, RegGetValueW, RegOpenKeyExW,
+        REG_EXPAND_SZ, REG_SZ, RRF_NOEXPAND, RRF_RT_REG_BINARY, RRF_RT_REG_EXPAND_SZ,
+        RRF_RT_REG_SZ, RegCloseKey, RegDeleteKeyValueW, RegEnumValueW, RegGetValueW, RegOpenKeyExW,
+        RegSetKeyValueW,
     };
+
+    /// The user's Run values OpenCleaner removed that are still gone. Newest first.
+    pub fn turned_off(ctx: &Context) -> Vec<Item> {
+        records(ctx)
+            .into_iter()
+            .rev()
+            .filter(|(i, _)| {
+                i.path == Path::new(HKCU_RUN) && value(HKEY_CURRENT_USER, RUN, &i.label).is_none()
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Writes back the user's Run value `label` with the command the history kept, unless
+    /// a value of that name is there now. (Shortcuts went to the Recycle Bin: restored
+    /// from there.)
+    pub fn enable(ctx: &Context, path: &Path, label: &str) -> Result<(), String> {
+        if path != Path::new(HKCU_RUN) {
+            return Err("only the user's Run values can be turned back on here".into());
+        }
+        let (item, _) = records(ctx)
+            .into_iter()
+            .rev()
+            .find(|(i, _)| i.path == path && i.label == label)
+            .ok_or("not turned off by OpenCleaner")?;
+        if value(HKEY_CURRENT_USER, RUN, label).is_some() {
+            return Err("something else is there now".into());
+        }
+        // read without expanding: a command with %VARS% was an expandable string
+        let kind = if item.program.contains('%') {
+            REG_EXPAND_SZ
+        } else {
+            REG_SZ
+        };
+        let (sub, name, data) = (wide(RUN), wide(label), wide(&item.program));
+        let rc = unsafe {
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                sub.as_ptr(),
+                name.as_ptr(),
+                kind,
+                data.as_ptr().cast(),
+                (data.len() * 2) as u32,
+            )
+        };
+        if rc != ERROR_SUCCESS {
+            return Err(format!("the registry refused (error {rc})"));
+        }
+        Ok(())
+    }
 
     const RUN: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
     const APPROVED: &str =
@@ -420,6 +560,7 @@ mod win {
                     scope: "user",
                     enabled: true,
                 },
+                None,
             );
             return Ok(());
         }
@@ -437,6 +578,7 @@ mod win {
                 scope: "user",
                 enabled: true,
             },
+            None,
         );
         Ok(())
     }
@@ -445,6 +587,16 @@ mod win {
 #[cfg(not(any(target_os = "macos", windows)))]
 pub fn list(_ctx: &Context) -> Vec<Item> {
     Vec::new()
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn turned_off(_ctx: &Context) -> Vec<Item> {
+    Vec::new()
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn enable(_ctx: &Context, _path: &Path, _label: &str) -> Result<(), String> {
+    Err("not supported here".into())
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]

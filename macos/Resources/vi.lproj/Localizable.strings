@@ -241,7 +241,6 @@
 "Sort by" = "Sắp xếp theo";
 "Size" = "Dung lượng";
 "Name" = "Tên";
-"Only the first level can be ticked; deeper folders are for looking." = "Chỉ chọn được mục ở cấp đầu tiên; các thư mục sâu hơn chỉ để xem.";
 
 /* Tự động hoá: dọn theo lịch, thanh menu, cảnh báo ổ đầy, theo dõi Thùng rác / Tải về */
 "%@ %@" = "%@ %@";
@@ -430,3 +429,5 @@
 "Check Now" = "Kiểm tra ngay";
 "No excluded folders" = "Chưa loại trừ thư mục nào";
 "The new language shows after a relaunch." = "Ngôn ngữ mới sẽ hiện sau khi mở lại ứng dụng.";
+"Turned off by OpenCleaner" = "Đã được OpenCleaner tắt";
+"also used by the other copy of this app" = "bản sao kia của ứng dụng này cũng dùng";

@@ -450,3 +450,116 @@ fn only_the_ticked_children_of_a_pick_go_and_strangers_are_refused() {
     assert!(h("Projects/web/node_modules/b/index.js").exists());
     assert!(h("Projects/web/package.json").exists());
 }
+
+#[test]
+fn twin_apps_are_marked_and_a_staying_copy_keeps_its_data() {
+    let (_t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    // the same app twice (here: ChatGPT.app and an older copy still called Codex.app)
+    let app = |file: &str, version: &str| apps::App {
+        name: "ChatGPT".into(),
+        bundle_id: "com.openai.codex".into(),
+        version: version.into(),
+        path: h(file),
+        ..Default::default()
+    };
+    let mut list = vec![
+        app("Applications/ChatGPT.app", "2"),
+        app("Applications/Codex.app", "1"),
+        apps::App {
+            name: "Other".into(),
+            ..Default::default()
+        },
+    ];
+    apps::mark_twins(&mut list);
+    assert_eq!(
+        list.iter().map(|a| a.twin).collect::<Vec<_>>(),
+        [true, true, false]
+    );
+
+    std::fs::create_dir_all(&list[1].path).unwrap();
+    write(&h("Library/Caches/com.openai.codex/x"), 10);
+    let none = AtomicBool::new(false);
+    let old = [list[1].path.clone()];
+    let picks = apps::uninstall_plan(&list[1], &list, &old, &ctx, &none);
+    let cache = picks
+        .iter()
+        .find(|p| p.path.ends_with("com.openai.codex"))
+        .unwrap();
+    assert!(!cache.preselect && cache.flags.contains(&"shared"));
+    assert!(picks[0].preselect, "the bundle itself is still ticked");
+
+    // both copies going: the data goes too
+    let both = [list[0].path.clone(), list[1].path.clone()];
+    let picks = apps::uninstall_plan(&list[1], &list, &both, &ctx, &none);
+    assert!(picks.iter().all(|p| p.preselect && p.flags.is_empty()));
+}
+
+#[test]
+fn parts_may_sit_at_any_depth_but_never_behind_a_link_or_outside() {
+    use oc_engine::guard::{identity, part_of};
+    let (t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    write(&h("Caches/app/a/b/c.bin"), 10);
+    write(&h("Caches/other/x"), 10);
+    let root = h("Caches/app");
+    let id = identity(&root).unwrap();
+    assert!(part_of(&root, &id, &h("Caches/app/a")).is_ok());
+    assert!(part_of(&root, &id, &h("Caches/app/a/b/c.bin")).is_ok());
+    for bad in [
+        root.clone(),
+        h("Caches/other/x"),
+        h("Caches/app/../other/x"),
+        h("Caches/appx"),
+        PathBuf::from("Caches/app/a"),
+    ] {
+        assert!(part_of(&root, &id, &bad).is_err(), "{}", bad.display());
+    }
+    // a link inside the listed folder is not followed
+    #[cfg(unix)]
+    {
+        write(&t.path().join("outside/secret"), 10);
+        std::os::unix::fs::symlink(t.path().join("outside"), h("Caches/app/link")).unwrap();
+        assert!(part_of(&root, &id, &h("Caches/app/link/secret")).is_err());
+    }
+    // a file in the way, and a part that is gone
+    assert!(part_of(&root, &id, &h("Caches/app/a/b/c.bin/z")).is_err());
+    assert!(part_of(&root, &id, &h("Caches/app/a/gone")).is_err());
+    // the listed folder replaced since it was listed
+    std::fs::rename(&root, h("Caches/old")).unwrap();
+    write(&h("Caches/app/a/b/c.bin"), 10);
+    assert!(part_of(&root, &id, &h("Caches/app/a/b/c.bin")).is_err());
+    drop(t);
+}
+
+#[test]
+fn a_part_deep_inside_a_pick_goes_alone() {
+    let (_t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    write(&h("Projects/web/package.json"), 10);
+    write(&h("Projects/web/node_modules/a/big/x.js"), 50_000);
+    write(&h("Projects/web/node_modules/a/small/y.js"), 10);
+    let list = picks::store(
+        "projects",
+        finders::projects(&ctx, &[], &AtomicBool::new(false)),
+        &ctx,
+    );
+    let idx = list
+        .items
+        .iter()
+        .position(|p| p.path.ends_with("node_modules"))
+        .unwrap();
+    let parts = HashMap::from([(idx, vec![h("Projects/web/node_modules/a/big")])]);
+    let out = picks::execute(
+        &ctx,
+        list.plan,
+        &[idx],
+        &parts,
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .unwrap();
+    assert_eq!((out.removed, out.skipped), (1, 0), "{:?}", out.results);
+    assert!(!h("Projects/web/node_modules/a/big").exists());
+    assert!(h("Projects/web/node_modules/a/small/y.js").exists());
+}

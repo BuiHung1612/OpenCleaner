@@ -290,11 +290,21 @@ pub fn identity(path: &Path) -> Option<Identity> {
     })
 }
 
-/// A child the user ticked inside a listed folder: it must sit directly in that folder,
-/// and the folder must still be the one that was listed. Returns the child's identity.
+/// Something the user ticked inside a listed folder, at any depth: it must sit strictly
+/// inside that folder (a plain path, no `.`/`..`), every folder between them must be a
+/// real directory (not a link), and the listed folder must still be the one that was
+/// listed. Returns the part's identity.
 pub fn part_of(parent: &Path, parent_id: &Identity, part: &Path) -> Result<Identity, String> {
-    if part.parent() != Some(parent) {
+    if !is_clean_path(part) || part == parent || !is_within(part, parent) {
         return Err("not inside the listed folder".into());
+    }
+    let mut dir = part.parent();
+    while let Some(d) = dir.filter(|d| *d != parent) {
+        // lstat: a link here could point the removal anywhere
+        if !std::fs::symlink_metadata(d).is_ok_and(|m| m.is_dir()) {
+            return Err("a link or a file in the path".into());
+        }
+        dir = d.parent();
     }
     if !still_same(parent, parent_id) {
         return Err("changed since it was listed".into());
