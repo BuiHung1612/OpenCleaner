@@ -201,6 +201,25 @@ pub fn is_within(path: &Path, root: &Path) -> bool {
     true
 }
 
+/// `is_within` for names the file system compares without case (macOS, Windows): each
+/// component is compared lowercased. Unicode forms (NFC/NFD) are not normalised here: the
+/// exclusion check backs this up by comparing folder identities (dev, ino), which catches
+/// them, and the fixed folder names it is used with (PRIVATE…) are ASCII.
+pub fn is_within_nocase(path: &Path, root: &Path) -> bool {
+    if !cfg!(any(target_os = "macos", windows)) {
+        return is_within(path, root);
+    }
+    let key = |c: Component| c.as_os_str().to_string_lossy().to_lowercase();
+    let mut p = path.components();
+    for r in root.components() {
+        match p.next() {
+            Some(c) if key(c) == key(r) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// No `.`/`..`, absolute, no control characters.
 pub fn is_clean_path(path: &Path) -> bool {
     path.is_absolute()

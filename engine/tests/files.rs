@@ -108,6 +108,56 @@ fn duplicates_are_byte_for_byte_and_keep_the_oldest() {
     );
 }
 
+/// Never reaches the Trash: every case here must be refused before anything moves.
+#[test]
+fn removing_duplicates_always_leaves_one_unchanged_copy() {
+    use oc_engine::picks;
+    let (_t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    write(&h("Downloads/a.zip"), 2 * MIB);
+    age(&h("Downloads/a.zip"), 10);
+    write(&h("Documents/b.zip"), 2 * MIB);
+    let run = |items: &[usize], plan: u64| {
+        picks::execute(
+            &ctx,
+            plan,
+            items,
+            &HashMap::new(),
+            &AtomicBool::new(false),
+            &mut |_, _| {},
+        )
+        .unwrap()
+    };
+    let list = picks::store(
+        "duplicates",
+        files::duplicates(&ctx, 1, &AtomicBool::new(false)),
+        &ctx,
+    );
+    assert_eq!(list.items.len(), 2);
+    let kept = list.items.iter().position(|p| !p.preselect).unwrap();
+    let copy = 1 - kept;
+
+    // every copy of the set picked: none goes
+    let out = run(&[0, 1], list.plan);
+    assert_eq!((out.removed, out.skipped), (0, 2));
+    assert!(
+        out.results
+            .iter()
+            .all(|r| r == "skipped: no copy would be left")
+    );
+
+    // the copy that stays was edited since (same file, new length): the set is left alone
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&list.items[kept].path)
+        .unwrap()
+        .set_len(2 * MIB as u64 + 1)
+        .unwrap();
+    let out = run(&[copy], list.plan);
+    assert_eq!(out.results, ["skipped: no copy would be left"]);
+    assert!(h("Downloads/a.zip").exists() && h("Documents/b.zip").exists());
+}
+
 #[test]
 fn files_purpose_takes_plain_files_only() {
     let (_t, ctx) = home();

@@ -247,7 +247,11 @@ pub fn call(request: &str) -> Value {
         Ok(Request::TouchidScript { enable }) => {
             json!({"ok": true, "script": maintenance::touchid_script(enable)})
         }
-        Ok(Request::Exclusions) => json!({"ok": true, "paths": guard::exclusions(ctx())}),
+        // a damaged list: nothing is removed until it is saved again (setting it replaces it)
+        Ok(Request::Exclusions) => match guard::load_exclusions(ctx()) {
+            Ok(paths) => json!({"ok": true, "paths": paths}),
+            Err(e) => json!({"ok": false, "error": e, "paths": []}),
+        },
         Ok(Request::SetExclusions { paths }) => match guard::set_exclusions(ctx(), paths) {
             Ok(()) => json!({"ok": true, "paths": guard::exclusions(ctx())}),
             Err(e) => json!({"ok": false, "error": e.to_string()}),
@@ -256,10 +260,11 @@ pub fn call(request: &str) -> Value {
             let results: Vec<String> = items
                 .iter()
                 .map(|m| {
-                    if !ledger::was_trashed(ctx(), &m.from, &m.to) {
-                        return "not moved to the Trash by OpenCleaner".to_string();
-                    }
-                    match crate::trash::put_back(&m.from, &m.to) {
+                    let was = match ledger::trashed_stamp(ctx(), &m.from, &m.to) {
+                        Ok(s) => s,
+                        Err(why) => return why.to_string(),
+                    };
+                    match crate::trash::put_back_checked(&m.from, &m.to, &was) {
                         Ok(()) => "ok".into(),
                         Err(e) => e.to_string(),
                     }
@@ -411,11 +416,14 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                // Space Lens moves what the user points at, but never from an excluded folder
-                let result = if guard::excluded(p, ctx()) {
-                    Err(std::io::Error::other("excluded in Settings"))
-                } else {
-                    crate::trash::move_to_trash(p)
+                // Space Lens moves what the user points at, but never from or holding an
+                // excluded folder, checked where the item really is
+                let (p, result) = match guard::check_trash_path(p, ctx()) {
+                    Ok(real) => {
+                        let r = crate::trash::move_to_trash(&real);
+                        (real, r)
+                    }
+                    Err(why) => (p.clone(), Err(std::io::Error::other(why))),
                 };
                 let (word, reason, trashed) = match result {
                     Ok(to) => {
@@ -430,10 +438,11 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
                 ledger.write(&ledger::Line::Item {
                     session,
                     rule: "space_lens".into(),
-                    path: p.clone(),
+                    path: p,
                     bytes: 0,
                     result: word.into(),
                     reason,
+                    stamp: trashed.as_deref().and_then(guard::stamp),
                     trashed,
                 });
             }

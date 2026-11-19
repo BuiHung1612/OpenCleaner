@@ -142,6 +142,8 @@ fn collect(
 
 fn pick(path: PathBuf, root: PathBuf, e: &Entry, ctx: &Context) -> Pick {
     let mut p = Pick::new(path, root, Purpose::Files, Action::Trash);
+    // a file edited after the listing (same file id, new contents) is not removed
+    p.stamp = guard::stamp(&p.path);
     p.bytes = e.freed();
     p.group = p
         .path
@@ -223,7 +225,8 @@ pub fn duplicates(ctx: &Context, min_mib: u64, cancel: &AtomicBool) -> Vec<Pick>
         for same_head in split_by(same_len, |f| hashes.get(f, HEAD)) {
             for same in split_by(same_head, |f| hashes.get(f, FULL)) {
                 for set in confirm(same) {
-                    picks.extend(set_picks(set, ctx));
+                    let n = picks.len(); // distinct per set: each set adds its picks
+                    picks.extend(set_picks(set, ctx, n));
                 }
             }
         }
@@ -424,7 +427,8 @@ fn read_full(f: &mut std::fs::File, buf: &mut [u8]) -> io::Result<usize> {
     Ok(n)
 }
 
-fn set_picks(mut set: Vec<Found>, ctx: &Context) -> Vec<Pick> {
+/// `id`: the set's number, so removal can make sure one copy of it stays.
+fn set_picks(mut set: Vec<Found>, ctx: &Context, id: usize) -> Vec<Pick> {
     // the oldest copy stays
     set.sort_by_key(|f| f.2.mtime);
     let name = set[0].2.name.to_string_lossy().into_owned();
@@ -436,6 +440,7 @@ fn set_picks(mut set: Vec<Found>, ctx: &Context) -> Vec<Pick> {
             let place = p.group.clone();
             p.group = format!("{name} · {count} copies");
             p.copies = Some(count);
+            p.set = Some(id);
             p.place = place.clone();
             if i == 0 {
                 p.flags.push("kept");

@@ -420,6 +420,7 @@
 "Alerts" = "Cảnh báo";
 "Check Now" = "Kiểm tra ngay";
 "No excluded folders" = "Chưa loại trừ thư mục nào";
+"Nothing is removed until the list is saved again: add or remove a folder." = "Sẽ không xóa gì cho đến khi danh sách được lưu lại: hãy thêm hoặc bỏ một thư mục.";
 "The new language shows after a relaunch." = "Ngôn ngữ mới sẽ hiện sau khi mở lại ứng dụng.";
 
 /* Developer Tools */

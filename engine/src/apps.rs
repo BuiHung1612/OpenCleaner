@@ -245,7 +245,9 @@ fn stamp(app: &Path) -> Option<String> {
 }
 
 /// Places an app keeps its data, by bundle id (`{id}`) or by name (`{name}`). Each pattern
-/// is one path; a `*` stays within one component.
+/// is a fixed folder and a last component; only a `*` written here is a wildcard (one per
+/// pattern at most), never anything in the id or name, which come from the app's own
+/// Info.plist and are matched literally.
 const LEFTOVERS: &[(&str, &str)] = &[
     ("~/Library/Application Support/{id}", "Application data"),
     ("~/Library/Caches/{id}", "Cache"),
@@ -282,20 +284,24 @@ pub fn uninstall_picks(app: &App, ctx: &Context, cancel: &AtomicBool) -> Vec<Pic
     bundle.running = vec![app.bundle_id.clone()];
     picks.push(bundle);
 
-    // a name that is too short or generic could be another app's folder
-    let name_usable = app.name.chars().filter(|c| c.is_alphanumeric()).count() >= 4;
+    let id_usable = usable_id(&app.bundle_id);
+    let name_usable = usable_name(&app.name);
     let mut seen = std::collections::HashSet::new();
     for (pattern, what) in LEFTOVERS {
-        if pattern.contains("{name}") && !name_usable {
+        let (dir, last) = pattern.rsplit_once('/').unwrap_or_default();
+        let value = if last.contains("{id}") {
+            ("{id}", &app.bundle_id, id_usable)
+        } else {
+            ("{name}", &app.name, name_usable)
+        };
+        if !value.2 {
             continue;
         }
-        let pattern = pattern
-            .replace("{id}", &app.bundle_id)
-            .replace("{name}", &app.name);
-        if pattern.contains("/../") || pattern.contains("/./") {
-            continue;
-        }
-        for path in rules::expand(&pattern, ctx) {
+        let found: Vec<PathBuf> = rules::expand(dir, ctx)
+            .iter()
+            .flat_map(|d| named_in(d, last, value.0, value.1))
+            .collect();
+        for path in found {
             if !seen.insert(path.clone()) {
                 continue;
             }
@@ -316,6 +322,53 @@ pub fn uninstall_picks(app: &App, ctx: &Context, cancel: &AtomicBool) -> Vec<Pic
         p.bytes = b;
     }
     picks
+}
+
+/// A bundle id fit to name folders: letters, digits, `.` and `-` only. A `*`, a `/`, `..`
+/// or nothing at all would name other apps' folders or the Library's own.
+fn usable_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 255
+        && id != "."
+        && id != ".."
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
+/// An app name fit to name folders: one plain component, and distinctive (a short or
+/// generic name could be another app's folder).
+fn usable_name(name: &str) -> bool {
+    name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.chars().any(char::is_control)
+        && name.chars().filter(|c| c.is_alphanumeric()).count() >= 4
+}
+
+/// The entries of `dir` named `template` with `key` replaced by `value`, taken literally:
+/// only the template's own `*` matches any run of characters. Links are not matches.
+fn named_in(dir: &Path, template: &str, key: &str, value: &str) -> Vec<PathBuf> {
+    // split before substituting, so a `*` in the value stays a plain character
+    let parts: Vec<String> = template.split('*').map(|s| s.replace(key, value)).collect();
+    let mut found = match parts.as_slice() {
+        [whole] => vec![dir.join(whole)],
+        [head, tail] => std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| {
+                e.file_name().to_str().is_some_and(|n| {
+                    n.len() >= head.len() + tail.len() && n.starts_with(head) && n.ends_with(tail)
+                })
+            })
+            .map(|e| e.path())
+            .collect(),
+        _ => Vec::new(),
+    };
+    found.sort();
+    found.retain(|p| std::fs::symlink_metadata(p).is_ok_and(|m| !m.file_type().is_symlink()));
+    found
 }
 
 /// Starts the vendor's uninstaller for the app registered under `key` (Windows). It runs

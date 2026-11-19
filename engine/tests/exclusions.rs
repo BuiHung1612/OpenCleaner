@@ -158,6 +158,7 @@ fn history_lists_trashed_items_still_in_the_trash_and_reads_old_lines() {
         result: "removed".into(),
         reason: None,
         trashed: Some(to.clone()),
+        stamp: guard::stamp(&to),
     });
     w.write(&ledger::Line::Session {
         id: 1,
@@ -173,6 +174,209 @@ fn history_lists_trashed_items_still_in_the_trash_and_reads_old_lines() {
     let trashed = v["sessions"][0]["trashed"].as_array().unwrap();
     assert_eq!(trashed.len(), 1);
     assert_eq!(trashed[0]["to"], to.to_string_lossy().as_ref());
-    assert!(ledger::was_trashed(&ctx, &from, &to));
-    assert!(!ledger::was_trashed(&ctx, &ctx.home.join("elsewhere"), &to));
+    assert!(ledger::trashed_stamp(&ctx, &from, &to).is_ok());
+    assert!(ledger::trashed_stamp(&ctx, &ctx.home.join("elsewhere"), &to).is_err());
+}
+
+#[test]
+fn put_back_moves_only_the_very_item_that_was_trashed() {
+    use oc_engine::ledger;
+    let (t, ctx) = home();
+    let from = ctx.home.join("Downloads/a.dmg");
+    let to = t.path().join(".Trash/a.dmg");
+    std::fs::create_dir_all(from.parent().unwrap()).unwrap();
+    write(&to, 10);
+    std::fs::create_dir_all(&ctx.data_dir).unwrap();
+    // an old line (no stamp) for another trashed item is never put back
+    let old_to = t.path().join(".Trash/old.dmg");
+    write(&old_to, 1);
+    let old = format!(
+        r#"{{"t":"item","session":1,"rule":"installers","path":{:?},"bytes":1,"result":"removed","reason":null,"trashed":{:?}}}"#,
+        ctx.home.join("Downloads/old.dmg"),
+        old_to
+    );
+    std::fs::write(ledger::path(&ctx), format!("{old}\n")).unwrap();
+    let mut w = ledger::Writer::open(&ctx);
+    w.write(&ledger::Line::Item {
+        session: 2,
+        rule: "installers".into(),
+        path: from.clone(),
+        bytes: 10,
+        result: "removed".into(),
+        reason: None,
+        trashed: Some(to.clone()),
+        stamp: guard::stamp(&to),
+    });
+    drop(w);
+    assert!(
+        ledger::trashed_stamp(&ctx, &ctx.home.join("Downloads/old.dmg"), &old_to).is_err(),
+        "a line without a stamp is not put back"
+    );
+
+    // something else now sits in the Trash under that name: refused, left alone
+    let was = ledger::trashed_stamp(&ctx, &from, &to).unwrap();
+    std::fs::remove_file(&to).unwrap();
+    write(&to, 99);
+    assert!(trash::put_back_checked(&from, &to, &was).is_err());
+    assert!(to.exists() && !from.exists());
+
+    // the very item: put back
+    let was = guard::stamp(&to).unwrap();
+    trash::put_back_checked(&from, &to, &was).unwrap();
+    assert_eq!(std::fs::read(&from).unwrap().len(), 99);
+}
+
+#[test]
+fn an_item_holding_an_excluded_folder_is_refused_and_kept_by_the_scan() {
+    use oc_engine::{clean, procs::Running, rules::RuleSet};
+    let (_t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    write(&h("Library/Caches/com.foo/keepme/precious"), 10);
+    write(&h("Library/Caches/com.bar/x"), 10);
+    write(&h("Projects/web/package.json"), 10);
+    write(&h("Projects/web/node_modules/keep/x"), 10);
+    guard::set_exclusions(
+        &ctx,
+        vec![
+            h("Library/Caches/com.foo/keepme"),
+            h("Projects/web/node_modules/keep"),
+        ],
+    )
+    .unwrap();
+    for (item, root, purpose) in [
+        (
+            h("Library/Caches/com.foo"),
+            h("Library/Caches"),
+            Purpose::Clean,
+        ),
+        (
+            h("Library/Caches/com.foo"),
+            h("Library/Caches"),
+            Purpose::Uninstall,
+        ),
+        (
+            h("Projects/web/node_modules"),
+            h("Projects"),
+            Purpose::Projects,
+        ),
+    ] {
+        assert_eq!(
+            check_for(&item, &root, &ctx, purpose),
+            Err("holds a folder excluded in Settings"),
+            "{item:?}"
+        );
+    }
+    assert!(
+        check_for(
+            &h("Library/Caches/com.bar"),
+            &h("Library/Caches"),
+            &ctx,
+            Purpose::Clean
+        )
+        .is_ok()
+    );
+    // another spelling of the excluded folder (case; caught by name on macOS/Windows and
+    // by identity anywhere the file system ignores case)
+    if cfg!(any(target_os = "macos", windows)) {
+        assert!(guard::excluded(
+            &h("library/caches/COM.FOO/keepme/precious"),
+            &ctx
+        ));
+    }
+
+    let set = RuleSet::parse(
+        "[[group]]\nid=\"g\"\ntitle=\"g\"\n[[rule]]\nid=\"caches\"\ngroup=\"g\"\ntitle=\"c\"\npaths=[\"~/Library/Caches\"]\n",
+    )
+    .unwrap();
+    let plan = clean::scan_with(
+        &ctx,
+        &set,
+        &Running::default(),
+        true,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    );
+    let listed: Vec<String> = plan
+        .groups
+        .iter()
+        .flat_map(|g| {
+            g.rules
+                .iter()
+                .flat_map(|r| r.paths.clone().unwrap_or_default())
+        })
+        .map(|p| format!("{p:?}"))
+        .collect();
+    assert!(listed.iter().any(|p| p.contains("com.bar")), "{listed:?}");
+    assert!(!listed.iter().any(|p| p.contains("com.foo")), "{listed:?}");
+}
+
+#[test]
+fn a_damaged_exclusions_file_refuses_every_removal_until_saved_again() {
+    let (_t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    write(&h("Library/Caches/com.bar/x"), 10);
+    std::fs::create_dir_all(&ctx.data_dir).unwrap();
+    std::fs::write(ctx.data_dir.join("exclusions.json"), b"[\"/half").unwrap();
+    assert_eq!(
+        check_for(
+            &h("Library/Caches/com.bar"),
+            &h("Library/Caches"),
+            &ctx,
+            Purpose::Clean
+        ),
+        Err(guard::UNREADABLE)
+    );
+    assert!(guard::load_exclusions(&ctx).is_err());
+    // saving replaces it (atomically: no temporary file left behind)
+    guard::set_exclusions(&ctx, vec![]).unwrap();
+    assert!(
+        check_for(
+            &h("Library/Caches/com.bar"),
+            &h("Library/Caches"),
+            &ctx,
+            Purpose::Clean
+        )
+        .is_ok()
+    );
+    let names: Vec<_> = std::fs::read_dir(&ctx.data_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["exclusions.json"]);
+}
+
+#[test]
+fn space_lens_resolves_the_path_before_checking_exclusions() {
+    let (t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    write(&h("Work/keep/a.txt"), 10);
+    write(&h("Work/other.txt"), 10);
+    guard::set_exclusions(&ctx, vec![h("Work/keep")]).unwrap();
+    // `..`, a link to a parent, the folder itself or a folder holding it: all refused
+    assert!(guard::check_trash_path(&h("Work/other/../keep/a.txt"), &ctx).is_err());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(h("Work"), t.path().join("alias")).unwrap();
+        assert_eq!(
+            guard::check_trash_path(&t.path().join("alias/keep/a.txt"), &ctx),
+            Err("excluded in Settings")
+        );
+        assert_eq!(
+            guard::check_trash_path(&t.path().join("alias/keep"), &ctx),
+            Err("excluded in Settings")
+        );
+    }
+    assert_eq!(
+        guard::check_trash_path(&h("Work"), &ctx),
+        Err("holds a folder excluded in Settings")
+    );
+    if cfg!(any(target_os = "macos", windows)) {
+        assert!(guard::check_trash_path(&h("work/KEEP/a.txt"), &ctx).is_err());
+    }
+    // a sibling is fine, and comes back resolved
+    assert_eq!(
+        guard::check_trash_path(&h("Work/other.txt"), &ctx),
+        Ok(h("Work/other.txt"))
+    );
+    let _ = t;
 }
