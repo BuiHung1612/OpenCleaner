@@ -213,7 +213,11 @@ impl Visitor for ArtifactFinder {
             .count()
             .saturating_sub(root.components().count());
         let name = e.name.to_string_lossy();
-        if let Some(kind) = artifact_kind(&name, dir) {
+        // a folder with its own .git (dir or file) is a repository someone cloned there,
+        // not build output: never listed, looked into like any folder
+        if let Some(kind) = artifact_kind(&name, dir)
+            && std::fs::symlink_metadata(dir.join(&e.name).join(".git")).is_err()
+        {
             self.found.lock().unwrap().push((
                 dir.join(&e.name),
                 dir.to_path_buf(),

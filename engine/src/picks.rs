@@ -319,8 +319,8 @@ fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<Done, Failure> {
     let result = match pick.action {
         Action::Trash => trash::move_to_trash(&pick.path).map(done),
         Action::Delete => remove(&pick.path, id.kind).map(|()| done(None)),
-        Action::Slim => slim(&pick.path).map(|freed| Done {
-            trashed: None,
+        Action::Slim => slim(&pick.path).map(|(freed, trashed)| Done {
+            trashed,
             freed: Some(freed),
         }),
     };
@@ -335,11 +335,11 @@ fn remove(path: &Path, kind: Kind) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn slim(path: &Path) -> std::io::Result<u64> {
+fn slim(path: &Path) -> std::io::Result<(u64, Option<PathBuf>)> {
     crate::slim::slim_app(path)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn slim(_path: &Path) -> std::io::Result<u64> {
+fn slim(_path: &Path) -> std::io::Result<(u64, Option<PathBuf>)> {
     Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }

@@ -57,9 +57,13 @@ struct DevToolsPage: View {
                                    message: String(localized: "Docker and Xcode's simulators are not set up on this Mac."))
                     } else {
                         if l.docker.string != "missing" {
-                            section(String(localized: "Docker"))
+                            let context = l.docker_context.string ?? ""
+                            section(context.isEmpty ? String(localized: "Docker") : "Docker · \(context)")
                             if l.docker.string == "stopped" {
                                 Text("Docker is not running").font(.app(13)).foregroundStyle(.dim).padding(.horizontal, 12)
+                            }
+                            if let note = l.docker_note.string, !note.isEmpty {
+                                Text(tr(note)).font(.app(13)).foregroundStyle(.dim).padding(.horizontal, 12)
                             }
                             ForEach(group("docker"), id: \.id.string) { row($0) }
                         }

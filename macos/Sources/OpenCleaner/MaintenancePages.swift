@@ -199,7 +199,12 @@ struct TouchIDPage: View {
     private func toggle() async {
         working = true
         message = nil
-        let script = await Engine.ask(["op": "touchid_script", "enable": !state.enabled.bool]).script.string ?? ""
+        let reply = await Engine.ask(["op": "touchid_script", "enable": !state.enabled.bool])
+        guard let script = reply.script.string, !script.isEmpty else {
+            message = reply.error.string ?? String(localized: "Could not prepare the change.")
+            working = false
+            return
+        }
         switch await Privileged.run(script) {
         case .done, .cancelled: break
         case .failed(let m): message = m

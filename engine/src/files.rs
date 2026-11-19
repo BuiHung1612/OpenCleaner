@@ -170,9 +170,11 @@ fn is_screenshot(name: &str) -> bool {
 pub fn large_old(ctx: &Context, min_mib: u64, days: i64, cancel: &AtomicBool) -> Vec<Pick> {
     let now = now();
     let desktop = ctx.home.join("Desktop");
+    // huge inputs saturate (nothing found) instead of overflowing
+    let (min, idle_min) = (min_mib.saturating_mul(MIB), days.max(0).saturating_mul(DAY));
     let keep = |dir: &Path, e: &Entry| {
         let idle = now - e.mtime.max(e.atime);
-        (e.len >= min_mib * MIB && idle >= days * DAY)
+        (e.len >= min && idle >= idle_min)
             || (dir == desktop
                 && is_screenshot(&e.name.to_string_lossy())
                 && now - e.mtime >= 30 * DAY)
@@ -203,8 +205,9 @@ pub fn large_old(ctx: &Context, min_mib: u64, days: i64, cancel: &AtomicBool) ->
 /// Files of at least `min_mib` MiB whose contents are byte-for-byte the same. Each set
 /// keeps one copy unticked (the oldest, likely the original); the rest start selected.
 pub fn duplicates(ctx: &Context, min_mib: u64, cancel: &AtomicBool) -> Vec<Pick> {
-    let min = min_mib.max(1) * MIB;
-    let keep = |_: &Path, e: &Entry| e.len >= min;
+    let min = min_mib.max(1).saturating_mul(MIB);
+    // an iCloud file not on this Mac would be downloaded to hash it: left out
+    let keep = |dir: &Path, e: &Entry| e.len >= min && !dataless(&dir.join(&e.name));
     // same size first (free), then the same first 64 KiB, then the whole content
     let mut by_len: HashMap<u64, Vec<Found>> = HashMap::new();
     let mut inodes = HashSet::new();
@@ -233,6 +236,19 @@ pub fn duplicates(ctx: &Context, min_mib: u64, cancel: &AtomicBool) -> Vec<Pick>
     }
     picks.sort_by(|a, b| b.bytes.cmp(&a.bytes).then(a.group.cmp(&b.group)));
     picks
+}
+
+/// An iCloud file whose content is not on this Mac (SF_DATALESS): reading it downloads it.
+#[cfg(target_os = "macos")]
+fn dataless(path: &Path) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    const SF_DATALESS: u32 = 0x4000_0000;
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.st_flags() & SF_DATALESS != 0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn dataless(_path: &Path) -> bool {
+    false
 }
 
 /// Groups of two or more with the same key; unreadable files drop out.
@@ -343,9 +359,8 @@ impl HashCache {
                 out.push('\n');
             }
         }
-        let tmp = dir.join(format!(".dup-hashes-{}.tmp", std::process::id()));
-        if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&tmp, out).is_ok() {
-            let _ = std::fs::rename(&tmp, hash_file(dir));
+        if std::fs::create_dir_all(dir).is_ok() {
+            let _ = crate::fs::write_atomic(&hash_file(dir), out);
         }
     }
 }

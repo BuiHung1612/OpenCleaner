@@ -158,6 +158,7 @@ fn turned_off(ctx: &Context, path: &Path, label: &str, trashed: Option<&Path>) {
         label: label.into(),
         program: "/Applications/Example.app/Contents/MacOS/helper".into(),
         trashed: trashed.map(Path::to_path_buf),
+        reg_type: None,
     });
 }
 

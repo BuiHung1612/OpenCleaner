@@ -244,9 +244,10 @@ pub fn call(request: &str) -> Value {
             "results": maintenance::run_user(&tasks),
             "admin_script": maintenance::admin_script(&tasks),
         }),
-        Ok(Request::TouchidScript { enable }) => {
-            json!({"ok": true, "script": maintenance::touchid_script(enable)})
-        }
+        Ok(Request::TouchidScript { enable }) => match maintenance::touchid_script(enable) {
+            Ok(script) => json!({"ok": true, "script": script}),
+            Err(e) => json!({"ok": false, "error": e}),
+        },
         Ok(Request::Exclusions) => json!({"ok": true, "paths": guard::exclusions(ctx())}),
         Ok(Request::SetExclusions { paths }) => match guard::set_exclusions(ctx(), paths) {
             Ok(()) => json!({"ok": true, "paths": guard::exclusions(ctx())}),
