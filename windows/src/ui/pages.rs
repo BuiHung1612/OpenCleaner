@@ -1910,9 +1910,22 @@ impl State {
             c.ball(x, y, rr, tint, if hot { 140 } else { 97 }, if hot { 77 } else { 41 });
             c.circle(x, y, rr, None, Some((argb(WHITE, if hot { 153 } else { 77 }), 1.0)));
             let name = entry.and_then(|e| e["name"].as_str()).unwrap_or("Others");
-            if br >= 48.0 && grow > 0.85 {
-                c.text(R::new(x - br * 0.75, y - 18.0, br * 1.5, 20.0), name, 13.0, true, fg(), Align::Center);
-                c.text(R::new(x - br * 0.75, y + 2.0, br * 1.5, 18.0), &bytes(Some(sizes[i])), 12.0, false, dim(), Align::Center);
+            // like the Mac: what it is (folder, file, the rest) on every bubble big enough,
+            // with its name and size on the larger ones
+            let glyph = match entry {
+                Some(e) if e["is_dir"] == true => FOLDER,
+                Some(_) => FILE,
+                None => '\u{E712}',
+            };
+            if grow > 0.85 {
+                if br >= 48.0 {
+                    c.icon(R::new(x - 12.0, y - 40.0, 24.0, 22.0), glyph, 15.0, fg());
+                    c.text(R::new(x - br * 0.75, y - 16.0, br * 1.5, 20.0), name, 13.0, true, fg(), Align::Center);
+                    c.text(R::new(x - br * 0.75, y + 4.0, br * 1.5, 18.0), &bytes(Some(sizes[i])), 12.0, false, dim(), Align::Center);
+                } else if br >= 14.0 {
+                    let g = (br * 0.8).min(18.0);
+                    c.icon(R::new(x - br, y - br, 2.0 * br, 2.0 * br), glyph, g, fg());
+                }
             }
             if let Some(e) = entry
                 && e["is_dir"] == true

@@ -417,7 +417,7 @@ struct SettingsPage: View {
                     .accessibilityAddTraits(p == pane ? .isSelected : [])
                 }
             }
-            ScrollView {
+            GeometryReader { page in ScrollView {
                 Group {
                     switch pane {
                     case .general: GeneralSettings()
@@ -428,8 +428,14 @@ struct SettingsPage: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .frame(maxWidth: 680, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, -12)
+                // a grouped form keeps about 31 points round its sections and centres them at
+                // 704 points at most: sized to that and moved left, the sections line up with
+                // the tabs and the header above instead of floating in the middle
+                .frame(width: min(page.size.width, 704) + 62)
+                .offset(x: -31)
+                .frame(width: page.size.width, alignment: .leading)
+            }
             }
             // grouped forms in the dark look: white text on translucent rows over the gradient;
             // switches in the system accent, not the window's white (a white knob on white)

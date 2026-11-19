@@ -238,7 +238,7 @@ struct Buffers {
     fade: Option<std::time::Instant>,
 }
 
-const FADE_SECS: f32 = 0.35;
+const FADE_SECS: f32 = 0.22;
 
 thread_local! {
     static BUFFERS: RefCell<Option<Buffers>> = const { RefCell::new(None) };
@@ -316,7 +316,9 @@ fn paint(hwnd: HWND) {
             if let Some(start) = b.fade {
                 let t = start.elapsed().as_secs_f32() / FADE_SECS;
                 if t < 1.0 {
-                    let alpha = (255.0 * (1.0 - gfx::ease_in_out(t))) as u8;
+                    // ease-out: the new page shows at once and the old one clears quickly (an ease-in-out
+                    // held the old page for the first frames, which read as a flicker)
+                    let alpha = (255.0 * (1.0 - gfx::ease_out(t))) as u8;
                     let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: alpha, AlphaFormat: 0 };
                     AlphaBlend(hdc, d.left, d.top, dw, dh, b.prev, d.left, d.top, dw, dh, blend);
                 } else {

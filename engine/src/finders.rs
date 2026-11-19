@@ -29,7 +29,7 @@ fn age_days(mtime: i64) -> u64 {
 pub fn installers(ctx: &Context) -> Vec<Pick> {
     let mut out = Vec::new();
     for folder in ["Downloads", "Desktop"] {
-        let root = ctx.home.join(folder);
+        let root = ctx.user_folder(folder);
         collect_installers(&root, &root, 0, folder, &mut out);
     }
     #[cfg(target_os = "macos")]
@@ -115,10 +115,17 @@ const PROJECT_ROOTS: &[&str] = &[
     "github",
     "repos",
     "Sites",
-    "Documents/GitHub",
-    "Documents/Projects",
-    "Documents/Code",
+    // Android Studio, Visual Studio, Flutter defaults
+    "AndroidStudioProjects",
+    "StudioProjects",
+    "FlutterProjects",
+    "flutter_projects",
+    "source/repos",
 ];
+
+/// Searched too (projects are often kept there), after the folders above so a project
+/// inside both is listed once.
+const PROJECT_FOLDERS: &[&str] = &["Documents", "Desktop"];
 
 /// Rebuildable build folders inside projects. A folder counts only with the project file
 /// that makes it rebuildable next to it; folders holding git-tracked files are left out;
@@ -129,6 +136,7 @@ pub fn projects(ctx: &Context, extra_roots: &[PathBuf], cancel: &AtomicBool) -> 
     for r in PROJECT_ROOTS
         .iter()
         .map(|r| ctx.home.join(r))
+        .chain(PROJECT_FOLDERS.iter().map(|f| ctx.user_folder(f)))
         .chain(extra_roots.iter().cloned())
     {
         if let Ok(e) = fs::stat(&r, Detail::Basic)
@@ -155,7 +163,12 @@ pub fn projects(ctx: &Context, extra_roots: &[PathBuf], cancel: &AtomicBool) -> 
     );
     let git = git_binary();
     let mut picks = Vec::new();
+    // a root inside another root (Documents/GitHub): its finds come twice
+    let mut listed = HashSet::new();
     for (artifact, project, kind, root) in finder.found.into_inner().unwrap() {
+        if !listed.insert(artifact.clone()) {
+            continue;
+        }
         let name = artifact
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -305,7 +318,11 @@ fn git_binary() -> Option<String> {
 
 /// Does `name` in `project` hold files under version control? None when git cannot say.
 fn tracked(git: Option<&str>, project: &Path, name: &str) -> Option<bool> {
-    let out = Command::new(git?)
+    let mut cmd = Command::new(git?);
+    // no console window flashing up from the GUI app
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000);
+    let out = cmd
         .arg("-C")
         .arg(project)
         .args(["ls-files", "-z", "--"])

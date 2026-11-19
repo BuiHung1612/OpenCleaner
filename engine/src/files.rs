@@ -113,7 +113,7 @@ fn collect(
     let mut seen = HashSet::new();
     let roots: Vec<PathBuf> = FOLDERS
         .iter()
-        .map(|f| ctx.home.join(f))
+        .map(|f| ctx.user_folder(f))
         .filter(|r| {
             !guard::excluded(r, ctx)
                 && fs::stat(r, Detail::Basic)
@@ -171,7 +171,7 @@ fn is_screenshot(name: &str) -> bool {
 /// or screen recordings on the Desktop older than 30 days (those start selected).
 pub fn large_old(ctx: &Context, min_mib: u64, days: i64, cancel: &AtomicBool) -> Vec<Pick> {
     let now = now();
-    let desktop = ctx.home.join("Desktop");
+    let desktop = ctx.user_folder("Desktop");
     // huge inputs saturate (nothing found) instead of overflowing
     let (min, idle_min) = (min_mib.saturating_mul(MIB), days.max(0).saturating_mul(DAY));
     let keep = |dir: &Path, e: &Entry| {

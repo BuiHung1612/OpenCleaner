@@ -85,11 +85,6 @@ pub fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
 }
 
-pub fn ease_in_out(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
-}
-
 /// SwiftUI's `.spring(response:dampingFraction:)` from 0 to 1, `t` seconds in (overshoots a little).
 pub fn spring(t: f32, response: f32, damping: f32) -> f32 {
     if t <= 0.0 {
@@ -118,14 +113,15 @@ pub fn mint() -> u32 {
     if light() { 0x0A7F58 } else { 0x7CF2C8 }
 }
 
-/// A page color as the background of the current theme (paled towards white when light).
+/// A page color as the background of the current theme (paled about halfway towards white
+/// when light: still clearly the page's color, and dark text stays readable on it).
 pub fn backdrop(rgb: u32) -> u32 {
     if !light() {
         return rgb;
     }
     let mix = |shift: u32| {
         let c = (rgb >> shift & 0xFF) as f32;
-        ((c * 0.22 + 255.0 * 0.78) as u32) << shift
+        ((c * 0.45 + 255.0 * 0.55) as u32) << shift
     };
     mix(16) | mix(8) | mix(0)
 }
@@ -297,7 +293,7 @@ impl Canvas {
     pub fn glass(&self, r: R, radius: f32) {
         let s = self.s;
         let (shadow, top, bottom, rim_top, rim_bottom) = if light() {
-            (argb(0x1B2333, 7), argb(WHITE, 175), argb(WHITE, 120), argb(WHITE, 255), argb(0, 22))
+            (argb(0x1B2333, 9), argb(WHITE, 140), argb(WHITE, 90), argb(WHITE, 255), argb(0, 22))
         } else {
             (argb(0, 16), argb(WHITE, 38), argb(WHITE, 14), argb(WHITE, 120), argb(WHITE, 26))
         };
