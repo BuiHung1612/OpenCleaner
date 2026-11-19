@@ -142,12 +142,16 @@ pub fn candidates(apps: &[App]) -> Vec<Pick> {
         let mut pick = Pick::new(app.path.clone(), root, Purpose::Uninstall, Action::Slim);
         pick.group = String::new();
         pick.bytes = saving;
-        pick.detail = if app.running {
+        // installed by a .pkg (owned by root): listed, never ticked for the user, and said why
+        let can_write = writable(&app.path);
+        pick.detail = if !can_write {
+            "Needs administrator rights".into()
+        } else if app.running {
             "Open now: quit it first".into()
         } else {
             "Intel code".into()
         };
-        pick.preselect = !app.running && writable(&app.path);
+        pick.preselect = !app.running && can_write;
         pick.running = vec![app.bundle_id.clone()];
         picks.push(pick);
     }

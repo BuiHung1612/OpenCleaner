@@ -226,7 +226,8 @@
 "Free inactive memory" = "Giải phóng bộ nhớ không dùng";
 "Asks macOS to drop cached memory now. Apps may start a little slower afterwards." = "Yêu cầu macOS bỏ bộ nhớ đệm ngay. Ứng dụng có thể khởi động chậm hơn một chút sau đó.";
 "Intel code" = "Mã Intel";
-"Open now: quit it first" = "Đang mở: hãy thóat trước";
+"Open now: quit it first" = "Đang mở: hãy thoát trước";
+"Needs administrator rights" = "Cần quyền quản trị";
 "Looking through caches, logs and app data…" = "Đang xem bộ nhớ đệm, nhật ký và dữ liệu ứng dụng…";
 "Show items" = "Xem từng mục";
 "Removing %@" = "Đang xóa %@";
