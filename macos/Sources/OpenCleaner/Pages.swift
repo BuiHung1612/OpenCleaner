@@ -37,7 +37,8 @@ struct DashboardPage: View {
                 if let error = stream.error { ErrorBanner(message: error) { stream.refresh() } }
 
                 GlassEffectContainer(spacing: 16) {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], spacing: 16) {
+                    // exactly the four tiles, sharing the width (adaptive columns left an empty fifth slot)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 4), spacing: 16) {
                         Tile(replay: stream.replay, title: String(localized: "CPU"), icon: "cpu", value: percent(s.cpu.usage.double), fraction: (s.cpu.usage.double ?? 0) / 100,
                              detail: Self.load(s.cpu))
                             .help(s.cpu.load1.double.map { String(localized: "Load average \(String(format: "%.1f", $0)) on \(Int(s.cpu.cores.double ?? 0)) cores") } ?? "")
@@ -153,14 +154,26 @@ struct DashboardPage: View {
     /// Unknown size: macOS hides the Trash from apps without Full Disk Access.
     private func trashTile(_ size: Double?) -> some View {
         let value = switch size {
-        case nil: String(localized: "Not measured")
+        case nil: "—"
         case 0: String(localized: "Empty")
         case let n: bytes(n)
         }
         return Tile(title: String(localized: "Trash"), icon: "trash", value: value, fraction: nil,
                     detail: size == nil ? String(localized: "Needs Full Disk Access") : nil) {
-            Button(String(localized: "Open Trash"), action: openTrash).buttonStyle(.link).font(.app(13))
+            if size == nil {
+                // where the user grants it; the reading works after the app is reopened
+                Button(String(localized: "Grant Access…"), action: openFullDiskAccess).buttonStyle(.link).font(.app(13))
+            } else {
+                Button(String(localized: "Open Trash"), action: openTrash).buttonStyle(.link).font(.app(13))
+            }
         }
+    }
+}
+
+/// System Settings › Privacy & Security › Full Disk Access.
+func openFullDiskAccess() {
+    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+        NSWorkspace.shared.open(url)
     }
 }
 
@@ -360,6 +373,7 @@ struct SettingsView: View {
             Tab(String(localized: "Cleaning"), systemImage: "sparkles") { CleaningSettings() }
             Tab(String(localized: "Automation"), systemImage: "calendar.badge.clock") { AutomationSettings() }
             Tab(String(localized: "Dashboard"), systemImage: "gauge.with.dots.needle.50percent") { DashboardSettings() }
+            Tab(String(localized: "Permissions"), systemImage: "lock.shield") { PermissionsSettings() }
         }
         .frame(width: 560 * max(1, TextScale.shared.value))
         .font(TextScale.shared.value == 1 ? nil : .app(13))

@@ -475,3 +475,14 @@
 "Nothing to clean" = "Không có gì để dọn";
 "Only the items selected by default. The Trash is not emptied." = "Chỉ các mục được chọn sẵn. Thùng rác không bị dọn.";
 "Cancel" = "Hủy";
+"Grant Access…" = "Cấp quyền…";
+"Measure and empty the Trash, clean Mail attachments and read which apps have privacy permissions." = "Đo và dọn Thùng rác, dọn tệp đính kèm Mail và xem ứng dụng nào đang có quyền riêng tư.";
+"App Management" = "Quản lý ứng dụng";
+"Uninstall apps and slim them. macOS asks the first time; allow it here if you declined." = "Gỡ và thu gọn ứng dụng. macOS hỏi ở lần đầu; nếu bạn đã từ chối thì cho phép lại tại đây.";
+"Notifications" = "Thông báo";
+"Report scheduled cleaning and warn when the disk is almost full." = "Báo kết quả dọn theo lịch và cảnh báo khi ổ đĩa sắp đầy.";
+"Not in the list? Click + under the list and choose OpenCleaner in Applications. After you change a permission, come back here: the status updates. Some readings (like the Trash size) need the app to be reopened." = "Không thấy trong danh sách? Bấm + bên dưới danh sách và chọn OpenCleaner trong Applications. Sau khi đổi quyền, quay lại đây để thấy trạng thái mới. Một số số liệu (như dung lượng Thùng rác) cần mở lại ứng dụng.";
+"Open Settings" = "Mở Cài đặt";
+"Allowed" = "Đã cho phép";
+"Not allowed" = "Chưa cho phép";
+"Asked when needed" = "Hỏi khi cần";
