@@ -150,6 +150,50 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_SPIN: usize = 1;
 /// Hourly: is a scheduled clean due?
 const TIMER_AUTO: usize = 2;
+/// Settings > Dashboard > Refresh automatically, while the dashboard is on screen.
+const TIMER_DASH: usize = 3;
+
+/// Starts (every `secs` seconds) or stops the dashboard's refresh timer.
+pub fn dash_timer(hwnd: HWND, secs: Option<u32>) {
+    unsafe {
+        match secs {
+            Some(s) => SetTimer(hwnd, TIMER_DASH, s * 1000, None),
+            None => KillTimer(hwnd, TIMER_DASH) as usize,
+        };
+    }
+}
+
+/// The folder chooser; `None` when cancelled.
+pub fn pick_folder(hwnd: HWND, title: &str) -> Option<String> {
+    use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+    use windows_sys::Win32::UI::Shell::{BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW, ILFree, SHBrowseForFolderW, SHGetPathFromIDListW};
+    let title = wide(title);
+    let mut name = [0u16; 260];
+    unsafe {
+        // the resizable dialog needs COM on this thread (a second call is harmless)
+        CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32);
+        let info = BROWSEINFOW {
+            hwndOwner: hwnd,
+            pidlRoot: null_mut(),
+            pszDisplayName: name.as_mut_ptr(),
+            lpszTitle: title.as_ptr(),
+            ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
+            lpfn: None,
+            lParam: 0,
+            iImage: 0,
+        };
+        let pidl = SHBrowseForFolderW(&info);
+        if pidl.is_null() {
+            return None;
+        }
+        let mut path = [0u16; 1024];
+        let ok = SHGetPathFromIDListW(pidl, path.as_mut_ptr()) != 0;
+        ILFree(pidl);
+        let len = path.iter().position(|&c| c == 0).unwrap_or(0);
+        (ok && len > 0).then(|| String::from_utf16_lossy(&path[..len]))
+    }
+}
+
 /// Keeps a timer running while something animates (busy buttons). The dashboard has no
 /// timer: it reads once, then on the refresh button (or on focus, if chosen in Settings).
 pub fn timers(hwnd: HWND, spinning: bool) {
@@ -339,6 +383,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let delta = ((wparam >> 16) & 0xFFFF) as i16 as f32;
             with(|st| st.scroll_by(-delta / 120.0 * 60.0));
             invalidate(hwnd);
+            0
+        }
+        WM_TIMER if wparam == TIMER_DASH => {
+            // minimized: nothing to show, skip the reading
+            if unsafe { IsIconic(hwnd) } == 0 {
+                with(|st| st.refresh_dashboard());
+            }
             0
         }
         WM_TIMER if wparam == TIMER_AUTO => {

@@ -5,7 +5,7 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 const REPO: &str = "BuiHung1612/OpenCleaner";
-const VERSION: &str = include_str!("../../VERSION");
+pub const VERSION: &str = include_str!("../../VERSION");
 
 /// "1.0.10" is newer than "1.0.9".
 fn is_newer(remote: &str, local: &str) -> bool {
@@ -87,21 +87,42 @@ mod win {
                 open(&super::issue_url(version, &os, &log, 7000));
             }
         }
+        if crate::ui::reg_dword(crate::ui::SETTINGS_KEY, super::CHECK_VALUE) != Some(0) {
+            check(false);
+        }
+    }
+
+    /// Asks GitHub for the latest release. `manual` (Settings > Check Now) also says when
+    /// there is nothing newer, or when GitHub could not be reached.
+    pub fn check(manual: bool) {
+        let version = super::VERSION.trim();
         // curl.exe ships with Windows 10 1803 and later; offline or older systems just stay quiet
         let api = format!("https://api.github.com/repos/{}/releases/latest", super::REPO);
-        let Some(reply) = quiet("curl.exe", &["-fsSL", "-m", "15", "-H", "User-Agent: OpenCleaner", &api]) else { return };
-        let tag = serde_json::from_str::<serde_json::Value>(&reply).ok().and_then(|v| v["tag_name"].as_str().map(str::to_owned));
-        if let Some(tag) = tag
-            && super::is_newer(&tag, version)
-            && ask(&format!("A newer version is available: OpenCleaner {}. You have {version}.\n\nOpen the download page?", tag.trim_start_matches('v')))
-        {
-            open(&format!("https://github.com/{}/releases/latest", super::REPO));
+        let reply = quiet("curl.exe", &["-fsSL", "-m", "15", "-H", "User-Agent: OpenCleaner", &api]);
+        let tag = reply.and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok()).and_then(|v| v["tag_name"].as_str().map(str::to_owned));
+        match tag {
+            Some(tag) if super::is_newer(&tag, version) => {
+                if ask(&format!("A newer version is available: OpenCleaner {}. You have {version}.\n\nOpen the download page?", tag.trim_start_matches('v'))) {
+                    open(&format!("https://github.com/{}/releases/latest", super::REPO));
+                }
+            }
+            Some(_) if manual => tell(&format!("OpenCleaner {version} is the latest version.")),
+            None if manual => tell("Could not reach GitHub to check for updates. Check your internet connection and try again."),
+            _ => {}
         }
+    }
+
+    fn tell(text: &str) {
+        let (text, caption) = (wide(text), wide("OpenCleaner"));
+        unsafe { MessageBoxW(null_mut(), text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND) };
     }
 }
 
+/// Settings: look for a newer release at launch (absent: on).
+pub const CHECK_VALUE: &str = "CheckUpdates";
+
 #[cfg(windows)]
-pub use win::{install_panic_hook, on_launch};
+pub use win::{check, install_panic_hook, on_launch};
 
 #[cfg(test)]
 mod tests {

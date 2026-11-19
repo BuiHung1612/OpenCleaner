@@ -5,7 +5,7 @@
 use super::gfx::{Align, Canvas, Fonts, R, WHITE, amber, argb, backdrop, dim, fg, hex, light, mint};
 use super::auto;
 use super::jobs::{self, Job};
-use super::{confirm, invalidate, reveal, style_frame, timers};
+use super::{confirm, dash_timer, invalidate, reveal, style_frame, timers};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -237,6 +237,16 @@ pub enum Action {
     StartupSettings,
     AutoCleanToggle,
     AutoPeriodToggle,
+    /// Settings tab: 0 General, 1 Cleaning, 2 Automation, 3 Dashboard
+    SettingsTab(u8),
+    UpdatesToggle,
+    CheckUpdates,
+    ExclusionAdd,
+    ExclusionRemove(String),
+    LargeMiB(u32),
+    IdleDays(u32),
+    AutoRefreshToggle,
+    RefreshEvery(u32),
 }
 
 impl Action {
@@ -255,6 +265,8 @@ impl Action {
                 | Action::FocusRefreshToggle
                 | Action::AutoCleanToggle
                 | Action::AutoPeriodToggle
+                | Action::UpdatesToggle
+                | Action::AutoRefreshToggle
         )
     }
 }
@@ -489,6 +501,20 @@ pub struct State {
     auto_job: Option<Job>,
     /// what the last scheduled clean did, this session
     auto_note: Option<String>,
+    settings_tab: u8,
+    settings_scroll: f32,
+    /// Settings: look for a newer release at launch
+    check_updates: bool,
+    /// folders the engine never scans or removes from
+    exclusions: Vec<String>,
+    /// the saved list could not be read: the engine removes nothing until it is saved again
+    exclusions_error: Option<String>,
+    /// Large & Old Files: at least this many MB, not opened for this many days
+    large_mib: u32,
+    idle_days: u32,
+    /// Settings: re-read the dashboard every `refresh_every` seconds while it is on screen
+    auto_refresh: bool,
+    refresh_every: u32,
     /// this paint's controls in order, unclipped, with the scroll panel they sit in:
     /// Tab moves along all of them, Up/Down along the tick boxes
     focusables: Vec<(R, Option<R>, Action)>,
@@ -501,6 +527,18 @@ pub struct State {
 
 const FAST_VALUE: &str = "FastScans";
 const FOCUS_REFRESH_VALUE: &str = "RefreshOnFocus";
+const AUTO_REFRESH_VALUE: &str = "AutoRefresh";
+const REFRESH_EVERY_VALUE: &str = "RefreshEvery";
+const LARGE_MIB_VALUE: &str = "LargeMiB";
+const IDLE_DAYS_VALUE: &str = "IdleDays";
+const LARGE_CHOICES: [u32; 5] = [100, 250, 500, 1000, 5000];
+const IDLE_CHOICES: [u32; 4] = [30, 90, 180, 365];
+const REFRESH_CHOICES: [u32; 4] = [3, 5, 10, 30];
+
+/// A saved choice, if it is still one of `choices`.
+fn saved(name: &str, choices: &[u32], default: u32) -> u32 {
+    super::reg_dword(super::SETTINGS_KEY, name).filter(|v| choices.contains(v)).unwrap_or(default)
+}
 
 /// Tells the engine how hard to work; returns `fast`.
 fn set_fast(fast: bool) -> bool {
@@ -536,6 +574,15 @@ impl State {
             auto_monthly: super::reg_dword(super::SETTINGS_KEY, auto::MONTHLY_VALUE) == Some(1),
             auto_job: None,
             auto_note: None,
+            settings_tab: 0,
+            settings_scroll: 0.0,
+            check_updates: super::reg_dword(super::SETTINGS_KEY, crate::github::CHECK_VALUE) != Some(0),
+            exclusions: Vec::new(),
+            exclusions_error: None,
+            large_mib: saved(LARGE_MIB_VALUE, &LARGE_CHOICES, 500),
+            idle_days: saved(IDLE_DAYS_VALUE, &IDLE_CHOICES, 180),
+            auto_refresh: super::reg_dword(super::SETTINGS_KEY, AUTO_REFRESH_VALUE) == Some(1),
+            refresh_every: saved(REFRESH_EVERY_VALUE, &REFRESH_CHOICES, 5),
             focusables: Vec::new(),
             focus: None,
             default_action: None,
@@ -622,7 +669,8 @@ impl State {
             Module::Uninstaller => &mut self.apps.scroll,
             Module::Startup => &mut self.startup.scroll,
             Module::History => &mut self.history.scroll,
-            Module::Dashboard | Module::Settings => return,
+            Module::Settings => &mut self.settings_scroll,
+            Module::Dashboard => return,
         };
         *s = (*s + dy).clamp(0.0, max);
     }
@@ -654,8 +702,10 @@ impl State {
             Module::Uninstaller if !self.apps.loaded && self.apps.job.is_none() => self.load_apps(),
             Module::History => self.load_history(),
             Module::Startup => self.load_startup(),
+            Module::Settings => self.load_exclusions(),
             _ => {}
         }
+        self.update_dash_timer();
         style_frame(self.hwnd, self.module.palette().0);
         // the page in the title: what a screen reader announces for this painted window
         let title = super::wide(&format!("OpenCleaner - {}", self.module.title()));
@@ -738,6 +788,29 @@ impl State {
         let stale = self.dash.read_at.is_none_or(|t| t.elapsed().as_secs() >= 10);
         if self.refresh_on_focus && self.module == Module::Dashboard && stale {
             self.refresh_dashboard();
+        }
+    }
+
+    fn update_dash_timer(&self) {
+        dash_timer(self.hwnd, (self.auto_refresh && self.module == Module::Dashboard).then_some(self.refresh_every));
+    }
+
+    fn load_exclusions(&mut self) {
+        let reply = jobs::call(json!({"op": "exclusions"}));
+        self.set_exclusions(&reply);
+    }
+
+    fn set_exclusions(&mut self, reply: &Value) {
+        self.exclusions = reply["paths"].as_array().map(|a| a.iter().filter_map(|p| p.as_str().map(String::from)).collect()).unwrap_or_default();
+        self.exclusions_error = (reply["ok"] != json!(true)).then(|| reply["error"].as_str().unwrap_or("The excluded folders could not be read.").to_string());
+    }
+
+    fn save_exclusions(&mut self, paths: Vec<String>) {
+        let reply = jobs::call(json!({"op": "set_exclusions", "paths": paths}));
+        if reply["ok"] == json!(true) {
+            self.set_exclusions(&reply);
+        } else {
+            self.exclusions_error = Some(reply["error"].as_str().unwrap_or("Could not save the excluded folders.").to_string());
         }
     }
 
@@ -1882,37 +1955,131 @@ impl State {
 
     fn draw_settings(&mut self, c: &mut Canvas, page: R) {
         let y = self.header(c, page.inset(18.0, 0.0), Module::Settings, Phase::Idle, "Settings", "Light or dark follows the Windows app theme.");
-        let panel = R::new(page.x + 18.0, y, page.w - 36.0, 140.0);
+        let x = page.x + 18.0;
+        let mut tx = x;
+        for (i, label) in ["General", "Cleaning", "Automation", "Dashboard"].into_iter().enumerate() {
+            let on = self.settings_tab == i as u8;
+            let w = c.measure(&mut self.fonts, label, 14.0, true) + 36.0;
+            let r = R::new(tx, y - 6.0, w, 34.0);
+            let hot = !on && self.hot(r);
+            c.rounded(r, 17.0, Some(argb(fg(), if on { 60 } else if hot { 36 } else { 14 })), Some(argb(fg(), 50)));
+            c.text(r, label, 14.0, on, fg(), Align::Center);
+            self.hit(r, Action::SettingsTab(i as u8));
+            tx += w + 8.0;
+        }
+        let body = R::new(x, y + 44.0, page.w - 36.0, page.bottom() - y - 44.0 - 18.0);
+        match self.settings_tab {
+            0 => self.settings_general(c, body),
+            1 => self.settings_cleaning(c, body),
+            2 => self.settings_automation(c, body),
+            _ => self.settings_dashboard(c, body),
+        }
+    }
+
+    /// A row of choices; only the ones not chosen act, and only while `enabled`.
+    fn chips(&mut self, c: &mut Canvas, x: f32, y: f32, items: Vec<(String, bool, Action)>, enabled: bool) {
+        let mut cx = x;
+        for (label, on, action) in items {
+            let w = c.measure(&mut self.fonts, &label, 13.0, true) + 32.0;
+            let r = R::new(cx, y, w.max(72.0), 32.0);
+            let hot = enabled && !on && self.hot(r);
+            c.rounded(r, 16.0, Some(argb(fg(), if on { 60 } else if hot { 36 } else { 14 })), Some(argb(fg(), 50)));
+            c.text(r, &label, 13.0, on, if enabled { fg() } else { dim() }, Align::Center);
+            if enabled && !on {
+                self.hit(r, action);
+            }
+            cx += r.w + 8.0;
+        }
+    }
+
+    fn section_title(c: &mut Canvas, panel: R, title: &str) {
+        c.text(R::new(panel.x + 20.0, panel.y + 12.0, panel.w - 40.0, 20.0), title, 13.0, true, dim(), Align::Left);
+    }
+
+    fn settings_general(&mut self, c: &mut Canvas, body: R) {
+        let panel = R::new(body.x, body.y, body.w, 214.0);
         c.glass(panel, 20.0);
-        c.text(R::new(panel.x + 20.0, panel.y + 12.0, 200.0, 20.0), "Engine", 13.0, true, dim(), Align::Left);
+        Self::section_title(c, panel, "Updates");
+        self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Check for updates automatically", self.check_updates, Action::UpdatesToggle);
+        let row = R::new(panel.x + 20.0, panel.y + 84.0, panel.w - 40.0, 32.0);
+        c.text(R::new(row.x, row.y, 200.0, row.h), "Version", 14.0, false, fg(), Align::Left);
+        let w = self.pill_width(c, "Check Now");
+        self.pill_right(c, row.right(), row.y + 16.0, "Check Now", Action::CheckUpdates);
+        c.text(R::new(row.x + 200.0, row.y, row.w - 200.0 - w - 16.0, row.h), crate::github::VERSION.trim(), 14.0, false, dim(), Align::Right);
+        let row = R::new(panel.x + 20.0, panel.y + 122.0, panel.w - 40.0, 32.0);
+        c.text(R::new(row.x, row.y, 200.0, row.h), "OpenCleaner engine", 14.0, false, fg(), Align::Left);
+        c.text(R::new(row.x + 200.0, row.y, row.w - 200.0, row.h), &self.version.clone(), 14.0, false, dim(), Align::Right);
+        c.para(
+            R::new(panel.x + 20.0, panel.y + 164.0, panel.w - 40.0, 44.0),
+            "Asks GitHub for the latest release when OpenCleaner starts. Nothing is downloaded or installed by itself: you choose whether to open the download page.",
+            12.0,
+            dim(),
+        );
+    }
+
+    fn settings_cleaning(&mut self, c: &mut Canvas, body: R) {
+        let panel = R::new(body.x, body.y, body.w, 134.0);
+        c.glass(panel, 20.0);
+        Self::section_title(c, panel, "Engine");
         self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Faster scans", self.fast, Action::FastToggle);
         c.para(
-            R::new(panel.x + 20.0, panel.y + 82.0, panel.w - 40.0, 54.0),
+            R::new(panel.x + 20.0, panel.y + 80.0, panel.w - 40.0, 50.0),
             "Off (recommended): scans and removals give way to your other apps, so the PC stays smooth. On: they take every CPU core to finish sooner, and other apps may lag or freeze until they are done.",
-            13.0,
+            12.0,
             dim(),
         );
 
-        let panel = R::new(page.x + 18.0, panel.bottom() + 16.0, page.w - 36.0, 150.0);
+        let panel = R::new(body.x, panel.bottom() + 14.0, body.w, 128.0);
         c.glass(panel, 20.0);
-        c.text(R::new(panel.x + 20.0, panel.y + 12.0, 200.0, 20.0), "Dashboard", 13.0, true, dim(), Align::Left);
-        self.switch_row(
-            c,
-            R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0),
-            "Refresh when the app comes to the front",
-            self.refresh_on_focus,
-            Action::FocusRefreshToggle,
-        );
-        c.para(
-            R::new(panel.x + 20.0, panel.y + 82.0, panel.w - 40.0, 60.0),
-            "Off (recommended): the dashboard reads once when you first open it; press Refresh (or F5) for new numbers, so they may be minutes old. On: numbers are fresh whenever you come back, but every switch back costs a short CPU sample and a redraw (at most once per 10 seconds).",
-            13.0,
-            dim(),
-        );
+        Self::section_title(c, panel, "Large & Old Files");
+        c.text(R::new(panel.x + 20.0, panel.y + 40.0, 130.0, 32.0), "At least", 14.0, false, fg(), Align::Left);
+        let sizes = LARGE_CHOICES.iter().map(|&m| (if m < 1000 { format!("{m} MB") } else { format!("{} GB", m / 1000) }, m == self.large_mib, Action::LargeMiB(m))).collect();
+        self.chips(c, panel.x + 150.0, panel.y + 40.0, sizes, true);
+        c.text(R::new(panel.x + 20.0, panel.y + 82.0, 130.0, 32.0), "Not opened for", 14.0, false, fg(), Align::Left);
+        let days = IDLE_CHOICES.iter().map(|&d| (format!("{d} days"), d == self.idle_days, Action::IdleDays(d))).collect();
+        self.chips(c, panel.x + 150.0, panel.y + 82.0, days, true);
 
-        let panel = R::new(page.x + 18.0, panel.bottom() + 16.0, page.w - 36.0, 150.0);
+        let panel = R::new(body.x, panel.bottom() + 14.0, body.w, (body.bottom() - panel.bottom() - 14.0).max(150.0));
+        let scroll = self.settings_scroll;
+        self.scroll_panel(c, panel, scroll, |st, c, top| {
+            let inner = panel.inset(8.0, 8.0);
+            let mut yy = top;
+            c.text(R::new(inner.x + 12.0, yy + 4.0, inner.w - 200.0, 20.0), "Excluded folders", 13.0, true, dim(), Align::Left);
+            st.pill_right(c, inner.right() - 6.0, yy + 16.0, "Add Folder…", Action::ExclusionAdd);
+            yy += 38.0;
+            c.para(R::new(inner.x + 12.0, yy, inner.w - 24.0, 20.0), "OpenCleaner never scans or removes anything inside these folders.", 12.0, dim());
+            yy += 26.0;
+            if let Some(e) = st.exclusions_error.clone() {
+                c.para(R::new(inner.x + 12.0, yy, inner.w - 24.0, 36.0), &format!("{e} Nothing is removed until the list is saved again: add or remove a folder."), 12.0, amber());
+                yy += 40.0;
+            }
+            if st.exclusions.is_empty() {
+                c.text(R::new(inner.x + 12.0, yy, inner.w - 24.0, 30.0), "No excluded folders", 14.0, false, dim(), Align::Left);
+                yy += 30.0;
+            }
+            for path in st.exclusions.clone() {
+                let row = R::new(inner.x + 4.0, yy, inner.w - 8.0, 34.0);
+                if st.hot(row) {
+                    c.rounded(row, 8.0, Some(argb(fg(), 14)), None);
+                }
+                c.icon(R::new(row.x + 6.0, row.y, 24.0, row.h), '\u{E8B7}', 14.0, dim());
+                c.text(R::new(row.x + 36.0, row.y, row.w - 80.0, row.h), &path, 14.0, false, fg(), Align::Left);
+                let x_btn = R::new(row.right() - 34.0, row.y + 3.0, 28.0, 28.0);
+                if st.hot(x_btn) {
+                    c.circle(x_btn.x + 14.0, x_btn.y + 14.0, 13.0, Some(argb(fg(), 30)), None);
+                }
+                c.icon(x_btn, '\u{E711}', 11.0, dim());
+                st.hit(x_btn, Action::ExclusionRemove(path));
+                yy += 36.0;
+            }
+            yy - top + 4.0
+        });
+    }
+
+    fn settings_automation(&mut self, c: &mut Canvas, body: R) {
+        let panel = R::new(body.x, body.y, body.w, 160.0);
         c.glass(panel, 20.0);
-        c.text(R::new(panel.x + 20.0, panel.y + 12.0, 200.0, 20.0), "Automation", 13.0, true, dim(), Align::Left);
+        Self::section_title(c, panel, "Scheduled cleaning");
         let last = super::reg_dword(super::SETTINGS_KEY, auto::LAST_VALUE).filter(|&t| t > 0);
         let last = match (last, &self.auto_job, &self.auto_note) {
             (_, Some(_), _) => "Cleaning now…".to_string(),
@@ -1921,20 +2088,39 @@ impl State {
         };
         c.text(R::new(panel.x + 220.0, panel.y + 12.0, panel.w - 240.0, 20.0), &last, 12.0, false, dim(), Align::Right);
         self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Clean automatically", self.auto_clean, Action::AutoCleanToggle);
-        c.text(R::new(panel.x + 20.0, panel.y + 80.0, 120.0, 32.0), "How often", 14.0, false, if self.auto_clean { fg() } else { dim() }, Align::Left);
-        for (i, (label, on)) in [("Weekly", !self.auto_monthly), ("Monthly", self.auto_monthly)].into_iter().enumerate() {
-            let r = R::new(panel.x + 140.0 + i as f32 * 104.0, panel.y + 80.0, 96.0, 32.0);
-            let hot = self.auto_clean && !on && self.hot(r);
-            c.rounded(r, 16.0, Some(argb(fg(), if on { 60 } else if hot { 36 } else { 14 })), Some(argb(fg(), 50)));
-            c.text(r, label, 13.0, on, if self.auto_clean { fg() } else { dim() }, Align::Center);
-            // only the other choice acts, and only while scheduled cleaning is on
-            if self.auto_clean && !on {
-                self.hit(r, Action::AutoPeriodToggle);
-            }
-        }
+        c.text(R::new(panel.x + 20.0, panel.y + 80.0, 130.0, 32.0), "How often", 14.0, false, if self.auto_clean { fg() } else { dim() }, Align::Left);
+        let items = vec![("Weekly".to_string(), !self.auto_monthly, Action::AutoPeriodToggle), ("Monthly".to_string(), self.auto_monthly, Action::AutoPeriodToggle)];
+        self.chips(c, panel.x + 150.0, panel.y + 80.0, items, self.auto_clean);
         c.para(
-            R::new(panel.x + 20.0, panel.y + 116.0, panel.w - 40.0, 34.0),
+            R::new(panel.x + 20.0, panel.y + 120.0, panel.w - 40.0, 36.0),
             "Runs System Junk while OpenCleaner is open (checked at start and every hour), removing only the items selected by default. The Recycle Bin and browser privacy items are never touched.",
+            12.0,
+            dim(),
+        );
+    }
+
+    fn settings_dashboard(&mut self, c: &mut Canvas, body: R) {
+        let panel = R::new(body.x, body.y, body.w, 140.0);
+        c.glass(panel, 20.0);
+        Self::section_title(c, panel, "When the app comes to the front");
+        self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Refresh when the app comes to the front", self.refresh_on_focus, Action::FocusRefreshToggle);
+        c.para(
+            R::new(panel.x + 20.0, panel.y + 80.0, panel.w - 40.0, 56.0),
+            "Off (recommended): the dashboard reads once when you first open it; press Refresh (or F5) for new numbers, so they may be minutes old. On: numbers are fresh whenever you come back, but every switch back costs a short CPU sample and a redraw (at most once per 10 seconds).",
+            12.0,
+            dim(),
+        );
+
+        let panel = R::new(body.x, panel.bottom() + 14.0, body.w, 168.0);
+        c.glass(panel, 20.0);
+        Self::section_title(c, panel, "Live numbers");
+        self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Refresh automatically", self.auto_refresh, Action::AutoRefreshToggle);
+        c.text(R::new(panel.x + 20.0, panel.y + 80.0, 130.0, 32.0), "Every", 14.0, false, if self.auto_refresh { fg() } else { dim() }, Align::Left);
+        let items = REFRESH_CHOICES.iter().map(|&n| (format!("{n} seconds"), n == self.refresh_every, Action::RefreshEvery(n))).collect();
+        self.chips(c, panel.x + 150.0, panel.y + 80.0, items, self.auto_refresh);
+        c.para(
+            R::new(panel.x + 20.0, panel.y + 122.0, panel.w - 40.0, 44.0),
+            "On: live numbers while the dashboard is on screen (paused on other pages and when minimized). Cost: the app keeps working the whole time, which uses CPU and battery and adds a little load to what it measures.",
             12.0,
             dim(),
         );
@@ -2108,7 +2294,12 @@ pub fn perform(hwnd: HWND, action: Action) {
                 if let Some(j) = &st.pick(m).job {
                     j.cancel();
                 }
-                let job = jobs::start(hwnd, m.find_request());
+                let request = if m == Module::LargeOld {
+                    json!({"op": "large_old", "min_mib": st.large_mib, "days": st.idle_days})
+                } else {
+                    m.find_request()
+                };
+                let job = jobs::start(hwnd, request);
                 *st.picks(m) = Picks { phase: Phase::Finding, job: Some(job), ..Picks::default() };
                 st.update_timers();
             });
@@ -2204,6 +2395,63 @@ pub fn perform(hwnd: HWND, action: Action) {
             with(|st| {
                 st.auto_clean = !st.auto_clean;
                 super::set_reg_dword(super::SETTINGS_KEY, auto::ENABLED_VALUE, st.auto_clean as u32);
+            });
+        }
+        Action::SettingsTab(t) => {
+            with(|st| {
+                st.settings_tab = t;
+                st.settings_scroll = 0.0;
+            });
+        }
+        Action::UpdatesToggle => {
+            with(|st| {
+                st.check_updates = !st.check_updates;
+                super::set_reg_dword(super::SETTINGS_KEY, crate::github::CHECK_VALUE, st.check_updates as u32);
+            });
+        }
+        Action::CheckUpdates => {
+            std::thread::spawn(|| crate::github::check(true));
+        }
+        Action::ExclusionAdd => {
+            // the chooser runs its own message loop: outside the state borrow
+            if let Some(path) = super::pick_folder(hwnd, "Choose a folder OpenCleaner should never scan or clean.") {
+                with(|st| {
+                    let mut paths = st.exclusions.clone();
+                    paths.push(path);
+                    st.save_exclusions(paths);
+                });
+            }
+        }
+        Action::ExclusionRemove(path) => {
+            with(|st| {
+                let paths = st.exclusions.iter().filter(|p| **p != path).cloned().collect();
+                st.save_exclusions(paths);
+            });
+        }
+        Action::LargeMiB(m) => {
+            with(|st| {
+                st.large_mib = m;
+                super::set_reg_dword(super::SETTINGS_KEY, LARGE_MIB_VALUE, m);
+            });
+        }
+        Action::IdleDays(d) => {
+            with(|st| {
+                st.idle_days = d;
+                super::set_reg_dword(super::SETTINGS_KEY, IDLE_DAYS_VALUE, d);
+            });
+        }
+        Action::AutoRefreshToggle => {
+            with(|st| {
+                st.auto_refresh = !st.auto_refresh;
+                super::set_reg_dword(super::SETTINGS_KEY, AUTO_REFRESH_VALUE, st.auto_refresh as u32);
+                st.update_dash_timer();
+            });
+        }
+        Action::RefreshEvery(n) => {
+            with(|st| {
+                st.refresh_every = n;
+                super::set_reg_dword(super::SETTINGS_KEY, REFRESH_EVERY_VALUE, n);
+                st.update_dash_timer();
             });
         }
         Action::AutoPeriodToggle => {
