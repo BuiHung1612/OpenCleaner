@@ -45,17 +45,27 @@ struct ToolText {
     colors: (u32, u32),
 }
 
-/// Titles, texts and colors of the cleaning tools, shared with macOS (`shared/tools.json`).
-fn tool(id: &str) -> Option<ToolText> {
-    let all: Value = serde_json::from_str(include_str!("../../../shared/tools.json")).ok()?;
-    let t = all["tools"].as_array()?.iter().find(|t| t["id"] == id)?;
-    let colors: Vec<u32> = t["colors"].as_array()?.iter().filter_map(|c| c.as_str()).map(hex).collect();
-    Some(ToolText {
-        title: t["title"].as_str()?.into(),
-        subtitle: t["subtitle"].as_str().unwrap_or("").into(),
-        points: t["points"].as_array().map(|p| p.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
-        colors: (*colors.first().unwrap_or(&0x4D5B73), *colors.get(1).unwrap_or(&0x1C2233)),
-    })
+/// Titles, texts and colors of the cleaning tools, shared with macOS (`shared/tools.json`),
+/// parsed once.
+fn tool(id: &str) -> Option<&'static ToolText> {
+    static TOOLS: std::sync::OnceLock<Vec<(String, ToolText)>> = std::sync::OnceLock::new();
+    let tools = TOOLS.get_or_init(|| {
+        let all: Value = serde_json::from_str(include_str!("../../../shared/tools.json")).unwrap_or_default();
+        let parse = |t: &Value| {
+            let colors: Vec<u32> = t["colors"].as_array()?.iter().filter_map(|c| c.as_str()).map(hex).collect();
+            Some((
+                t["id"].as_str()?.to_string(),
+                ToolText {
+                    title: t["title"].as_str()?.into(),
+                    subtitle: t["subtitle"].as_str().unwrap_or("").into(),
+                    points: t["points"].as_array().map(|p| p.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+                    colors: (*colors.first().unwrap_or(&0x4D5B73), *colors.get(1).unwrap_or(&0x1C2233)),
+                },
+            ))
+        };
+        all["tools"].as_array().into_iter().flatten().filter_map(parse).collect()
+    });
+    tools.iter().find(|(i, _)| i == id).map(|(_, t)| t)
 }
 
 impl Module {
@@ -70,7 +80,7 @@ impl Module {
 
     pub fn title(self) -> String {
         if let Some(t) = self.tool_id().and_then(tool) {
-            return t.title;
+            return t.title.clone();
         }
         match self {
             Module::Dashboard => "Dashboard",
@@ -99,27 +109,40 @@ impl Module {
         }
     }
 
-    /// Segoe Fluent Icons / MDL2 glyphs.
+    /// Glyphs found in both Segoe Fluent Icons (Windows 11) and Segoe MDL2 Assets (Windows 10).
     fn glyph(self) -> char {
         match self {
-            Module::Dashboard => '\u{E80F}',
-            Module::Junk => '\u{E74D}',
+            Module::Dashboard => '\u{E9D9}',   // Diagnostic (macOS: gauge)
+            Module::Junk => '\u{EA99}',        // Broom (was Delete, read as "remove")
             Module::Installers => '\u{E896}',
             Module::Projects => '\u{E943}',
-            Module::Uninstaller => '\u{E8BB}',
+            Module::Uninstaller => '\u{E71D}', // AllApps (was ChromeClose, read as "close window")
             Module::SpaceLens => '\u{EB05}',
-            Module::LargeOld => '\u{E823}',
+            Module::LargeOld => '\u{E8A5}',    // Document (was Recent, next to History's clock)
             Module::Duplicates => '\u{E8C8}',
             Module::History => '\u{E81C}',
             Module::Settings => '\u{E713}',
         }
     }
 
+    /// The page's illustration (the macOS art, 320 px), when it has one.
+    fn art(self) -> Option<&'static [u8]> {
+        Some(match self {
+            Module::Junk => include_bytes!("../../art/clean.png"),
+            Module::Installers => include_bytes!("../../art/installer.png"),
+            Module::Projects => include_bytes!("../../art/purge.png"),
+            Module::Uninstaller => include_bytes!("../../art/uninstaller.png"),
+            Module::SpaceLens => include_bytes!("../../art/spaceLens.png"),
+            Module::History => include_bytes!("../../art/history.png"),
+            _ => return None,
+        })
+    }
+
     /// Title, text and points of the page's intro. The file pages are Windows-only so far,
     /// hence not in `shared/tools.json`.
     fn intro(self) -> (String, String, Vec<String>) {
         if let Some(t) = self.tool_id().and_then(tool) {
-            return (t.title, t.subtitle, t.points);
+            return (t.title.clone(), t.subtitle.clone(), t.points.clone());
         }
         let (subtitle, points): (&str, &[&str]) = match self {
             Module::LargeOld => (
@@ -434,9 +457,14 @@ pub struct State {
     fast: bool,
     /// re-read the dashboard when the window comes to the front (off: only the button)
     refresh_on_focus: bool,
-    /// this paint's tick boxes, unclipped, in list order (keyboard focus moves along them)
-    toggles: Vec<(R, Action)>,
+    /// this paint's controls in order, unclipped, with the scroll panel they sit in:
+    /// Tab moves along all of them, Up/Down along the tick boxes
+    focusables: Vec<(R, Option<R>, Action)>,
     focus: Option<Action>,
+    /// what Enter does when nothing has the focus: the big button
+    default_action: Option<Action>,
+    /// this paint's busy spinners: the timer repaints only these
+    spins: Vec<R>,
 }
 
 const FAST_VALUE: &str = "FastScans";
@@ -471,8 +499,10 @@ impl State {
             history: History::default(),
             fast: set_fast(super::reg_dword(super::SETTINGS_KEY, FAST_VALUE) == Some(1)),
             refresh_on_focus: super::reg_dword(super::SETTINGS_KEY, FOCUS_REFRESH_VALUE) == Some(1),
-            toggles: Vec::new(),
+            focusables: Vec::new(),
             focus: None,
+            default_action: None,
+            spins: Vec::new(),
         }
     }
 
@@ -496,6 +526,16 @@ impl State {
 
     fn parts(&mut self, m: Module) -> &mut Parts {
         if m == Module::Junk { &mut self.junk.parts } else { &mut self.picks(m).parts }
+    }
+
+    /// The current page's gradient colors.
+    pub fn palette(&self) -> (u32, u32) {
+        self.module.palette()
+    }
+
+    /// Where the busy spinners of the last paint are.
+    pub fn spinners(&self) -> Vec<R> {
+        self.spins.clone()
     }
 
     /// The title bar's color for the current page.
@@ -550,9 +590,7 @@ impl State {
     }
 
     fn hit(&mut self, r: R, a: Action) {
-        if a.toggles() {
-            self.toggles.push((r, a.clone()));
-        }
+        self.focusables.push((r, self.hit_clip, a.clone()));
         let r = match self.hit_clip {
             Some(c) => {
                 let (x, y) = (r.x.max(c.x), r.y.max(c.y));
@@ -583,16 +621,18 @@ impl State {
         // the page in the title: what a screen reader announces for this painted window
         let title = super::wide(&format!("OpenCleaner - {}", self.module.title()));
         unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetWindowTextW(self.hwnd, title.as_ptr()) };
-        self.focus = None;
+        // keep the focus on the sidebar after choosing a page from it with the keyboard
+        self.focus = self.focus.take().filter(|f| matches!(f, Action::Go(_)));
         self.update_timers();
     }
 
     // ------------------------------------------------------------ keyboard
 
-    /// Ctrl+R / F5 scan again, Esc stops a scan, Up/Down move along the tick boxes, Space
-    /// ticks the one in focus. Returns what to perform.
-    pub fn key(&mut self, vk: u16, ctrl: bool) -> Option<Action> {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_DOWN, VK_ESCAPE, VK_F5, VK_SPACE, VK_UP};
+    /// Ctrl+R / F5 scan again, Esc stops a scan, Tab / Shift+Tab move along every control,
+    /// Up/Down along the tick boxes, Space or Enter activate the one in focus (Enter with
+    /// nothing in focus: the big button). Returns what to perform.
+    pub fn key(&mut self, vk: u16, ctrl: bool, shift: bool) -> Option<Action> {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_DOWN, VK_ESCAPE, VK_F5, VK_RETURN, VK_SPACE, VK_TAB, VK_UP};
         match vk {
             VK_F5 => self.rescan(),
             0x52 if ctrl => self.rescan(),
@@ -601,9 +641,11 @@ impl State {
                 m if PICK_MODULES.contains(&m) && self.pick(m).phase == Phase::Finding => Some(Action::PickStop(m)),
                 _ => None,
             },
-            VK_UP => self.move_focus(-1),
-            VK_DOWN => self.move_focus(1),
-            VK_SPACE => self.focus.clone().filter(|f| self.toggles.iter().any(|(_, a)| a == f)),
+            VK_TAB => self.move_focus(if shift { -1 } else { 1 }, true),
+            VK_UP => self.move_focus(-1, false),
+            VK_DOWN => self.move_focus(1, false),
+            VK_SPACE => self.focused(),
+            VK_RETURN => self.focused().or_else(|| self.default_action.clone()),
             _ => None,
         }
     }
@@ -619,14 +661,29 @@ impl State {
         }
     }
 
-    /// Moves the focus to the next or previous tick box and scrolls it into view.
-    fn move_focus(&mut self, by: isize) -> Option<Action> {
-        let last = self.toggles.len().checked_sub(1)?;
-        let at = self.focus.as_ref().and_then(|f| self.toggles.iter().position(|(_, a)| a == f));
-        let next = at.map_or(0, |i| i.saturating_add_signed(by).min(last));
-        let (r, a) = self.toggles[next].clone();
+    /// The control in focus, if this paint still shows it.
+    fn focused(&self) -> Option<Action> {
+        self.focus.clone().filter(|f| self.focusables.iter().any(|(_, _, a)| a == f))
+    }
+
+    /// Moves the focus to the next or previous control (`all`, wrapping) or tick box, and
+    /// scrolls it into view.
+    fn move_focus(&mut self, by: isize, all: bool) -> Option<Action> {
+        let list: Vec<&(R, Option<R>, Action)> = self.focusables.iter().filter(|(_, _, a)| all || a.toggles()).collect();
+        let n = list.len();
+        let last = n.checked_sub(1)?;
+        let at = self.focus.as_ref().and_then(|f| list.iter().position(|(_, _, a)| a == f));
+        let next = match at {
+            None if by < 0 && all => last,
+            None => 0,
+            Some(i) if all => (i as isize + by).rem_euclid(n as isize) as usize,
+            Some(i) => i.saturating_add_signed(by).min(last),
+        };
+        let (r, clip, a) = list[next].clone();
         self.focus = Some(a);
-        if let Some((view, _)) = self.view {
+        if clip.is_some()
+            && let Some((view, _)) = self.view
+        {
             if r.y < view.y {
                 self.scroll_by(r.y - view.y - 4.0);
             } else if r.bottom() > view.bottom() {
@@ -779,14 +836,11 @@ impl State {
     pub fn draw(&mut self, c: &mut Canvas, w: f32, h: f32) {
         self.hits.clear();
         self.view = None;
-        self.toggles.clear();
-        let (from, to) = self.module.palette();
-        c.gradient(R::new(0.0, 0.0, w, h), backdrop(from), backdrop(to));
-        // two soft light blobs, so the glass has something to sit on
-        c.circle(w * 0.85, h * 0.08, 360.0, Some(argb(from, if light() { 40 } else { 70 })), None);
-        c.circle(w * 0.2, h * 0.98, 300.0, Some(argb(WHITE, 14)), None);
-
-        self.draw_sidebar(c, R::new(14.0, 14.0, 236.0, h - 28.0));
+        self.focusables.clear();
+        self.default_action = None;
+        self.spins.clear();
+        // the backdrop (gradient, blobs, sidebar glass) is already there: `draw_backdrop`
+        self.draw_sidebar(c, sidebar(h));
         let page = R::new(264.0, 0.0, w - 264.0 - 14.0, h);
         match self.module {
             Module::Dashboard => self.draw_dashboard(c, page),
@@ -800,18 +854,18 @@ impl State {
 
         // keyboard focus ring, inside the list it belongs to
         if let Some(f) = &self.focus
-            && let Some((r, _)) = self.toggles.iter().find(|(_, a)| a == f)
+            && let Some((r, clip, a)) = self.focusables.iter().find(|(_, _, a)| a == f)
         {
-            if let Some((v, _)) = self.view {
-                c.clip(v);
+            if let Some(v) = clip {
+                c.clip(*v);
             }
-            c.rounded(*r, 12.0, None, Some(argb(fg(), 200)));
+            let radius = if a.toggles() { 12.0 } else { r.w.min(r.h) / 2.0 };
+            c.rounded(*r, radius, None, Some(argb(fg(), 200)));
             c.unclip();
         }
     }
 
     fn draw_sidebar(&mut self, c: &mut Canvas, r: R) {
-        c.glass(r, 22.0);
         let mut y = r.y + 10.0;
         for (group, modules) in SECTIONS {
             if !group.trim().is_empty() {
@@ -836,7 +890,7 @@ impl State {
     }
 
     /// Large centred intro: title, text and checkmarked points left, the page's symbol right.
-    fn draw_intro(&mut self, c: &mut Canvas, page: R, title: &str, subtitle: &str, points: &[String], glyph: char) {
+    fn draw_intro(&mut self, c: &mut Canvas, page: R, title: &str, subtitle: &str, points: &[String], m: Module) {
         let cx = page.x + page.w / 2.0;
         let top = page.y + page.h * 0.24;
         let left = R::new(cx - 360.0, top, 360.0, 300.0);
@@ -849,8 +903,12 @@ impl State {
             y += 30.0;
         }
         let (gx, gy) = (cx + 200.0, top + 110.0);
-        c.circle(gx, gy, 96.0, Some(argb(fg(), 18)), Some((argb(fg(), 60), 1.0)));
-        c.icon(R::new(gx - 80.0, gy - 80.0, 160.0, 160.0), glyph, 72.0, fg());
+        if let Some(art) = m.art() {
+            c.image(R::new(gx - 120.0, gy - 120.0, 240.0, 240.0), art);
+        } else {
+            c.circle(gx, gy, 96.0, Some(argb(fg(), 18)), Some((argb(fg(), 60), 1.0)));
+            c.icon(R::new(gx - 80.0, gy - 80.0, 160.0, 160.0), m.glyph(), 72.0, fg());
+        }
     }
 
     /// The big round call-to-action, centred on `cx`.
@@ -861,19 +919,26 @@ impl State {
         c.circle(cx, cy, 52.0, Some(argb(fg(), if hot { 70 } else { 46 })), Some((argb(fg(), 90), 1.0)));
         c.circle(cx, cy, 58.0, None, Some((argb(fg(), if enabled || busy { 115 } else { 50 }), 2.0)));
         if busy {
-            let t = self.started.elapsed().as_secs_f32();
-            c.arc(cx, cy, 20.0, 3.0, (t * 360.0) % 360.0, 270.0, argb(fg(), 230));
+            self.spinner(c, cx, cy, 20.0);
         } else {
             c.text(r, title, 17.0, true, if enabled { fg() } else { dim() }, Align::Center);
         }
         if let (Some(a), true) = (action, enabled) {
+            self.default_action = Some(a.clone());
             self.hit(r, a);
         }
     }
 
+    /// A busy spinner; the timer repaints its square and nothing else.
+    fn spinner(&mut self, c: &Canvas, cx: f32, cy: f32, radius: f32) {
+        let t = self.started.elapsed().as_secs_f32();
+        c.arc(cx, cy, radius, 3.0, (t * 360.0) % 360.0, 270.0, argb(fg(), 230));
+        self.spins.push(R::new(cx - radius - 4.0, cy - radius - 4.0, 2.0 * radius + 8.0, 2.0 * radius + 8.0));
+    }
+
     /// Secondary glass pill.
     fn pill(&mut self, c: &mut Canvas, x: f32, cy: f32, title: &str, action: Action) -> f32 {
-        let w = 40.0 + title.chars().count() as f32 * 7.6;
+        let w = self.pill_width(c, title);
         let r = R::new(x, cy - 20.0, w, 40.0);
         c.rounded(r, 20.0, Some(argb(fg(), if self.hot(r) { 70 } else { 41 })), Some(argb(fg(), 60)));
         c.text(r, title, 14.0, true, fg(), Align::Center);
@@ -883,9 +948,14 @@ impl State {
 
     /// A pill that ends at `right`.
     fn pill_right(&mut self, c: &mut Canvas, right: f32, cy: f32, title: &str, action: Action) -> f32 {
-        let w = 40.0 + title.chars().count() as f32 * 7.6;
+        let w = self.pill_width(c, title);
         self.pill(c, right - w, cy, title, action);
         w
+    }
+
+    /// The label as drawn (14 px semibold), plus the padding.
+    fn pill_width(&mut self, c: &Canvas, title: &str) -> f32 {
+        40.0 + c.measure(&mut self.fonts, title, 14.0, true).ceil()
     }
 
     fn icon_pill(&mut self, c: &mut Canvas, x: f32, cy: f32, glyph: char, action: Action) {
@@ -978,10 +1048,20 @@ impl State {
     }
 
     /// Header for pages with results: symbol, title, status line.
-    fn header(&self, c: &mut Canvas, page: R, glyph: char, title: &str, status: &str) -> f32 {
+    /// While finding, the scanning art; once done, the done art; else the page's own.
+    fn header(&self, c: &mut Canvas, page: R, m: Module, phase: Phase, title: &str, status: &str) -> f32 {
         let y = page.y + 30.0;
-        c.circle(page.x + 36.0, y + 36.0, 36.0, Some(argb(fg(), 18)), Some((argb(fg(), 60), 1.0)));
-        c.icon(R::new(page.x, y, 72.0, 72.0), glyph, 30.0, fg());
+        let art = match phase {
+            Phase::Finding => Some(&include_bytes!("../../art/scanning.png")[..]),
+            Phase::Done => Some(&include_bytes!("../../art/done.png")[..]),
+            _ => m.art(),
+        };
+        if let Some(art) = art {
+            c.image(R::new(page.x - 4.0, y - 4.0, 80.0, 80.0), art);
+        } else {
+            c.circle(page.x + 36.0, y + 36.0, 36.0, Some(argb(fg(), 18)), Some((argb(fg(), 60), 1.0)));
+            c.icon(R::new(page.x, y, 72.0, 72.0), m.glyph(), 30.0, fg());
+        }
         c.text(R::new(page.x + 90.0, y + 8.0, page.w - 90.0, 32.0), title, 24.0, true, fg(), Align::Left);
         c.text(R::new(page.x + 90.0, y + 40.0, page.w - 90.0, 22.0), status, 14.0, false, dim(), Align::Left);
         y + 90.0
@@ -1069,13 +1149,12 @@ impl State {
     // ------------------------------------------------------------ System Junk
 
     fn draw_junk(&mut self, c: &mut Canvas, page: R) {
-        let tool = tool("clean");
-        let (title, subtitle, points) = tool.map(|t| (t.title, t.subtitle, t.points)).unwrap_or_default();
+        let (title, subtitle, points) = Module::Junk.intro();
         let bar_y = page.bottom() - 90.0;
         let cx = page.x + page.w / 2.0;
         match self.junk.phase {
             Phase::Idle => {
-                self.draw_intro(c, page, &title, &subtitle, &points, Module::Junk.glyph());
+                self.draw_intro(c, page, &title, &subtitle, &points, Module::Junk);
                 self.big_button(c, cx, bar_y, "Scan", false, Some(Action::JunkScan));
             }
             Phase::Finding | Phase::Review => {
@@ -1085,7 +1164,7 @@ impl State {
                 } else {
                     format!("{found} found. Nothing has been removed yet.")
                 };
-                let y = self.header(c, page.inset(18.0, 0.0), Module::Junk.glyph(), &title, &status);
+                let y = self.header(c, page.inset(18.0, 0.0), Module::Junk, self.junk.phase, &title, &status);
                 let panel = R::new(page.x + 18.0, y, page.w - 36.0, bar_y - 72.0 - y);
                 // the plan lists every item: borrowed for the paint rather than copied
                 let plan = std::mem::take(&mut self.junk.plan);
@@ -1126,7 +1205,7 @@ impl State {
                     format!("Cleaning… {} freed", bytes(o["bytes"].as_f64()))
                 };
                 let o = o.clone();
-                let y = self.header(c, page.inset(18.0, 0.0), Module::Junk.glyph(), &title, &status);
+                let y = self.header(c, page.inset(18.0, 0.0), Module::Junk, self.junk.phase, &title, &status);
                 if self.junk.phase == Phase::Done {
                     self.outcome_panel(c, R::new(page.x + 18.0, y, page.w - 36.0, 120.0), &o);
                     self.pill_right(c, cx - 90.0, bar_y, "Start Over", Action::JunkReset);
@@ -1305,11 +1384,11 @@ impl State {
         let phase = self.pick(m).phase;
         match phase {
             Phase::Idle => {
-                self.draw_intro(c, page, &title, &subtitle, &points, m.glyph());
+                self.draw_intro(c, page, &title, &subtitle, &points, m);
                 self.big_button(c, cx, bar_y, "Scan", false, Some(Action::PickFind(m)));
             }
             Phase::Finding => {
-                self.header(c, page.inset(18.0, 0.0), m.glyph(), &title, "Looking…");
+                self.header(c, page.inset(18.0, 0.0), m, phase, &title, "Looking…");
                 self.big_button(c, cx, bar_y, "", true, None);
                 self.pill(c, cx + 90.0, bar_y, "Stop", Action::PickStop(m));
             }
@@ -1322,7 +1401,7 @@ impl State {
                 } else {
                     "Working…".into()
                 };
-                let mut y = self.header(c, page.inset(18.0, 0.0), m.glyph(), &title, &status);
+                let mut y = self.header(c, page.inset(18.0, 0.0), m, phase, &title, &status);
                 if !review {
                     let progress = p.progress.clone();
                     self.removal_progress(c, R::new(page.x + 18.0, y, page.w - 36.0, 40.0), &progress);
@@ -1343,7 +1422,7 @@ impl State {
             Phase::Done => {
                 let o = self.pick(m).outcome.clone();
                 let status = format!("Done: {} freed", bytes(o["bytes"].as_f64()));
-                let y = self.header(c, page.inset(18.0, 0.0), m.glyph(), &title, &status);
+                let y = self.header(c, page.inset(18.0, 0.0), m, phase, &title, &status);
                 self.outcome_panel(c, R::new(page.x + 18.0, y, page.w - 36.0, 120.0), &o);
                 self.pill_right(c, cx - 90.0, bar_y, "Start Over", Action::PickReset(m));
                 self.big_button(c, cx, bar_y, "Scan", false, Some(Action::PickFind(m)));
@@ -1426,13 +1505,12 @@ impl State {
         let bar_y = page.bottom() - 90.0;
         let cx = page.x + page.w / 2.0;
         let status = self.apps.message.clone().unwrap_or_else(|| "Start an app's own uninstaller. Apps that need no installer can also be removed in Settings.".into());
-        let y = self.header(c, page.inset(18.0, 0.0), Module::Uninstaller.glyph(), "Uninstaller", &status);
+        let y = self.header(c, page.inset(18.0, 0.0), Module::Uninstaller, Phase::Idle, "Uninstaller", &status);
         self.icon_pill(c, page.right() - 58.0, page.y + 66.0, REFRESH, Action::AppsReload);
         let panel = R::new(page.x + 18.0, y, page.w - 36.0, bar_y - 72.0 - y);
         if !self.apps.loaded {
             c.glass(panel, 20.0);
-            let t = self.started.elapsed().as_secs_f32();
-            c.arc(panel.x + panel.w / 2.0, panel.y + panel.h / 2.0, 18.0, 3.0, (t * 360.0) % 360.0, 270.0, argb(fg(), 230));
+            self.spinner(c, panel.x + panel.w / 2.0, panel.y + panel.h / 2.0, 18.0);
             return;
         }
         let mut order: Vec<usize> = (0..self.apps.list.len()).collect();
@@ -1479,7 +1557,7 @@ impl State {
                 "Space Lens",
                 "See what takes up space as an interactive map, then send what you don't need to the Recycle Bin.",
                 &[],
-                Module::SpaceLens.glyph(),
+                Module::SpaceLens,
             );
             let cards = [
                 (None, "This PC", "Your files, apps and Windows at a glance"),
@@ -1516,8 +1594,7 @@ impl State {
             if let Some(e) = &self.space.error {
                 c.text(body, e, 14.0, false, amber(), Align::Center);
             } else {
-                let t = self.started.elapsed().as_secs_f32();
-                c.arc(body.x + body.w / 2.0, body.y + body.h / 2.0 - 20.0, 22.0, 3.0, (t * 360.0) % 360.0, 270.0, argb(fg(), 230));
+                self.spinner(c, body.x + body.w / 2.0, body.y + body.h / 2.0 - 20.0, 22.0);
                 c.text(R::new(body.x, body.y + body.h / 2.0 + 16.0, body.w, 24.0), "Mapping your files…", 14.0, false, dim(), Align::Center);
             }
             return;
@@ -1632,7 +1709,7 @@ impl State {
     // ------------------------------------------------------------ History
 
     fn draw_history(&mut self, c: &mut Canvas, page: R) {
-        let y = self.header(c, page.inset(18.0, 0.0), Module::History.glyph(), "History", "What OpenCleaner removed, newest first.");
+        let y = self.header(c, page.inset(18.0, 0.0), Module::History, Phase::Idle, "History", "What OpenCleaner removed, newest first.");
         let bottom = page.bottom() - 40.0;
         let panel = R::new(page.x + 18.0, y, page.w - 36.0, bottom - y);
         let sessions = self.history.sessions.clone();
@@ -1669,7 +1746,7 @@ impl State {
     // ------------------------------------------------------------ Settings
 
     fn draw_settings(&mut self, c: &mut Canvas, page: R) {
-        let y = self.header(c, page.inset(18.0, 0.0), Module::Settings.glyph(), "Settings", "Light or dark follows the Windows app theme.");
+        let y = self.header(c, page.inset(18.0, 0.0), Module::Settings, Phase::Idle, "Settings", "Light or dark follows the Windows app theme.");
         let panel = R::new(page.x + 18.0, y, page.w - 36.0, 168.0);
         c.glass(panel, 20.0);
         c.text(R::new(panel.x + 20.0, panel.y + 12.0, 200.0, 20.0), "Engine", 13.0, true, dim(), Align::Left);
@@ -1718,6 +1795,19 @@ impl State {
 
 /// Runs an action. Confirmations happen outside the state borrow (the dialog has its own
 /// message loop that paints this window).
+fn sidebar(h: f32) -> R {
+    R::new(14.0, 14.0, 236.0, h - 28.0)
+}
+
+/// What stays put on a page: its gradient, two soft light blobs so the glass has something to
+/// sit on, and the sidebar's glass. Drawn into a cache, see `ui::paint`.
+pub fn draw_backdrop(c: &Canvas, (from, to): (u32, u32), w: f32, h: f32) {
+    c.gradient(R::new(0.0, 0.0, w, h), backdrop(from), backdrop(to));
+    c.circle(w * 0.85, h * 0.08, 360.0, Some(argb(from, if light() { 40 } else { 70 })), None);
+    c.circle(w * 0.2, h * 0.98, 300.0, Some(argb(WHITE, 14)), None);
+    c.glass(sidebar(h), 22.0);
+}
+
 pub fn perform(hwnd: HWND, action: Action) {
     use super::with;
     match action {

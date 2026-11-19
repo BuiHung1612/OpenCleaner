@@ -2,10 +2,12 @@
 //! text is collected and drawn last with GDI (ClearType), each run clipped to its area.
 //! Everything is in logical pixels; `s` is the window's DPI scale.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use windows_sys::Win32::Foundation::RECT;
+use windows_sys::Win32::Foundation::{RECT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Graphics::GdiPlus::*;
 
@@ -117,17 +119,30 @@ pub struct Canvas {
     hdc: HDC,
     pub s: f32,
     clip: Option<R>,
+    /// the area being repainted (device pixels): nothing is drawn outside it
+    base: Option<RECT>,
     texts: Vec<TextRun>,
 }
 
 impl Canvas {
-    pub fn new(hdc: HDC, s: f32) -> Canvas {
+    /// A canvas on `hdc`; with `base`, only that area (device pixels) is painted.
+    pub fn new(hdc: HDC, s: f32, base: Option<RECT>) -> Canvas {
         let mut g = null_mut();
         unsafe {
             GdipCreateFromHDC(hdc, &mut g);
             GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+            GdipSetInterpolationMode(g, InterpolationModeHighQualityBicubic);
         }
-        Canvas { g, hdc, s, clip: None, texts: Vec::new() }
+        let c = Canvas { g, hdc, s, clip: None, base, texts: Vec::new() };
+        c.restrict();
+        c
+    }
+
+    fn restrict(&self) {
+        if let Some(b) = self.base {
+            let (x, y, w, h) = (b.left as f32, b.top as f32, (b.right - b.left) as f32, (b.bottom - b.top) as f32);
+            unsafe { GdipSetClipRect(self.g, x, y, w, h, CombineModeIntersect) };
+        }
     }
 
     /// Clips shapes and text to `r` until `unclip`.
@@ -135,11 +150,47 @@ impl Canvas {
         self.clip = Some(r);
         let s = self.s;
         unsafe { GdipSetClipRect(self.g, r.x * s, r.y * s, r.w * s, r.h * s, CombineModeReplace) };
+        self.restrict();
     }
 
     pub fn unclip(&mut self) {
         self.clip = None;
         unsafe { GdipResetClip(self.g) };
+        self.restrict();
+    }
+
+    /// Width of one line of text, as `text` would draw it.
+    pub fn measure(&self, fonts: &mut Fonts, text: &str, size: f32, bold: bool) -> f32 {
+        let w: Vec<u16> = text.encode_utf16().collect();
+        let mut sz = SIZE { cx: 0, cy: 0 };
+        unsafe {
+            let old = SelectObject(self.hdc, fonts.get(size * self.s, bold, false));
+            GetTextExtentPoint32W(self.hdc, w.as_ptr(), w.len() as i32, &mut sz);
+            SelectObject(self.hdc, old);
+        }
+        sz.cx as f32 / self.s
+    }
+
+    /// A PNG embedded in the exe, scaled into `r`. Decoded once, kept for the process.
+    pub fn image(&self, r: R, png: &'static [u8]) {
+        thread_local! {
+            static DECODED: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());
+        }
+        let bitmap = DECODED.with(|d| {
+            *d.borrow_mut().entry(png.as_ptr() as usize).or_insert_with(|| unsafe {
+                // the stream stays alive with the bitmap (GDI+ may read it lazily)
+                let stream = windows_sys::Win32::UI::Shell::SHCreateMemStream(png.as_ptr(), png.len() as u32);
+                let mut bmp = null_mut();
+                if stream.is_null() || GdipCreateBitmapFromStream(stream, &mut bmp) != 0 {
+                    return 0;
+                }
+                bmp as usize
+            })
+        });
+        if bitmap != 0 {
+            let s = self.s;
+            unsafe { GdipDrawImageRect(self.g, bitmap as *mut GpImage, r.x * s, r.y * s, r.w * s, r.h * s) };
+        }
     }
 
     fn brush(&self, color: u32) -> *mut GpBrush {
@@ -263,6 +314,11 @@ impl Canvas {
         for t in std::mem::take(&mut self.texts) {
             let px = |v: f32| (v * s).round() as i32;
             let mut rect = RECT { left: px(t.r.x), top: px(t.r.y), right: px(t.r.right()), bottom: px(t.r.bottom()) };
+            if let Some(b) = self.base
+                && (rect.right <= b.left || b.right <= rect.left || rect.bottom <= b.top || b.bottom <= rect.top)
+            {
+                continue;
+            }
             unsafe {
                 if let Some(c) = t.clip {
                     let rgn = CreateRectRgn(px(c.x), px(c.y), px(c.right()), px(c.bottom()));
@@ -270,6 +326,9 @@ impl Canvas {
                     DeleteObject(rgn);
                 } else {
                     SelectClipRgn(self.hdc, null_mut());
+                }
+                if let Some(b) = self.base {
+                    IntersectClipRect(self.hdc, b.left, b.top, b.right, b.bottom);
                 }
                 SelectObject(self.hdc, fonts.get(t.size * s, t.bold, t.icon));
                 SetTextColor(self.hdc, (t.color & 0xFF) << 16 | (t.color & 0xFF00) | (t.color >> 16 & 0xFF));
@@ -295,15 +354,14 @@ impl Fonts {
     pub fn get(&mut self, px: f32, bold: bool, icon: bool) -> HFONT {
         let key = (px.round() as i32, bold, icon);
         *self.0.entry(key).or_insert_with(|| {
-            let face: Vec<u16> = if icon {
-                // Windows 11 ships Segoe Fluent Icons; Windows 10 the same glyphs in MDL2 Assets
-                if font_installed("Segoe Fluent Icons") { "Segoe Fluent Icons" } else { "Segoe MDL2 Assets" }
-            } else {
-                "Segoe UI Variable Text"
-            }
-            .encode_utf16()
-            .chain([0])
-            .collect();
+            // Windows 11 ships Segoe UI Variable and Segoe Fluent Icons; Windows 10 has Segoe UI
+            // and the same glyphs in Segoe MDL2 Assets. Looked up once.
+            static FACES: OnceLock<[Vec<u16>; 2]> = OnceLock::new();
+            let faces = FACES.get_or_init(|| {
+                let pick = |a: &str, b: &str| (if font_installed(a) { a } else { b }).encode_utf16().chain([0]).collect();
+                [pick("Segoe UI Variable Text", "Segoe UI"), pick("Segoe Fluent Icons", "Segoe MDL2 Assets")]
+            });
+            let face = &faces[usize::from(icon)];
             unsafe {
                 CreateFontW(
                     -key.0,
