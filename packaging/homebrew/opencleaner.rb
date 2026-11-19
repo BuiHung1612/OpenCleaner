@@ -3,7 +3,7 @@ cask "opencleaner" do
   version "{{VERSION}}"
   sha256 "{{SHA256}}"
 
-  url "https://github.com/BuiHung1612/OpenCleaner/releases/download/v#{version}/OpenCleaner-macos.zip"
+  url "https://github.com/BuiHung1612/OpenCleaner/releases/download/v#{version}/OpenCleaner.dmg"
   name "OpenCleaner"
   desc "Free, open-source disk cleaner"
   homepage "https://github.com/BuiHung1612/OpenCleaner"

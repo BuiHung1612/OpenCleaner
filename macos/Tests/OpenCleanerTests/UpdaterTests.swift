@@ -12,11 +12,11 @@ import Testing
 }
 
 @Test func releaseAssetSelection() {
-    let reply = #"{"tag_name":"v1.2.0","assets":[{"name":"OpenCleaner-windows.zip","browser_download_url":"https://x/win.zip"},{"name":"OpenCleaner-macos.zip","browser_download_url":"https://x/mac.zip"}]}"#
+    let reply = #"{"tag_name":"v1.2.0","assets":[{"name":"OpenCleaner.exe","browser_download_url":"https://x/win.exe"},{"name":"OpenCleaner.dmg","browser_download_url":"https://x/mac.dmg"}]}"#
     let release = Updater.release(from: JSON(data: Data(reply.utf8)))
     #expect(release?.version == "1.2.0")
-    #expect(release?.download?.absoluteString == "https://x/mac.zip")
-    // a release without the macOS zip still reports its version, with nothing to install
+    #expect(release?.download?.absoluteString == "https://x/mac.dmg")
+    // a release without the macOS disk image still reports its version, with nothing to install
     let bare = Updater.release(from: JSON(data: Data(#"{"tag_name":"v1.3.0","assets":[]}"#.utf8)))
     #expect(bare?.version == "1.3.0" && bare?.download == nil)
     #expect(Updater.release(from: JSON(data: Data(#"{"message":"rate limited"}"#.utf8))) == nil)

@@ -71,11 +71,11 @@ jobs:
           $exe = "windows/target/release/OpenCleaner.exe"
           if (-not (Test-Path $exe)) { throw "OpenCleaner.exe was not built" }
           Get-Item $exe | Format-List Name, Length
-          Compress-Archive -Path $exe -DestinationPath OpenCleaner-windows.zip
+      # shipped as the bare exe: one file, nothing to unpack
       - uses: actions/upload-artifact@v7
         with:
           name: OpenCleaner-windows
-          path: OpenCleaner-windows.zip
+          path: windows/target/release/OpenCleaner.exe
 
   macos:
     # Liquid Glass and swift-tools-version 6.2 need the macOS 26 SDK
@@ -141,12 +141,19 @@ jobs:
           codesign --verify --deep --strict $APP
           test -f $APP/Contents/Resources/tools.json
 
-      - run: ditto -c -k --keepParent macos/build/OpenCleaner.app OpenCleaner-macos.zip
+      # a disk image: the app next to an Applications shortcut, dragged across once
+      - name: Disk image
+        run: |
+          mkdir dmg
+          cp -R macos/build/OpenCleaner.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname OpenCleaner -srcfolder dmg -ov -format ULFO OpenCleaner.dmg
+          if [ -n "${SIGN_ID:-}" ]; then codesign --sign "$SIGN_ID" OpenCleaner.dmg; fi
 
       - uses: actions/upload-artifact@v7
         with:
           name: OpenCleaner-macos
-          path: OpenCleaner-macos.zip
+          path: OpenCleaner.dmg
 
   # Push a tag like v0.1.0 (matching VERSION) to publish a GitHub Release.
   release:
@@ -166,12 +173,12 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           render() { sed -e "s/{{VERSION}}/$VERSION/g" -e "s/{{SHA256}}/$2/g" "$1" > "dist/$(basename "$1")"; }
-          MAC=$(sha256sum dist/OpenCleaner-macos.zip | cut -d' ' -f1)
-          WIN=$(sha256sum dist/OpenCleaner-windows.zip | cut -d' ' -f1)
+          MAC=$(sha256sum dist/OpenCleaner.dmg | cut -d' ' -f1)
+          WIN=$(sha256sum dist/OpenCleaner.exe | cut -d' ' -f1)
           render packaging/homebrew/opencleaner.rb "$MAC"
           for f in packaging/winget/*.yaml; do render "$f" "${WIN^^}"; done
           ! grep -l '{{' dist/opencleaner.rb dist/*.yaml # every placeholder filled
-      # dist/ holds the app zips built by the macos and windows-app jobs, and the manifests
+      # dist/ holds OpenCleaner.dmg and OpenCleaner.exe from the macos and windows-app jobs, and the manifests
       - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

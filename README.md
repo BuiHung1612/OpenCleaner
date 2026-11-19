@@ -26,9 +26,9 @@ The Windows app is one executable: native Win32 painted with GDI+ (the same grad
 
 ## CI and releases
 
-`.github/workflows/opencleaner.yml` tests the engine on macOS and Windows, builds the universal (Apple Silicon + Intel) macOS app and the Windows app on every push, and uploads `OpenCleaner-macos.zip` and `OpenCleaner-windows.zip` as workflow artifacts.
+`.github/workflows/opencleaner.yml` tests the engine on macOS and Windows, builds the universal (Apple Silicon + Intel) macOS app and the Windows app on every push, and uploads `OpenCleaner.dmg` (macOS: drag the app onto Applications) and `OpenCleaner.exe` (Windows: runs as is) as workflow artifacts.
 
-- **Release:** bump `VERSION`, commit, then push a matching tag: `git tag v0.1.0 && git push origin v0.1.0`. CI checks the tag matches `VERSION`, then creates a GitHub Release with both app zips.
+- **Release:** bump `VERSION`, commit, then push a matching tag: `git tag v0.1.0 && git push origin v0.1.0`. CI checks the tag matches `VERSION`, then creates a GitHub Release with `OpenCleaner.dmg` and `OpenCleaner.exe`.
 - **Signing (optional, recommended):** run `macos/make-signing-cert.sh` once to create the fixed self-signed identity "OpenCleaner Code Signing", then `macos/make-signing-cert.sh --secrets OWNER/REPO` to upload `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD` and `MACOS_SIGN_ID`. A fixed signature keeps Full Disk Access granted across updates; ad-hoc builds lose it every release. It does not remove the first-launch Gatekeeper prompt (right-click → Open); that needs a Developer ID and notarization, not set up yet. Back up `~/.opencleaner-signing`: losing it means users grant access again once.
 
 ## Layout

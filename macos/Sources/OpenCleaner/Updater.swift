@@ -1,5 +1,5 @@
 //! Self-update from GitHub Releases, same flow as VKeyEngine: check 10 s after launch and then
-//! daily (can be turned off), ask, download the release zip, unpack and verify it, move the old
+//! daily (can be turned off), ask, download the release disk image, copy the app out and verify it, move the old
 //! bundle to the Trash, put the new one in its place and reopen the app once this process has quit.
 //! An ad-hoc signed copy has no identity to check an update against, so it only opens the release page.
 
@@ -8,7 +8,7 @@ import Foundation
 
 enum Updater {
     static let repo = "BuiHung1612/OpenCleaner"
-    static let asset = "OpenCleaner-macos.zip"
+    static let asset = "OpenCleaner.dmg"
     static let releasesPage = URL(string: "https://github.com/\(repo)/releases/latest")!
     static let autoKey = "checkUpdates"
 
@@ -50,7 +50,7 @@ enum Updater {
         return release
     }
 
-    /// The version and macOS zip of a `releases/latest` reply.
+    /// The version and macOS disk image of a `releases/latest` reply.
     static func release(from json: JSON) -> Release? {
         guard let tag = json.tag_name.string else { return nil }
         let url = json.assets.array.first { $0.name.string == asset }?.browser_download_url.string.flatMap(URL.init(string:))
@@ -121,11 +121,15 @@ enum Updater {
             try? FileManager.default.removeItem(at: dir)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let (downloaded, _) = try await URLSession.shared.download(from: url)
-            let zip = dir.appendingPathComponent(asset)
-            try FileManager.default.moveItem(at: downloaded, to: zip)
+            let image = dir.appendingPathComponent(asset)
+            try FileManager.default.moveItem(at: downloaded, to: image)
+            // copy the app out of the disk image, then let the image go
+            let mount = dir.appendingPathComponent("mount")
             let newApp = dir.appendingPathComponent("OpenCleaner.app")
-            guard run("/usr/bin/ditto", ["-x", "-k", zip.path, dir.path]) != nil,
-                  FileManager.default.fileExists(atPath: newApp.appendingPathComponent("Contents/MacOS/OpenCleaner").path)
+            let attached = run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.path, image.path]) != nil
+            let copied = attached && run("/usr/bin/ditto", [mount.appendingPathComponent("OpenCleaner.app").path, newApp.path]) != nil
+            if attached { _ = run("/usr/bin/hdiutil", ["detach", "-force", mount.path]) }
+            guard copied, FileManager.default.fileExists(atPath: newApp.appendingPathComponent("Contents/MacOS/OpenCleaner").path)
             else { throw Failure(String(localized: "The download is damaged.")) }
             guard Bundle(url: newApp)?.bundleIdentifier == Bundle.main.bundleIdentifier else {
                 throw Failure(String(localized: "The download is not signed by OpenCleaner. It was not installed."))
@@ -173,7 +177,7 @@ enum Updater {
     }
 
     /// The update must be signed by the same identity as this app and satisfy its designated
-    /// requirement (which pins the certificate, not just its name), so a tampered zip can't replace it.
+    /// requirement (which pins the certificate, not just its name), so a tampered download can't replace it.
     static func verifySameSigner(current: URL, new: URL) throws {
         let notOurs = Failure(String(localized: "The download is not signed by OpenCleaner. It was not installed."))
         guard let mine = signer(of: current), !mine.adHoc,
