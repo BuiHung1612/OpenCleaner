@@ -249,6 +249,10 @@ fn project_junk_needs_its_project_file_and_skips_tracked_and_marks_active() {
     // a venv only counts with its pyvenv.cfg
     write(&h("Projects/py/.venv/pyvenv.cfg"), 10);
     write(&h("Projects/py/.venv/lib/x.py"), 30_000);
+    // a repository cloned into build/ is somebody's work, not build output
+    write(&h("Projects/cpp/CMakeLists.txt"), 10);
+    write(&h("Projects/cpp/build/.git/HEAD"), 10);
+    write(&h("Projects/cpp/build/src/main.c"), 40_000);
 
     let found = finders::projects(&ctx, &[], &AtomicBool::new(false));
     let rel: Vec<String> = found
@@ -271,6 +275,7 @@ fn project_junk_needs_its_project_file_and_skips_tracked_and_marks_active() {
     );
     assert!(rel.contains(&"Projects/py/.venv".to_string()), "{rel:?}");
     assert!(!rel.iter().any(|r| r.contains("notes")), "{rel:?}");
+    assert!(!rel.iter().any(|r| r.contains("cpp")), "{rel:?}");
     let pick = |r: &str| found.iter().find(|p| p.path.ends_with(r)).unwrap();
     assert!(pick("web/node_modules").preselect);
     assert!(

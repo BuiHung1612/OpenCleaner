@@ -192,14 +192,29 @@ pub fn touchid_content(current: &str, enable: bool) -> String {
 }
 
 /// The script that writes sudo_local, root-owned and read-only like the system's own.
-pub fn touchid_script(enable: bool) -> String {
-    let current = std::fs::read_to_string(SUDO_LOCAL).unwrap_or_default();
+pub fn touchid_script(enable: bool) -> Result<String, String> {
+    touchid_script_for(std::path::Path::new(SUDO_LOCAL), enable)
+}
+
+/// Only a missing file counts as empty: one that cannot be read is never overwritten
+/// (its other lines would be lost).
+fn touchid_script_for(file: &std::path::Path, enable: bool) -> Result<String, String> {
+    let current = match std::fs::read_to_string(file) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(format!(
+                "{} cannot be read ({e}); not changed",
+                file.display()
+            ));
+        }
+    };
     let content = touchid_content(&current, enable);
-    format!(
+    let file = shell_quote(&file.to_string_lossy());
+    Ok(format!(
         "/usr/bin/printf '%s' {content} > {file} && /bin/chmod 444 {file} && /usr/sbin/chown root:wheel {file}",
         content = shell_quote(&content),
-        file = SUDO_LOCAL
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -239,7 +254,13 @@ mod tests {
             );
         }
         assert!(admin_script(&["nope".into()]).is_none());
-        let t = touchid_script(true);
-        assert!(t.contains("/etc/pam.d/sudo_local") && t.contains("pam_tid.so"));
+        let dir = std::env::temp_dir().join(format!("oc-tid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // missing: written from scratch
+        let t = touchid_script_for(&dir.join("sudo_local"), true).unwrap();
+        assert!(t.contains("sudo_local") && t.contains("pam_tid.so"));
+        // there but unreadable (here: a folder): refused, never replaced by one line
+        assert!(touchid_script_for(&dir, true).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

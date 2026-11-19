@@ -253,6 +253,34 @@ impl Table {
     }
 }
 
+/// Cache folders a `store` of this process is writing to: `read` cuts a damaged tail only
+/// when none is. ponytail: in-process only; another process appending at once is caught
+/// by the size check alone.
+static WRITING: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Marks `dir` as being written until dropped.
+struct Writing(PathBuf);
+
+impl Writing {
+    fn start(dir: &Path) -> Writing {
+        writing().push(dir.to_path_buf());
+        Writing(dir.to_path_buf())
+    }
+}
+
+impl Drop for Writing {
+    fn drop(&mut self) {
+        let mut w = writing();
+        if let Some(i) = w.iter().position(|d| *d == self.0) {
+            w.swap_remove(i);
+        }
+    }
+}
+
+fn writing() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    WRITING.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 fn file(dir: &Path) -> PathBuf {
     dir.join("space-dirs-v5.bin")
 }
@@ -370,7 +398,16 @@ fn get(input: &mut impl Read, left: &mut u64) -> std::io::Result<Rec> {
     } else {
         names.split('\0').count()
     };
-    if count != subs.len() {
+    // a subdirectory name is joined to its parent's path: one that is not a single plain
+    // component (a forged or damaged file) could point the scan elsewhere
+    let plain = |n: &str| {
+        !(n.is_empty()
+            || n == "."
+            || n == ".."
+            || n.contains('/')
+            || cfg!(windows) && n.contains('\\'))
+    };
+    if count != subs.len() || !subs.is_empty() && !names.split('\0').all(plain) {
         return Err(bad());
     }
     *left -= HEAD + body;
@@ -470,10 +507,17 @@ pub fn read(dir: &Path) -> Table {
         while left > 0 {
             let Ok(r) = get(&mut input, &mut left) else {
                 // damaged tail (a crash mid-append): cut it off, so appends land after
-                // the last good record instead of behind the damage
-                if let Ok(f) = std::fs::OpenOptions::new().write(true).open(file(dir)) {
-                    let _ = f.set_len(size - left);
+                // the last good record instead of behind the damage. Not while a store of
+                // this process writes, nor if the file grew since (an append may be what
+                // looked damaged).
+                let w = writing();
+                if !w.iter().any(|d| d == dir)
+                    && let Ok(f) = std::fs::OpenOptions::new().write(true).open(file(dir))
+                    && f.metadata().is_ok_and(|m| m.len() == size)
+                {
+                    let _ = f.set_len(size - left); // under the lock: no store starts meanwhile
                 }
+                drop(w);
                 break;
             };
             table.read += 1;
@@ -493,6 +537,7 @@ pub fn store(dir: &Path, old: Option<Arc<Table>>, found: Vec<Rec>) {
     if found.is_empty() || std::fs::create_dir_all(dir).is_err() {
         return;
     }
+    let _writing = Writing::start(dir);
     // (dev, the scan's event id) of what is saved
     #[cfg(target_os = "macos")]
     let found_devs: Vec<(u64, u64)> = {
@@ -522,7 +567,7 @@ pub fn store(dir: &Path, old: Option<Arc<Table>>, found: Vec<Rec>) {
         let now = now();
         let mut found = found;
         found.sort_unstable_by_key(|r| (r.dev, r.ino));
-        let tmp = dir.join(format!(".space-dirs-{}.tmp", std::process::id()));
+        let tmp = crate::fs::tmp_path(dir, "space-dirs");
         let written = (|| -> std::io::Result<()> {
             let mut out = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
             for r in &found {
@@ -581,10 +626,7 @@ fn store_volumes(dir: &Path, found: &[(u64, u64)]) {
         bytes.extend_from_slice(&uuid.to_le_bytes());
         bytes.extend_from_slice(&since.to_le_bytes());
     }
-    let tmp = dir.join(format!(".space-dirs-vol-{}.tmp", std::process::id()));
-    if std::fs::write(&tmp, bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, volumes_file(dir));
-    }
+    let _ = crate::fs::write_atomic(&volumes_file(dir), bytes);
 }
 
 #[cfg(test)]
@@ -644,6 +686,22 @@ mod tests {
             "the damaged tail is cut off"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_record_with_a_path_for_a_name_is_damaged() {
+        for bad in ["../up", "a/b", "..", "."] {
+            let mut r = rec(1, 1);
+            r.add_dir(bad, 1, 2);
+            let mut bytes = Vec::new();
+            put(&mut bytes, &r).unwrap();
+            let mut left = bytes.len() as u64;
+            assert!(get(&mut bytes.as_slice(), &mut left).is_err(), "{bad}");
+        }
+        let mut bytes = Vec::new();
+        put(&mut bytes, &rec(1, 1)).unwrap();
+        let mut left = bytes.len() as u64;
+        assert!(get(&mut bytes.as_slice(), &mut left).is_ok());
     }
 
     /// Records read at event 42 on volume 1, then FSEvents history in various states.

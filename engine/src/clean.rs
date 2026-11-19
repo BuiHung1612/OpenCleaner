@@ -293,9 +293,8 @@ fn store_sizes(dir: &Path, items: &[Item], sizes: &[u64]) {
     let Ok(bytes) = serde_json::to_vec(&m) else {
         return;
     };
-    let tmp = dir.join(format!(".junk-sizes-{}.tmp", std::process::id()));
-    if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&tmp, bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(SIZES_FILE));
+    if std::fs::create_dir_all(dir).is_ok() {
+        let _ = crate::fs::write_atomic(&dir.join(SIZES_FILE), bytes);
     }
 }
 

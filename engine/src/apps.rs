@@ -218,7 +218,7 @@ pub fn sizes(
         }
         let _ = std::fs::create_dir_all(&ctx.data_dir);
         if let Ok(text) = serde_json::to_vec(&cache) {
-            let _ = std::fs::write(&file, text);
+            let _ = crate::fs::write_atomic(&file, text);
         }
     }
     out

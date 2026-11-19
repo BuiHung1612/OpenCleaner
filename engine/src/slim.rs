@@ -4,8 +4,9 @@
 //! clone is cut down to its arm64 slice, and the clone must pass `codesign --verify
 //! --deep --strict` (the original too, first). Files sealed as plain resources (loose
 //! dylibs inside some frameworks) break the seal when cut: codesign names them, they are
-//! put back from the original, and the check runs again. Only then are the two swapped by rename and
-//! the original goes to the Trash, so it can be put back.
+//! put back from the original, and the check runs again. Only then are the two swapped
+//! atomically (`renamex_np` RENAME_SWAP) and the original goes to the Trash, so it can be
+//! put back; if it cannot, it is kept next to the app, never deleted.
 
 use crate::apps::App;
 use crate::guard::Purpose;
@@ -31,7 +32,8 @@ pub struct Fat {
 }
 
 /// Reads a fat Mach-O header. None for anything else, including Java class files (same
-/// magic, but their "architecture count" is a class version) and fat files with no arm64.
+/// magic, but their "architecture count" is a class version) and fat files with no plain
+/// arm64 slice (arm64e alone is left as it is).
 pub fn read_fat(path: &Path) -> io::Result<Option<Fat>> {
     let mut f = File::open(path)?;
     let len = f.metadata()?.len();
@@ -58,6 +60,7 @@ pub fn read_fat(path: &Path) -> io::Result<Option<Fat>> {
     let mut total = 0u64;
     for e in table.chunks(entry) {
         let cpu = be32(&e[0..]);
+        let subtype = be32(&e[4..]);
         let (offset, size) = if wide {
             (be64(&e[8..]), be64(&e[16..]))
         } else {
@@ -71,7 +74,9 @@ pub fn read_fat(path: &Path) -> io::Result<Option<Fat>> {
             return Ok(None);
         }
         total += size;
-        if cpu == CPU_TYPE_ARM64 {
+        // plain arm64 only (CPU_SUBTYPE_ARM64_ALL): an arm64e slice would still verify,
+        // but third-party code built for arm64 then fails to load in it
+        if cpu == CPU_TYPE_ARM64 && subtype & 0x00FF_FFFF == 0 {
             arm = Some((offset, size));
         }
     }
@@ -200,12 +205,21 @@ fn check(path: &Path) -> Result<(), Vec<PathBuf>> {
         .collect())
 }
 
-/// Thins one app in place (see the module comment) and returns the bytes it saved. The
-/// original ends up in the Trash.
-pub fn slim_app(app: &Path) -> io::Result<u64> {
+/// Thins one app in place (see the module comment) and returns the bytes it saved and
+/// where the original went in the Trash (as "X.app", so Put Back works).
+pub fn slim_app(app: &Path) -> io::Result<(u64, Option<PathBuf>)> {
     if !cfg!(target_arch = "aarch64") {
         return Err(io::Error::other("only on Apple Silicon"));
     }
+    let parent = app
+        .parent()
+        .ok_or_else(|| io::Error::other("no parent folder"))?;
+    let name = app
+        .file_name()
+        .ok_or_else(|| io::Error::other("no name"))?
+        .to_string_lossy()
+        .into_owned();
+    recover(app, parent, &name)?;
     if !writable(app) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -217,22 +231,15 @@ pub fn slim_app(app: &Path) -> io::Result<u64> {
             "its signature does not verify as it is; not changed",
         ));
     }
-    let parent = app
-        .parent()
-        .ok_or_else(|| io::Error::other("no parent folder"))?;
-    let name = app
-        .file_name()
-        .ok_or_else(|| io::Error::other("no name"))?
-        .to_string_lossy()
-        .into_owned();
-    let clone = parent.join(format!(".{name}.oc-slim"));
-    let old = parent.join(format!(".{name}.oc-original"));
-    for leftover in [&clone, &old] {
-        if fs::symlink_metadata(leftover).is_ok() {
-            fs::remove_dir_all(leftover)?;
-        }
+    // the clone lives in a hidden work folder under the app's own name, so after the swap
+    // the original goes to the Trash as "X.app"
+    let work = parent.join(format!(".{name}.oc-work"));
+    fs::create_dir(&work)?;
+    let clone = work.join(&name);
+    if let Err(e) = clonefile(app, &clone) {
+        let _ = fs::remove_dir_all(&work);
+        return Err(e);
     }
-    clonefile(app, &clone)?;
     let result = (|| {
         let mut saved: std::collections::HashMap<PathBuf, u64> = std::collections::HashMap::new();
         for (path, fat) in fat_files(&clone) {
@@ -271,23 +278,84 @@ pub fn slim_app(app: &Path) -> io::Result<u64> {
         }
         Ok(saved.values().sum::<u64>())
     })();
-    let saved = match result {
+    let saved = match result.and_then(|saved| swap(&clone, app).map(|()| saved)) {
         Ok(saved) => saved,
         Err(e) => {
-            let _ = fs::remove_dir_all(&clone);
+            let _ = fs::remove_dir_all(&work); // only the clone: the swap did not happen
             return Err(e);
         }
     };
-    fs::rename(app, &old)?;
-    if let Err(e) = fs::rename(&clone, app) {
-        let _ = fs::rename(&old, app);
-        let _ = fs::remove_dir_all(&clone);
-        return Err(e);
+    // `clone` now holds the original
+    match crate::trash::move_to_trash(&clone) {
+        Ok(trashed) => {
+            let _ = fs::remove_dir(&work);
+            Ok((saved, trashed))
+        }
+        Err(e) => {
+            // never delete the original: keep it next to the app, visible
+            let stem = Path::new(&name)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let kept = parent.join(format!("{stem} (original).app"));
+            let at = if fs::symlink_metadata(&kept).is_err() && fs::rename(&clone, &kept).is_ok() {
+                let _ = fs::remove_dir(&work);
+                kept
+            } else {
+                clone
+            };
+            Err(io::Error::other(format!(
+                "slimmed, but the original could not go to the Trash ({e}); it was kept at {}",
+                at.display()
+            )))
+        }
     }
-    crate::trash::move_to_trash(&old)
-        .map(|_| ())
-        .or_else(|_| fs::remove_dir_all(&old))?;
-    Ok(saved)
+}
+
+/// Leftovers of an interrupted run. Never deletes an original: one is put back when the
+/// app is missing, else moved to the Trash.
+fn recover(app: &Path, parent: &Path, name: &str) -> io::Result<()> {
+    let exists = |p: &Path| fs::symlink_metadata(p).is_ok();
+    // an older version's clone: only ever a copy
+    let old_clone = parent.join(format!(".{name}.oc-slim"));
+    if exists(&old_clone) {
+        fs::remove_dir_all(&old_clone)?;
+    }
+    // this version's work folder: the clone, or the original if the trash step was cut
+    // short; either way the app itself is in place (the swap is atomic)
+    let work = parent.join(format!(".{name}.oc-work"));
+    let inside = work.join(name);
+    if exists(&inside) {
+        crate::trash::move_to_trash(&inside)?;
+    }
+    if exists(&work) {
+        fs::remove_dir(&work)?;
+    }
+    // an older version's original (it swapped with two renames)
+    let old = parent.join(format!(".{name}.oc-original"));
+    if exists(&old) {
+        if !exists(app) {
+            fs::rename(&old, app)?;
+        } else {
+            fs::create_dir(&work)?;
+            fs::rename(&old, &inside)?;
+            crate::trash::move_to_trash(&inside)?;
+            fs::remove_dir(&work)?;
+        }
+    }
+    Ok(())
+}
+
+/// Swaps two items atomically: a crash leaves either the old or the new app in place.
+fn swap(a: &Path, b: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let a = CString::new(a.as_os_str().as_bytes())?;
+    let b = CString::new(b.as_os_str().as_bytes())?;
+    if unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// A file `bundle` seals as a plain resource: inside it, not inside a bundle nested in it,
@@ -331,7 +399,8 @@ fn thin(path: &Path, fat: &Fat) -> io::Result<()> {
     drop(f);
     let tmp = path.with_extension("oc-thin");
     {
-        let mut out = File::create(&tmp)?;
+        // create_new: never follow a planted link or reuse a file already there
+        let mut out = File::options().write(true).create_new(true).open(&tmp)?;
         out.write_all(&slice)?;
         out.sync_all()?;
     }
@@ -443,6 +512,81 @@ mod tests {
         assert_eq!(read_fat(&bin).unwrap(), None);
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// Sets the cpusubtype of table entry `i` (fat_bytes writes 0, ARM64_ALL).
+    fn set_subtype(bytes: &mut [u8], i: usize, sub: u32) {
+        let at = 8 + i * 20 + 4;
+        bytes[at..at + 4].copy_from_slice(&sub.to_be_bytes());
+    }
+
+    #[test]
+    fn picks_plain_arm64_never_arm64e() {
+        let dir = std::env::temp_dir().join(format!("oc-slim-e-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("lib.dylib");
+        // arm64e listed after arm64: the arm64 slice is kept, arm64e counts as other
+        let mut both = fat_bytes(&[(CPU_TYPE_ARM64, 9_000), (CPU_TYPE_ARM64, 7_000)], 0);
+        set_subtype(&mut both, 1, 2); // CPU_SUBTYPE_ARM64E
+        fs::write(&bin, &both).unwrap();
+        let fat = read_fat(&bin).unwrap().unwrap();
+        assert_eq!(
+            (fat.arm64_offset, fat.arm64_size, fat.other_bytes),
+            (4096, 9_000, 7_000)
+        );
+        // arm64e (with capability bits) and Intel only: left untouched
+        let mut e_only = fat_bytes(&[(0x0100_0007, 5000), (CPU_TYPE_ARM64, 5000)], 0);
+        set_subtype(&mut e_only, 1, 0x8000_0002);
+        fs::write(&bin, &e_only).unwrap();
+        assert_eq!(read_fat(&bin).unwrap(), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn thin_does_not_follow_a_planted_link() {
+        let dir = std::env::temp_dir().join(format!("oc-slim-l-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("app");
+        fs::write(
+            &bin,
+            fat_bytes(&[(0x0100_0007, 5000), (CPU_TYPE_ARM64, 5000)], 0),
+        )
+        .unwrap();
+        let target = dir.join("target");
+        fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, bin.with_extension("oc-thin")).unwrap();
+        let fat = read_fat(&bin).unwrap().unwrap();
+        assert!(thin(&bin, &fat).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_leftover_original_is_put_back_when_the_app_is_missing() {
+        let dir = std::env::temp_dir().join(format!("oc-slim-r-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".X.app.oc-original/Contents")).unwrap();
+        fs::create_dir_all(dir.join(".X.app.oc-slim/Contents")).unwrap();
+        fs::create_dir_all(dir.join(".X.app.oc-work")).unwrap(); // empty: cut short early
+        let app = dir.join("X.app");
+        recover(&app, &dir, "X.app").unwrap();
+        assert!(app.join("Contents").is_dir(), "the original is back");
+        for gone in [".X.app.oc-original", ".X.app.oc-slim", ".X.app.oc-work"] {
+            assert!(!dir.join(gone).exists(), "{gone}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn swap_exchanges_two_folders() {
+        let dir = std::env::temp_dir().join(format!("oc-slim-s-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("a")).unwrap();
+        fs::create_dir_all(dir.join("b")).unwrap();
+        fs::write(dir.join("a/1"), b"").unwrap();
+        swap(&dir.join("a"), &dir.join("b")).unwrap();
+        assert!(dir.join("b/1").exists() && !dir.join("a/1").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 /// Builds a real universal app, signs it ad hoc and slims it. Uses the real Trash for the
@@ -485,7 +629,7 @@ mod real {
         let before = read_fat(&macos.join("OCSlimTest")).unwrap().unwrap();
         assert!(before.other_bytes > 0);
 
-        slim_app(&app).unwrap();
+        let (_, trashed) = slim_app(&app).unwrap();
 
         let exe = fs::read(macos.join("OCSlimTest")).unwrap();
         assert_eq!(&exe[..4], &[0xCF, 0xFA, 0xED, 0xFE], "thin arm64 Mach-O");
@@ -497,25 +641,17 @@ mod real {
                 .success(),
             "still runs"
         );
+        assert!(!dir.join(".OCSlimTest.app.oc-work").exists());
+        // the original went to the Trash under its own name: take it back out
+        let trashed = trashed.expect("the original is in the Trash");
         assert!(
-            !dir.join(".OCSlimTest.app.oc-slim").exists()
-                && !dir.join(".OCSlimTest.app.oc-original").exists()
+            trashed
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("OCSlimTest")
         );
-        // the original went to the Trash: take it back out
-        let trash = Path::new(&std::env::var("HOME").unwrap()).join(".Trash");
-        let trashed: Vec<_> = fs::read_dir(&trash)
-            .unwrap()
-            .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with(".OCSlimTest.app.oc-original")
-            })
-            .collect();
-        assert_eq!(trashed.len(), 1, "the original is in the Trash");
-        for t in trashed {
-            fs::remove_dir_all(t.path()).unwrap();
-        }
+        fs::remove_dir_all(trashed).unwrap();
         fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -29,8 +29,13 @@ pub struct Item {
 
 #[derive(Debug, Default, Serialize)]
 pub struct Listing {
-    /// "running", "stopped" (the CLI is there, the daemon does not answer) or "missing"
+    /// "running", "stopped" (the CLI is there, the daemon does not answer), "remote" (the
+    /// current context is not a daemon on this Mac: nothing offered) or "missing"
     pub docker: &'static str,
+    /// The Docker context the commands go to ("default", "orbstack", "DOCKER_HOST"…)
+    pub docker_context: String,
+    /// Why some Docker items are not offered (empty when all are)
+    pub docker_note: String,
     /// Xcode's simulators are set up for this user
     pub simulators: bool,
     /// What ~/Library/Developer/CoreSimulator/Devices holds (the devices' data)
@@ -46,6 +51,9 @@ pub struct Outcome {
 }
 
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
+/// A cleanup command may take long (pruning many images), but a hung daemon must not
+/// freeze the app: killed after this.
+const CLEAN_TIMEOUT: Duration = Duration::from_secs(600);
 const XCRUN: &str = "/usr/bin/xcrun";
 
 pub fn list(ctx: &Context) -> Listing {
@@ -54,12 +62,34 @@ pub fn list(ctx: &Context) -> Listing {
         ..Default::default()
     };
     if let Some(docker) = docker_cli(ctx) {
-        match output(&docker, &["system", "df", "--format", "{{json .}}"]) {
-            Some(text) => {
-                out.docker = "running";
-                out.items.extend(docker_items(&text));
+        let (context, endpoint) = docker_endpoint(&docker);
+        out.docker_context = context;
+        if !endpoint
+            .as_deref()
+            .is_some_and(|e| local_endpoint(e, &ctx.home))
+        {
+            // a remote (or unknown) daemon: its space is not this Mac's, never cleaned here
+            out.docker = "remote";
+            out.docker_note = format!(
+                "Docker points to {}, not a daemon on this computer: nothing is cleaned there.",
+                endpoint.as_deref().unwrap_or("an unknown daemon")
+            );
+        } else {
+            match output(&docker, &["system", "df", "--format", "{{json .}}"]) {
+                Some(text) => {
+                    out.docker = "running";
+                    out.items.extend(docker_items(&text));
+                    let api = output(&docker, &["version", "--format", "{{.Server.APIVersion}}"]);
+                    if !api.as_deref().is_some_and(keeps_named_volumes) {
+                        // older engines' `volume prune` also deletes named volumes
+                        out.items.retain(|i| i.id != "docker.volumes");
+                        out.docker_note =
+                            "Unused volumes are not offered: it needs Docker Engine 23 or newer."
+                                .into();
+                    }
+                }
+                None => out.docker = "stopped",
             }
-            None => out.docker = "stopped",
         }
     }
     // without this folder, xcrun could offer to install the developer tools instead
@@ -104,20 +134,13 @@ pub fn clean(ctx: &Context, ids: &[String]) -> Outcome {
         let Some((program, args)) = command(id, docker.as_deref()) else {
             continue;
         };
-        match Command::new(&program)
-            .args(&args)
-            .env("PATH", search_path(&program))
-            .stdin(Stdio::null())
-            .output()
-        {
-            Ok(o) if o.status.success() => {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        match run(&program, &args, CLEAN_TIMEOUT) {
+            Ok((true, _, _)) => {
                 out.ran.push(id.clone());
                 done.push(id);
             }
-            Ok(o) => out.failures.push(format!(
-                "{id}: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            )),
+            Ok((false, _, stderr)) => out.failures.push(format!("{id}: {}", stderr.trim())),
             Err(e) => out.failures.push(format!("{id}: {e}")),
         }
     }
@@ -196,36 +219,111 @@ fn search_path(program: &Path) -> std::ffi::OsString {
 /// Standard output of a read-only command that succeeded within `LIST_TIMEOUT` (a hung
 /// Docker daemon must not hang the page).
 fn output(program: &Path, args: &[&str]) -> Option<String> {
+    match run(program, args, LIST_TIMEOUT) {
+        Ok((true, text, _)) => Some(text),
+        _ => None,
+    }
+}
+
+/// Runs a command, killed after `timeout`: (succeeded, stdout, stderr).
+fn run(
+    program: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> std::io::Result<(bool, String, String)> {
     let mut child = Command::new(program)
         .args(args)
         .env("PATH", search_path(program))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = stdout.read_to_string(&mut s);
-        s
-    });
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut s);
+            }
+            s
+        })
+    };
+    let stdout = read(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = read(child.stderr.take().map(|p| Box::new(p) as _));
     let start = Instant::now();
     let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < LIST_TIMEOUT => {
-                std::thread::sleep(Duration::from_millis(50))
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("did not finish within {} s; stopped", timeout.as_secs()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
     };
-    let text = reader.join().ok()?;
-    status.success().then_some(text)
+    let out = stdout.join().unwrap_or_default();
+    let err = stderr.join().unwrap_or_default();
+    Ok((status.success(), out, err))
+}
+
+/// The current Docker context's name and daemon address: DOCKER_HOST when set, else
+/// `docker context inspect` (the current context).
+fn docker_endpoint(docker: &Path) -> (String, Option<String>) {
+    if let Some(host) = std::env::var("DOCKER_HOST").ok().filter(|h| !h.is_empty()) {
+        return ("DOCKER_HOST".into(), Some(host));
+    }
+    let text = output(
+        docker,
+        &[
+            "context",
+            "inspect",
+            "--format",
+            "{{.Name}} {{.Endpoints.docker.Host}}",
+        ],
+    )
+    .unwrap_or_default();
+    let mut parts = text.trim().splitn(2, ' ');
+    let name = parts.next().unwrap_or("").to_string();
+    let host = parts.next().map(str::trim).filter(|h| !h.is_empty());
+    (name, host.map(String::from))
+}
+
+/// A daemon on this computer: a Unix socket in the user's home (Docker Desktop, OrbStack,
+/// Colima, Rancher) or the system's run folder, or Docker Desktop's named pipe on Windows.
+/// tcp:// and ssh:// (and anything else) may be another machine.
+pub fn local_endpoint(endpoint: &str, home: &Path) -> bool {
+    if let Some(pipe) = endpoint.strip_prefix("npipe://") {
+        return pipe.replace('\\', "/").starts_with("//./pipe/");
+    }
+    let Some(socket) = endpoint.strip_prefix("unix://") else {
+        return false;
+    };
+    let socket = Path::new(socket);
+    // a plain path: no ".." to climb out of the allowed folders
+    if !socket.is_absolute()
+        || socket
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+    socket.starts_with(home)
+        || ["/var/run", "/private/var/run", "/run"]
+            .iter()
+            .any(|d| socket.starts_with(d))
+}
+
+/// `docker version --format '{{.Server.APIVersion}}'` ("1.47"): API 1.42 (Engine 23) and
+/// newer prune only anonymous volumes; older ones also delete named volumes.
+pub fn keeps_named_volumes(api: &str) -> bool {
+    let mut parts = api.trim().split('.').map(|p| p.parse::<u32>());
+    match (parts.next(), parts.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= (1, 42),
+        _ => false,
+    }
 }
 
 /// `docker system df --format '{{json .}}'`: one object per line, sizes in Docker's
@@ -438,6 +536,58 @@ WARNING: something unrelated"#;
         assert_eq!(items[0].detail, "iOS 26.5 (23F77)");
         assert_eq!(items[0].bytes, 8_494_282_293);
         assert!(!items[0].default);
+    }
+
+    #[test]
+    fn volume_prune_needs_api_1_42() {
+        assert!(keeps_named_volumes("1.47\n"));
+        assert!(keeps_named_volumes("1.42"));
+        assert!(keeps_named_volumes("2.0"));
+        assert!(!keeps_named_volumes("1.41"));
+        assert!(!keeps_named_volumes("1.9"));
+        assert!(!keeps_named_volumes(""));
+        assert!(!keeps_named_volumes("garbage"));
+    }
+
+    #[test]
+    fn only_local_daemons() {
+        let home = Path::new("/Users/me");
+        assert!(local_endpoint("unix:///var/run/docker.sock", home));
+        assert!(local_endpoint(
+            "unix:///Users/me/.docker/run/docker.sock",
+            home
+        ));
+        assert!(local_endpoint(
+            "unix:///Users/me/.orbstack/run/docker.sock",
+            home
+        ));
+        assert!(local_endpoint(
+            "unix:///Users/me/.colima/default/docker.sock",
+            home
+        ));
+        assert!(local_endpoint("npipe:////./pipe/docker_engine", home));
+        assert!(!local_endpoint("tcp://10.0.0.5:2376", home));
+        assert!(!local_endpoint("ssh://me@build-box", home));
+        assert!(!local_endpoint("unix:///tmp/forwarded.sock", home));
+        assert!(!local_endpoint(
+            "unix:///Users/me/../other/docker.sock",
+            home
+        ));
+        assert!(!local_endpoint("unix://relative.sock", home));
+        assert!(!local_endpoint("", home));
+    }
+
+    #[test]
+    fn a_hung_command_is_stopped() {
+        if cfg!(windows) {
+            return;
+        }
+        let started = Instant::now();
+        let r = run(Path::new("/bin/sleep"), &["5"], Duration::from_millis(200));
+        assert!(r.is_err_and(|e| e.kind() == std::io::ErrorKind::TimedOut));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let (ok, out, _) = run(Path::new("/bin/echo"), &["hi"], LIST_TIMEOUT).unwrap();
+        assert!(ok && out.trim() == "hi");
     }
 
     #[test]

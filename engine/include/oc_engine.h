@@ -16,8 +16,9 @@ void oc_engine_free(OcEngine *engine);
 // Quick request, answered at once. Free the result with oc_free.
 char *oc_call(OcEngine *engine, const char *request_json);
 
-// Long request as a job on its own thread. Returns the job id for oc_cancel.
-// ctx must stay valid until the "done" event.
+// Long request as a job on its own thread. Returns the job id for oc_cancel (0 when
+// engine is NULL). engine and ctx must stay valid until the "done" event; the engine is
+// not used after it, so it may be freed then.
 uint64_t oc_start(OcEngine *engine, const char *request_json, OcEventFn callback, void *ctx);
 void oc_cancel(OcEngine *engine, uint64_t job);
 

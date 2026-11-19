@@ -18,6 +18,27 @@ pub mod walk;
 #[cfg(windows)]
 mod win;
 
+/// A temporary file name in `dir`, unique across processes (pid) and across jobs of this
+/// process (a counter), so two writers never share one.
+pub fn tmp_path(dir: &Path, stem: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dir.join(format!(".{stem}-{}-{n}.tmp", std::process::id()))
+}
+
+/// Writes `path` through a temporary file and a rename: a reader sees the old content or
+/// the new, never part of it.
+pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let stem = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = tmp_path(dir, &stem);
+    std::fs::write(&tmp, bytes)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+}
+
 /// How much to ask the system for each entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Detail {

@@ -54,8 +54,9 @@ pub fn check_user_file(ctx: &Context, path: &Path, dir: &Path) -> Result<(), Ref
     Ok(())
 }
 
-/// Writes the history lines of an item turned off (`trashed`: where its file went).
-fn record(ctx: &Context, item: &Item, trashed: Option<PathBuf>) {
+/// Writes the history lines of an item turned off (`trashed`: where its file went;
+/// `reg_type`: a Run value's registry type).
+fn record(ctx: &Context, item: &Item, trashed: Option<PathBuf>, reg_type: Option<u32>) {
     let mut ledger = ledger::Writer::open(ctx);
     let now = ledger::now();
     ledger.write(&Line::Startup {
@@ -64,6 +65,7 @@ fn record(ctx: &Context, item: &Item, trashed: Option<PathBuf>) {
         label: item.label.clone(),
         program: item.program.clone(),
         trashed,
+        reg_type,
     });
     ledger.write(&Line::Session {
         id: now,
@@ -105,6 +107,36 @@ fn records(ctx: &Context) -> Vec<(Item, Option<PathBuf>)> {
         }
     }
     out
+}
+
+/// The registry type to write a Run value back with: the one recorded when it was turned
+/// off (REG_SZ 1 or REG_EXPAND_SZ 2); for older records, expandable if it holds a %VAR%.
+#[cfg(any(windows, test))]
+fn restore_type(recorded: Option<u32>, program: &str) -> u32 {
+    const REG_SZ: u32 = 1;
+    const REG_EXPAND_SZ: u32 = 2;
+    match recorded {
+        Some(t @ (REG_SZ | REG_EXPAND_SZ)) => t,
+        _ if program.contains('%') => REG_EXPAND_SZ,
+        _ => REG_SZ,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn run_values_come_back_with_their_type() {
+        use super::restore_type;
+        assert_eq!(
+            restore_type(Some(1), "%TEMP%\\x.exe"),
+            1,
+            "recorded: kept as it was"
+        );
+        assert_eq!(restore_type(Some(2), "C:\\x.exe"), 2);
+        assert_eq!(restore_type(None, "%TEMP%\\x.exe"), 2, "old line: guessed");
+        assert_eq!(restore_type(None, "C:\\x.exe"), 1);
+        assert_eq!(restore_type(Some(7), "C:\\x.exe"), 1, "never another type");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -198,7 +230,7 @@ mod mac {
             .arg(path)
             .output();
         let trashed = crate::trash::move_to_trash(path).map_err(|e| e.to_string())?;
-        record(ctx, &item, trashed);
+        record(ctx, &item, trashed, None);
         Ok(())
     }
 
@@ -321,12 +353,11 @@ pub use win::{disable, enable, list, turned_off};
 #[cfg(windows)]
 mod win {
     use super::*;
-    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
-        REG_EXPAND_SZ, REG_SZ, RRF_NOEXPAND, RRF_RT_REG_BINARY, RRF_RT_REG_EXPAND_SZ,
-        RRF_RT_REG_SZ, RegCloseKey, RegDeleteKeyValueW, RegEnumValueW, RegGetValueW, RegOpenKeyExW,
-        RegSetKeyValueW,
+        RRF_NOEXPAND, RRF_RT_REG_BINARY, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey,
+        RegDeleteKeyValueW, RegEnumValueW, RegGetValueW, RegOpenKeyExW, RegSetKeyValueW,
     };
 
     /// The user's Run values OpenCleaner removed that are still gone. Newest first.
@@ -356,12 +387,20 @@ mod win {
         if value(HKEY_CURRENT_USER, RUN, label).is_some() {
             return Err("something else is there now".into());
         }
-        // read without expanding: a command with %VARS% was an expandable string
-        let kind = if item.program.contains('%') {
-            REG_EXPAND_SZ
-        } else {
-            REG_SZ
-        };
+        // the type it had (the latest record of it), read without expanding
+        let recorded = ledger::lines(ctx)
+            .filter_map(|l| match l {
+                Line::Startup {
+                    path: p,
+                    label: l,
+                    reg_type,
+                    ..
+                } if p == path && l == label => Some(reg_type),
+                _ => None,
+            })
+            .last()
+            .flatten();
+        let kind = restore_type(recorded, &item.program);
         let (sub, name, data) = (wide(RUN), wide(label), wide(&item.program));
         let rc = unsafe {
             RegSetKeyValueW(
@@ -398,25 +437,54 @@ mod win {
 
     /// A Run value's command as stored (environment variables not expanded).
     fn value(key: HKEY, sub: &str, name: &str) -> Option<String> {
+        value_typed(key, sub, name).map(|(v, _)| v)
+    }
+
+    /// A Run value's command and registry type (REG_SZ or REG_EXPAND_SZ), whatever its length.
+    fn value_typed(key: HKEY, sub: &str, name: &str) -> Option<(String, u32)> {
         let (sub, name) = (wide(sub), wide(name));
-        let mut buf = vec![0u16; 4096];
-        let mut bytes = (buf.len() * 2) as u32;
-        let rc = unsafe {
-            RegGetValueW(
-                key,
-                sub.as_ptr(),
-                name.as_ptr(),
-                RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
-                std::ptr::null_mut(),
-                buf.as_mut_ptr().cast(),
-                &mut bytes,
-            )
-        };
-        if rc != ERROR_SUCCESS {
-            return None;
+        let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+        // ask the size first; retry if the value grew in between
+        for _ in 0..4 {
+            let mut bytes = 0u32;
+            let rc = unsafe {
+                RegGetValueW(
+                    key,
+                    sub.as_ptr(),
+                    name.as_ptr(),
+                    flags,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut bytes,
+                )
+            };
+            if rc != ERROR_SUCCESS {
+                return None;
+            }
+            let mut buf = vec![0u16; (bytes as usize).div_ceil(2) + 1];
+            let mut bytes = (buf.len() * 2) as u32;
+            let mut kind = 0u32;
+            let rc = unsafe {
+                RegGetValueW(
+                    key,
+                    sub.as_ptr(),
+                    name.as_ptr(),
+                    flags,
+                    &mut kind,
+                    buf.as_mut_ptr().cast(),
+                    &mut bytes,
+                )
+            };
+            if rc == ERROR_MORE_DATA {
+                continue;
+            }
+            if rc != ERROR_SUCCESS {
+                return None;
+            }
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            return Some((String::from_utf16_lossy(&buf[..end]), kind));
         }
-        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        Some(String::from_utf16_lossy(&buf[..end]))
+        None
     }
 
     /// Task Manager's on/off switch: an odd first byte under StartupApproved means off.
@@ -544,7 +612,8 @@ mod win {
     /// a shortcut in the user's Startup folder to the Recycle Bin.
     pub fn disable(ctx: &Context, path: &Path, label: &str) -> Result<(), String> {
         if path == Path::new(HKCU_RUN) {
-            let program = value(HKEY_CURRENT_USER, RUN, label).ok_or("no such startup item")?;
+            let (program, kind) =
+                value_typed(HKEY_CURRENT_USER, RUN, label).ok_or("no such startup item")?;
             let (sub, name) = (wide(RUN), wide(label));
             let rc = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, sub.as_ptr(), name.as_ptr()) };
             if rc != ERROR_SUCCESS {
@@ -561,6 +630,7 @@ mod win {
                     enabled: true,
                 },
                 None,
+                Some(kind),
             );
             return Ok(());
         }
@@ -578,6 +648,7 @@ mod win {
                 scope: "user",
                 enabled: true,
             },
+            None,
             None,
         );
         Ok(())

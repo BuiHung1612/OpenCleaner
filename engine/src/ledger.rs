@@ -53,6 +53,10 @@ pub enum Line {
         /// Where the plist went in the Trash (absent in older lines and for Run values).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trashed: Option<PathBuf>,
+        /// A Run value's registry type (REG_SZ 1, REG_EXPAND_SZ 2), restored as it was
+        /// (absent in older lines and for files).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reg_type: Option<u32>,
     },
 }
 

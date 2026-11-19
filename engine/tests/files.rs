@@ -203,3 +203,15 @@ fn a_forged_hash_cache_never_makes_a_different_file_a_duplicate() {
     // the byte-for-byte comparison still keeps other.zip out
     assert_eq!(names, ["a.zip", "copy of a.zip"]);
 }
+
+#[test]
+fn huge_limits_saturate_instead_of_overflowing() {
+    let (_t, ctx) = home();
+    write(&ctx.home.join("Movies/old.mov"), 2 * MIB);
+    age(&ctx.home.join("Movies/old.mov"), 400);
+    let no = AtomicBool::new(false);
+    assert!(files::large_old(&ctx, u64::MAX, 1, &no).is_empty());
+    assert!(files::large_old(&ctx, 1, i64::MAX, &no).is_empty());
+    assert_eq!(files::large_old(&ctx, 1, i64::MIN, &no).len(), 1);
+    assert!(files::duplicates(&ctx, u64::MAX, &no).is_empty());
+}
