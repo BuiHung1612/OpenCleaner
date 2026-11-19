@@ -240,14 +240,14 @@ struct JunkPage: View {
                                     if group.id.string == "privacy" {
                                         Art(id: "privacy", symbol: "hand.raised", size: 26).accessibilityHidden(true)
                                     }
-                                    Text(tr(group.title.string ?? "")).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
+                                    Text(tr(group.title.string ?? "")).font(.app(13, weight: .semibold)).foregroundStyle(.dim)
                                 }
                                 .padding(.leading, 12)
                                 .accessibilityAddTraits(.isHeader)
                                 ForEach(rules, id: \.id.string) { rule in ruleRow(rule) }
                                 if group.id.string == "privacy" {
                                     Text("Safari is not listed: macOS protects its history and cookies.")
-                                        .font(.system(size: 12)).foregroundStyle(.dim).padding(.leading, 12)
+                                        .font(.app(12)).foregroundStyle(.dim).padding(.leading, 12)
                                 }
                             }
                         }
@@ -296,19 +296,19 @@ struct JunkPage: View {
         return VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: partial ? "minus.circle.fill" : on && ready ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 17))
+                    .font(.app(17))
                     .opacity(ready ? 1 : 0.35)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(tr(rule.title.string ?? id)).font(.system(size: 14, weight: .medium))
+                    Text(tr(rule.title.string ?? id)).font(.app(14, weight: .medium))
                     if let app = rule.in_use_by.string, rule.status.string == "in_use" {
-                        Text("Skipped while \(app) is open").font(.system(size: 12)).foregroundStyle(Color.warn)
+                        Text("Skipped while \(app) is open").font(.app(12)).foregroundStyle(Color.warn)
                     } else if let note = rule.note.string, !note.isEmpty {
-                        Text(tr(note)).font(.system(size: 12)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
+                        Text(tr(note)).font(.app(12)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer()
                 if rule.status.string != "in_use" {
-                    Text(verbatim: bytes(rule.bytes.double ?? 0)).font(.system(size: 14)).monospacedDigit()
+                    Text(verbatim: bytes(rule.bytes.double ?? 0)).font(.app(14)).monospacedDigit()
                 }
                 if ready && !items.isEmpty {
                     Button {
@@ -346,12 +346,12 @@ struct JunkPage: View {
         let url = URL(fileURLWithPath: item.path)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: partial ? "minus.circle.fill" : on ? "checkmark.circle.fill" : "circle").font(.system(size: 14))
+                Image(systemName: partial ? "minus.circle.fill" : on ? "checkmark.circle.fill" : "circle").font(.app(14))
                 Text(verbatim: url.deletingLastPathComponent().lastPathComponent + "/" + url.lastPathComponent)
-                    .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                    .font(.app(12)).lineLimit(1).truncationMode(.middle)
                     .help(item.path)
                 Spacer()
-                Text(verbatim: bytes(model.parts.bytes(item.path, whole: item.bytes))).font(.system(size: 12)).monospacedDigit().foregroundStyle(.dim)
+                Text(verbatim: bytes(model.parts.bytes(item.path, whole: item.bytes))).font(.app(12)).monospacedDigit().foregroundStyle(.dim)
                 if Parts.canOpen(item.path) {
                     OpenButton(open: open) { model.toggleOpen(item.path) }
                 } else {
@@ -384,7 +384,7 @@ struct JunkPage: View {
                         Text("\(Int(o.failed.double ?? 0)) items could not be removed").foregroundStyle(Color.warn)
                     }
                 }
-                .font(.system(size: 15, weight: .medium))
+                .font(.app(15, weight: .medium))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(18)
                 .glassPanel()
@@ -414,7 +414,7 @@ struct JunkPage: View {
             if model.phase == .scanning {
                 Button(String(localized: "Stop")) { model.stop() }.buttonStyle(.pill).keyboardShortcut(.cancelAction)
             } else if model.phase == .review {
-                Text(verbatim: bytes(model.selectedBytes)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                Text(verbatim: bytes(model.selectedBytes)).font(.app(17, weight: .semibold)).monospacedDigit()
             }
         }
     }
@@ -438,7 +438,7 @@ struct RemovalProgress: View {
                 Spacer()
                 Text("\(Int(done)) of \(Int(total)) · \(bytes(p.bytes.double ?? 0)) freed").monospacedDigit()
             }
-            .font(.system(size: 12)).foregroundStyle(.dim)
+            .font(.app(12)).foregroundStyle(.dim)
         }
     }
 }

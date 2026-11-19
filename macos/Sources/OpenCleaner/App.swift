@@ -8,7 +8,6 @@ import SwiftUI
 @main
 struct OpenCleanerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @AppStorage(Automation.menuBarKey) private var menuBar = true
     init() {
         // needed when launched as a bare executable (`swift run`); a no-op inside the .app
         NSApplication.shared.setActivationPolicy(.regular)
@@ -32,9 +31,6 @@ struct OpenCleanerApp: App {
         Settings {
             SettingsView()
         }
-
-        MenuBarExtra(isInserted: $menuBar) { MenuBarView() } label: { MenuBarLabel() }
-            .menuBarExtraStyle(.window)
     }
 }
 
@@ -132,7 +128,7 @@ struct MainView: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-                .frame(width: 236)
+                .frame(width: 236 * max(1, TextScale.shared.value))  // room for larger text
                 .padding(.leading, 14).padding(.top, 44).padding(.bottom, 14)
             page
                 .id(module)
@@ -140,6 +136,7 @@ struct MainView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 980, minHeight: 640)
+        .font(TextScale.shared.value == 1 ? nil : .app(13))  // text without its own size; nil keeps Default untouched
         .background(Backdrop(colors: module.palette))
         // light glass reads like frosted glass on the gradient; text is forced white on top
         .preferredColorScheme(.light)
@@ -159,7 +156,7 @@ struct MainView: View {
                     ForEach(Module.sections, id: \.group) { section in
                         let header = section.group.trimmingCharacters(in: .whitespaces)
                         if !header.isEmpty {
-                            Text(tr(header)).font(.system(size: 12)).foregroundStyle(.dim)
+                            Text(tr(header)).font(.app(12)).foregroundStyle(.dim)
                                 .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 2)
                         } else if section.group == " " {
                             Spacer().frame(height: 12)
@@ -171,7 +168,7 @@ struct MainView: View {
             }
             .brightScroller()
             HStack {
-                Text("Engine \(version ?? "—")").font(.system(size: 12)).foregroundStyle(.dim)
+                Text("Engine \(version ?? "—")").font(.app(12)).foregroundStyle(.dim)
                 Spacer()
                 SettingsLink { Label(String(localized: "Settings"), systemImage: "gearshape").labelStyle(.iconOnly) }
                     .buttonStyle(.borderless)
@@ -191,7 +188,7 @@ struct MainView: View {
                 Spacer(minLength: 4)
                 if m == .spaceLens { UsedBadge(lens: lens) }
             }
-            .font(.system(size: 14))
+            .font(.app(14))
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(module == m ? 0.18 : 0)))
             .contentShape(Rectangle())
@@ -207,7 +204,7 @@ struct MainView: View {
         let lens: SpaceLensModel
         var body: some View {
             if let v = lens.volumes.first(where: \.isStartup) {
-                Text(verbatim: shortBytes(v.used)).font(.system(size: 12)).foregroundStyle(.dim).fixedSize()
+                Text(verbatim: shortBytes(v.used)).font(.app(12)).foregroundStyle(.dim).fixedSize()
                     .help(String(localized: "Used on the startup disk"))
             }
         }
@@ -273,6 +270,27 @@ extension Array where Element == Color {
     }
 }
 
+/// Settings › General › Text size. macOS has no Dynamic Type for apps, so every font goes
+/// through `Font.app`, which reads this; a body that reads it redraws when it changes.
+@MainActor @Observable final class TextScale {
+    static let shared = TextScale()
+    static let key = "textScale"
+    static let choices: [(scale: Double, name: LocalizedStringResource)] = [
+        (0.9, "Small"), (1, "Default"), (1.15, "Large"), (1.3, "Extra Large"),
+    ]
+
+    var value = UserDefaults.standard.object(forKey: key) as? Double ?? 1 {
+        didSet { UserDefaults.standard.set(value, forKey: Self.key) }
+    }
+}
+
+extension Font {
+    /// The system font at `size` points (as designed at Default) times the chosen text size.
+    @MainActor static func app(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .system(size: size * TextScale.shared.value, weight: weight)
+    }
+}
+
 extension ShapeStyle where Self == Color {
     /// Secondary text on the gradient. `.secondary` is 50% white, too faint on the lighter glass.
     /// Only on the gradient: on a light system surface (Settings) use `.secondary`.
@@ -332,7 +350,7 @@ struct Art: View {
             Image(nsImage: image).resizable().scaledToFit().frame(width: size, height: size)
         } else {
             Image(systemName: symbol)
-                .font(.system(size: size * 0.34, weight: .light))
+                .font(.app(size * 0.34, weight: .light))
                 .symbolRenderingMode(.hierarchical)
                 .frame(width: size * 0.72, height: size * 0.72)
                 .glassEffect(.clear.tint(.white.opacity(0.06)), in: .circle)
@@ -382,7 +400,7 @@ struct BigButton: View {
                 if busy {
                     ProgressView().controlSize(.large).brightScroller()
                 } else {
-                    Text(title).font(.system(size: 17, weight: .semibold))
+                    Text(title).font(.app(17, weight: .semibold))
                         .multilineTextAlignment(.center).minimumScaleFactor(0.7).padding(12)
                 }
             }
@@ -402,7 +420,7 @@ struct BigButton: View {
 struct PillStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold))
+            .font(.app(14, weight: .semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, 20)
             .frame(minWidth: 40, minHeight: 40)
@@ -452,9 +470,9 @@ struct PageHeader<Accessory: View>: View {
         HStack(spacing: 16) {
             Art(id: art, symbol: symbol, size: 72)
             VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: title).font(.system(size: 28, weight: .bold)).lineLimit(1)
+                Text(verbatim: title).font(.app(28, weight: .bold)).lineLimit(1)
                 if !status.isEmpty {
-                    Text(verbatim: status).font(.system(size: 15)).foregroundStyle(.dim).lineLimit(2)
+                    Text(verbatim: status).font(.app(15)).foregroundStyle(.dim).lineLimit(2)
                 }
             }
             .layoutPriority(1)
@@ -480,9 +498,9 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 8) {
             Art(id: "empty", symbol: symbol, size: 110).accessibilityHidden(true)
-            Text(verbatim: title).font(.system(size: 15, weight: .semibold))
+            Text(verbatim: title).font(.app(15, weight: .semibold))
             if !message.isEmpty {
-                Text(verbatim: message).font(.system(size: 13)).foregroundStyle(.dim).multilineTextAlignment(.center)
+                Text(verbatim: message).font(.app(13)).foregroundStyle(.dim).multilineTextAlignment(.center)
             }
         }
         .frame(maxWidth: .infinity)
@@ -507,7 +525,7 @@ struct LoadingState: View {
                     } animation: { _ in .easeInOut(duration: 1.2) }
             }
             ProgressView().controlSize(.regular).brightScroller()
-            Text(verbatim: text).font(.system(size: 14)).foregroundStyle(.dim)
+            Text(verbatim: text).font(.app(14)).foregroundStyle(.dim)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
@@ -522,7 +540,7 @@ struct ErrorBanner: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.warn)
-            Text(verbatim: message).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: message).font(.app(13)).fixedSize(horizontal: false, vertical: true)
             Spacer()
             if let retry { Button(String(localized: "Try Again"), action: retry).buttonStyle(.pill) }
         }
@@ -536,7 +554,7 @@ struct TrashNote: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "arrow.uturn.backward.circle")
-            Text("You can put them back from the Trash.").font(.system(size: 13))
+            Text("You can put them back from the Trash.").font(.app(13))
             Spacer()
             Button(String(localized: "Open Trash"), action: openTrash).buttonStyle(.pill)
         }
@@ -557,10 +575,10 @@ struct Intro: View {
     var body: some View {
         HStack(spacing: 48) {
             VStack(alignment: .leading, spacing: 14) {
-                Text(module.title).font(.system(size: 34, weight: .bold))
-                Text(subtitle).font(.system(size: 15)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
+                Text(module.title).font(.app(34, weight: .bold))
+                Text(subtitle).font(.app(15)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
                 ForEach(points, id: \.self) { p in
-                    Label(p, systemImage: "checkmark.circle.fill").font(.system(size: 14))
+                    Label(p, systemImage: "checkmark.circle.fill").font(.app(14))
                 }
             }
             .frame(maxWidth: 360, alignment: .leading)
@@ -607,7 +625,7 @@ struct RefreshBanner: View {
                 Text(verbatim: String(localized: "Showing the result from \(Self.age(date)). Updating…"))
             }
         }
-        .font(.system(size: 12))
+        .font(.app(12))
         .foregroundStyle(.dim)
         .lineLimit(1)
         .padding(.horizontal, 14).padding(.vertical, 6)

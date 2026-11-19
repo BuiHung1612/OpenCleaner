@@ -72,7 +72,8 @@ static LAST: Mutex<Option<Sample>> = Mutex::new(None);
 
 pub fn read() -> Status {
     let mut last = LAST.lock().unwrap();
-    if last.is_none() {
+    let first = last.is_none();
+    if first {
         *last = Some(sample());
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -104,6 +105,12 @@ pub fn read() -> Status {
             }
         })
         .collect();
+    // The first reading spans only those 250 ms, which in the app is its own launch: it would
+    // show OpenCleaner busy (~25 %) until the next reading. Later readings span the time
+    // since the previous one and list the app like any other process.
+    if first {
+        procs.retain(|p| p.pid != std::process::id() as i32);
+    }
     procs.sort_by(|a, b| {
         b.cpu
             .total_cmp(&a.cpu)

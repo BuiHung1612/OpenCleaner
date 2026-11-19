@@ -59,14 +59,14 @@ struct DevToolsPage: View {
                         if l.docker.string != "missing" {
                             section(String(localized: "Docker"))
                             if l.docker.string == "stopped" {
-                                Text("Docker is not running").font(.system(size: 13)).foregroundStyle(.dim).padding(.horizontal, 12)
+                                Text("Docker is not running").font(.app(13)).foregroundStyle(.dim).padding(.horizontal, 12)
                             }
                             ForEach(group("docker"), id: \.id.string) { row($0) }
                         }
                         if l.simulators.bool {
                             section(String(localized: "iOS Simulators"))
                             Text("Simulators use \(bytes(l.devices_bytes.double)) in ~/Library/Developer/CoreSimulator/Devices")
-                                .font(.system(size: 13)).foregroundStyle(.dim).padding(.horizontal, 12)
+                                .font(.app(13)).foregroundStyle(.dim).padding(.horizontal, 12)
                             ForEach(group("simulators"), id: \.id.string) { row($0) }
                         }
                     }
@@ -105,7 +105,7 @@ struct DevToolsPage: View {
     private func group(_ name: String) -> [JSON] { model.items.filter { $0.group.string == name } }
 
     private func section(_ title: String) -> some View {
-        Text(verbatim: title).font(.system(size: 15, weight: .semibold)).padding(.horizontal, 12).padding(.top, 8)
+        Text(verbatim: title).font(.app(15, weight: .semibold)).padding(.horizontal, 12).padding(.top, 8)
     }
 
     private func row(_ item: JSON) -> some View {
@@ -113,11 +113,11 @@ struct DevToolsPage: View {
         let on = model.selected.contains(id)
         let detail = item.detail.string ?? ""
         return HStack(alignment: .top, spacing: 12) {
-            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
+            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.app(17))
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: tr(item.title.string ?? id) + (detail.isEmpty ? "" : " · \(detail)"))
-                    .font(.system(size: 14, weight: .medium))
-                Text(tr(item.note.string ?? "")).font(.system(size: 12)).foregroundStyle(.dim)
+                    .font(.app(14, weight: .medium))
+                Text(tr(item.note.string ?? "")).font(.app(12)).foregroundStyle(.dim)
             }
             Spacer()
             Text(verbatim: bytes(item.bytes.double)).monospacedDigit()

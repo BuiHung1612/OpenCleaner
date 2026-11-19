@@ -82,19 +82,19 @@ struct OptimizePage: View {
         let id = task.id.string ?? ""
         let on = selected.contains(id)
         return HStack(alignment: .top, spacing: 12) {
-            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
+            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.app(17))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(tr(task.title.string ?? id)).font(.system(size: 14, weight: .medium))
+                    Text(tr(task.title.string ?? id)).font(.app(14, weight: .medium))
                     if task.admin.bool {
-                        Image(systemName: "lock.fill").font(.system(size: 11)).foregroundStyle(.dim)
+                        Image(systemName: "lock.fill").font(.app(11)).foregroundStyle(.dim)
                             .help(String(localized: "Asks for your password"))
                             .accessibilityLabel(String(localized: "Asks for your password"))
                     }
                 }
-                Text(tr(task.note.string ?? "")).font(.system(size: 12)).foregroundStyle(.dim)
+                Text(tr(task.note.string ?? "")).font(.app(12)).foregroundStyle(.dim)
                 if id == "memory", let memoryNote {
-                    Text(verbatim: memoryNote).font(.system(size: 12, weight: .medium)).monospacedDigit()
+                    Text(verbatim: memoryNote).font(.app(12, weight: .medium)).monospacedDigit()
                 }
             }
             Spacer()
@@ -103,7 +103,7 @@ struct OptimizePage: View {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.ok)
                         .accessibilityLabel(String(localized: "Done"))
                 } else {
-                    Text(verbatim: result).font(.system(size: 12)).foregroundStyle(Color.warn)
+                    Text(verbatim: result).font(.app(12)).foregroundStyle(Color.warn)
                 }
             }
         }
@@ -162,7 +162,7 @@ struct TouchIDPage: View {
                 .overlay(alignment: .bottom) {
                     if !statusText.isEmpty {
                         Label(statusText, systemImage: state.enabled.bool ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.app(14, weight: .medium))
                             .padding(.horizontal, 16).padding(.vertical, 8)
                             .glassPanel(radius: 18)
                     }
