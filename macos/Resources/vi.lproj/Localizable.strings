@@ -424,3 +424,8 @@
 "Needs Full Disk Access" = "Cần quyền Truy cập toàn bộ ổ đĩa";
 "Used on the startup disk" = "Dung lượng đã dùng trên ổ khởi động";
 "OpenCleaner: %@ free" = "OpenCleaner: còn trống %@";
+"Cleaning" = "Dọn dẹp";
+"Alerts" = "Cảnh báo";
+"Check Now" = "Kiểm tra ngay";
+"No excluded folders" = "Chưa loại trừ thư mục nào";
+"The new language shows after a relaunch." = "Ngôn ngữ mới sẽ hiện sau khi mở lại ứng dụng.";

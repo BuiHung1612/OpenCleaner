@@ -243,22 +243,39 @@ struct HistoryPage: View {
     }
 }
 
+/// Settings in tabs, like the system's: each tab is a short grouped form, and every
+/// explanation sits in its section's footer instead of between the controls.
 struct SettingsView: View {
-    @AppStorage("autoRefresh") private var autoRefresh = false
-    @AppStorage("refreshInterval") private var refreshInterval = 5
+    var body: some View {
+        TabView {
+            Tab(String(localized: "General"), systemImage: "gearshape") { GeneralSettings() }
+            Tab(String(localized: "Cleaning"), systemImage: "sparkles") { CleaningSettings() }
+            Tab(String(localized: "Automation"), systemImage: "calendar.badge.clock") { AutomationSettings() }
+            Tab(String(localized: "Dashboard"), systemImage: "gauge.with.dots.needle.50percent") { DashboardSettings() }
+        }
+        .frame(width: 560)
+        // the main window tints everything white for its gradients; Settings is a plain system window
+        .tint(.accentColor)
+    }
+}
+
+/// A footer note in Settings.
+struct Note: View {
+    let text: LocalizedStringKey
+    init(_ text: LocalizedStringKey) { self.text = text }
+    var body: some View { Text(text).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+}
+
+private struct GeneralSettings: View {
     @AppStorage("language") private var language = ""
     @AppStorage(Updater.autoKey) private var checkUpdates = true
-    @AppStorage(Engine.fastKey) private var fastScans = false
-    @AppStorage("refreshOnFocus") private var refreshOnFocus = false
+    @AppStorage(Automation.menuBarKey) private var menuBar = true
     @State private var languageChanged = false
-    @State private var exclusions: [String] = []
     @State private var engineVersion: String?
-    @AppStorage("largeMiB") private var largeMiB = 500
-    @AppStorage("idleDays") private var idleDays = 180
 
     var body: some View {
         Form {
-            Section(String(localized: "General")) {
+            Section {
                 Picker(String(localized: "Language"), selection: $language) {
                     Text("System").tag("")
                     Text(verbatim: "English").tag("en")
@@ -268,64 +285,99 @@ struct SettingsView: View {
                     UserDefaults.standard.set(language.isEmpty ? nil : [language], forKey: "AppleLanguages")
                     languageChanged = true
                 }
-                if languageChanged { Button(String(localized: "Relaunch"), action: relaunch) }
-            }
-            Section(String(localized: "Updates")) {
-                LabeledContent(String(localized: "Version")) { Text(verbatim: Updater.current) }
-                Toggle(String(localized: "Check for updates automatically"), isOn: $checkUpdates)
-                Button(String(localized: "Check for Updates…")) { Task { await Updater.check(manual: true) } }
-            }
-            Section(String(localized: "Dashboard")) {
-                Text("By default the dashboard reads once, the first time you open it. Press the refresh button for new numbers, so they may be minutes old.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                Toggle(String(localized: "Refresh when the app comes to the front"), isOn: $refreshOnFocus)
-                Text("On: numbers are fresh whenever you come back to the app. Cost: every switch back takes a short CPU sample and redraws the dashboard (at most once per 10 seconds), which uses a little battery.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                Toggle(String(localized: "Refresh automatically"), isOn: $autoRefresh)
-                Picker(String(localized: "Every"), selection: $refreshInterval) {
-                    ForEach([3, 5, 10, 30], id: \.self) { Text("\($0) seconds").tag($0) }
-                }
-                .disabled(!autoRefresh)
-                Text("On: live numbers while the dashboard is on screen (paused when hidden). Cost: the app keeps working in the background the whole time, which uses CPU and battery and adds a little load to what it measures.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            AutomationSettings()
-            Section(String(localized: "Excluded folders")) {
-                ForEach(exclusions, id: \.self) { path in
+                Toggle(String(localized: "Show in menu bar"), isOn: $menuBar)
+            } footer: {
+                if languageChanged {
                     HStack {
-                        Text(verbatim: (path as NSString).abbreviatingWithTildeInPath).lineLimit(1).truncationMode(.middle)
+                        Note("The new language shows after a relaunch.")
                         Spacer()
-                        Button(String(localized: "Remove")) { saveExclusions(exclusions.filter { $0 != path }) }
+                        Button(String(localized: "Relaunch"), action: relaunch)
                     }
                 }
-                Button(String(localized: "Add Folder…"), action: addExclusion)
-                Text("OpenCleaner never scans or removes anything inside these folders.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Section(String(localized: "Updates")) {
+                Toggle(String(localized: "Check for updates automatically"), isOn: $checkUpdates)
+                LabeledContent(String(localized: "Version")) {
+                    HStack(spacing: 12) {
+                        Text(verbatim: Updater.current).foregroundStyle(.secondary)
+                        Button(String(localized: "Check Now")) { Task { await Updater.check(manual: true) } }
+                    }
+                }
+                LabeledContent(String(localized: "OpenCleaner engine")) {
+                    Text(verbatim: engineVersion ?? "—").foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
+        .scrollIndicators(.hidden)  // each tab fits its window
+        .task { engineVersion = await Engine.ask(["op": "version"]).version.string }
+    }
+
+    private func relaunch() {
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+    }
+}
+
+private struct CleaningSettings: View {
+    @AppStorage(Engine.fastKey) private var fastScans = false
+    @AppStorage("largeMiB") private var largeMiB = 500
+    @AppStorage("idleDays") private var idleDays = 180
+    @State private var exclusions: [String] = []
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(String(localized: "Faster scans"), isOn: $fastScans)
+                    .onChange(of: fastScans) { Engine.setFast(fastScans) }
+            } footer: {
+                Note("Off (recommended): scans and removals give way to your other apps, so the Mac stays smooth. On: they take every CPU core to finish sooner, and other apps may lag or freeze until they are done.")
+            }
+            Section {
+                if exclusions.isEmpty {
+                    Text("No excluded folders").foregroundStyle(.secondary)
+                }
+                ForEach(exclusions, id: \.self) { path in
+                    HStack(spacing: 10) {
+                        Image(nsImage: fileIcon(path)).resizable().frame(width: 18, height: 18)
+                        Text(verbatim: (path as NSString).abbreviatingWithTildeInPath).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button { saveExclusions(exclusions.filter { $0 != path }) } label: {
+                            Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(String(localized: "Remove"))
+                        .accessibilityLabel(String(localized: "Remove"))
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Excluded folders")
+                    Spacer()
+                    Button(String(localized: "Add Folder…"), action: addExclusion).controlSize(.small)
+                }
+            } footer: {
+                Note("OpenCleaner never scans or removes anything inside these folders.")
             }
             Section(String(localized: "Large & Old Files")) {
                 Picker(String(localized: "At least"), selection: $largeMiB) {
-                    ForEach([100, 250, 500, 1000, 5000], id: \.self) { Text(verbatim: bytes(Double($0) * 1_048_576)).tag($0) }
+                    ForEach([100, 250, 500, 1000, 5000], id: \.self) { mib in
+                        Text(verbatim: mib < 1000 ? "\(mib) MB" : "\(mib / 1000) GB").tag(mib)
+                    }
                 }
                 Picker(String(localized: "Not opened for"), selection: $idleDays) {
                     ForEach([30, 90, 180, 365], id: \.self) { Text("\($0) days").tag($0) }
                 }
             }
-            Section(String(localized: "Engine")) {
-                Toggle(String(localized: "Faster scans"), isOn: $fastScans)
-                    .onChange(of: fastScans) { Engine.setFast(fastScans) }
-                Text("Off (recommended): scans and removals give way to your other apps, so the Mac stays smooth. On: they take every CPU core to finish sooner, and other apps may lag or freeze until they are done.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                LabeledContent(String(localized: "OpenCleaner engine")) {
-                    Text(verbatim: engineVersion ?? "—").font(.system(size: 11, design: .monospaced))
-                }
-            }
         }
         .formStyle(.grouped)
-        .frame(width: 520)
-        .task {
-            exclusions = await Engine.ask(["op": "exclusions"]).paths.strings
-            engineVersion = await Engine.ask(["op": "version"]).version.string
-        }
+        .fixedSize(horizontal: false, vertical: true)
+        .scrollIndicators(.hidden)  // each tab fits its window
+        .task { exclusions = await Engine.ask(["op": "exclusions"]).paths.strings }
     }
 
     private func addExclusion() {
@@ -344,13 +396,35 @@ struct SettingsView: View {
             if reply.ok.bool { exclusions = reply.paths.strings }
         }
     }
+}
 
-    private func relaunch() {
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
-            DispatchQueue.main.async { NSApp.terminate(nil) }
+private struct DashboardSettings: View {
+    @AppStorage("refreshOnFocus") private var refreshOnFocus = false
+    @AppStorage("autoRefresh") private var autoRefresh = false
+    @AppStorage("refreshInterval") private var refreshInterval = 5
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(String(localized: "Refresh when the app comes to the front"), isOn: $refreshOnFocus)
+            } header: {
+                Note("By default the dashboard reads once, the first time you open it. Press the refresh button for new numbers, so they may be minutes old.")
+            } footer: {
+                Note("On: numbers are fresh whenever you come back to the app. Cost: every switch back takes a short CPU sample and redraws the dashboard (at most once per 10 seconds), which uses a little battery.")
+            }
+            Section {
+                Toggle(String(localized: "Refresh automatically"), isOn: $autoRefresh)
+                Picker(String(localized: "Every"), selection: $refreshInterval) {
+                    ForEach([3, 5, 10, 30], id: \.self) { Text("\($0) seconds").tag($0) }
+                }
+                .disabled(!autoRefresh)
+            } footer: {
+                Note("On: live numbers while the dashboard is on screen (paused when hidden). Cost: the app keeps working in the background the whole time, which uses CPU and battery and adds a little load to what it measures.")
+            }
         }
+        .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
+        .scrollIndicators(.hidden)  // each tab fits its window
     }
 }
 

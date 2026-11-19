@@ -270,38 +270,41 @@ private struct WindowReader: NSViewRepresentable {
 struct AutomationSettings: View {
     @AppStorage(Automation.autoCleanKey) private var autoClean = false
     @AppStorage(Automation.periodKey) private var period = "weekly"
-    @AppStorage(Automation.menuBarKey) private var menuBar = true
     @AppStorage(Automation.lowDiskKey) private var lowDisk = true
     @AppStorage(Automation.lowDiskGBKey) private var lowDiskGB = 10
     @AppStorage(Automation.watchKey) private var watch = false
     @AppStorage(Automation.watchGBKey) private var watchGB = 5
 
     var body: some View {
-        Section {
-            Toggle(String(localized: "Clean automatically"), isOn: $autoClean)
-            Picker(String(localized: "How often"), selection: $period) {
-                Text("Weekly").tag("weekly")
-                Text("Monthly").tag("monthly")
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Art(id: "schedule", symbol: "calendar.badge.clock", size: 56).accessibilityHidden(true)
+                    Toggle(String(localized: "Clean automatically"), isOn: $autoClean)
+                }
+                Picker(String(localized: "How often"), selection: $period) {
+                    Text("Weekly").tag("weekly")
+                    Text("Monthly").tag("monthly")
+                }
+                .disabled(!autoClean)
+            } footer: {
+                Note("Runs System Junk while OpenCleaner or its menu bar item is open, removing only the items selected by default. The Trash is never emptied.")
             }
-            .disabled(!autoClean)
-            Text("Runs System Junk while OpenCleaner or its menu bar item is open, removing only the items selected by default. The Trash is never emptied.")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
-            Toggle(String(localized: "Show in menu bar"), isOn: $menuBar)
-            Toggle(String(localized: "Warn when the startup disk is almost full"), isOn: $lowDisk)
-            Picker(String(localized: "Below"), selection: $lowDiskGB) {
-                ForEach([5, 10, 20, 50], id: \.self) { Text("\($0) GB").tag($0) }
-            }
-            .disabled(!lowDisk)
-            Toggle(String(localized: "Watch the Trash and Downloads"), isOn: $watch)
-            Picker(String(localized: "Larger than"), selection: $watchGB) {
-                ForEach([1, 2, 5, 10, 20], id: \.self) { Text("\($0) GB").tag($0) }
-            }
-            .disabled(!watch)
-        } header: {
-            HStack(spacing: 8) {
-                Art(id: "schedule", symbol: "calendar.badge.clock", size: 30).accessibilityHidden(true)
-                Text("Automation")
+            Section(String(localized: "Alerts")) {
+                Toggle(String(localized: "Warn when the startup disk is almost full"), isOn: $lowDisk)
+                Picker(String(localized: "Below"), selection: $lowDiskGB) {
+                    ForEach([5, 10, 20, 50], id: \.self) { Text("\($0) GB").tag($0) }
+                }
+                .disabled(!lowDisk)
+                Toggle(String(localized: "Watch the Trash and Downloads"), isOn: $watch)
+                Picker(String(localized: "Larger than"), selection: $watchGB) {
+                    ForEach([1, 2, 5, 10, 20], id: \.self) { Text("\($0) GB").tag($0) }
+                }
+                .disabled(!watch)
             }
         }
+        .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
+        .scrollIndicators(.hidden)  // each tab fits its window
     }
 }

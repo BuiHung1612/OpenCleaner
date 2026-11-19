@@ -344,7 +344,9 @@ struct Art: View {
     @MainActor static func image(_ id: String) -> NSImage? {
         if let hit = images[id] { return hit }
         let repoArt = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Resources/Art")
-        let urls = ["heic", "png"].flatMap { [Bundle.main.url(forResource: id, withExtension: $0, subdirectory: "Art"), repoArt.appendingPathComponent("\(id).\($0)")] }
+        let urls: [URL?] = ["heic", "png"].flatMap { (ext: String) -> [URL?] in
+            [Bundle.main.url(forResource: id, withExtension: ext, subdirectory: "Art"), repoArt.appendingPathComponent("\(id).\(ext)")]
+        }
         let image = urls.compactMap { $0 }.lazy.compactMap { NSImage(contentsOf: $0) }.first
         images[id] = image
         return image
