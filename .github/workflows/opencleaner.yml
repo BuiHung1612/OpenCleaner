@@ -147,8 +147,9 @@ jobs:
           mkdir dmg
           cp -R macos/build/OpenCleaner.app dmg/
           ln -s /Applications dmg/Applications
+          # the image stays unsigned: Gatekeeper refuses to open a disk image signed by a
+          # certificate Apple did not issue, but mounts an unsigned one (the app inside is signed)
           hdiutil create -volname OpenCleaner -srcfolder dmg -ov -format ULFO OpenCleaner.dmg
-          if [ -n "${SIGN_ID:-}" ]; then codesign --sign "$SIGN_ID" OpenCleaner.dmg; fi
 
       - uses: actions/upload-artifact@v7
         with:
