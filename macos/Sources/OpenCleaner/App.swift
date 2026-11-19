@@ -1,6 +1,6 @@
 //! Layout: sidebar of modules grouped by purpose, one full-bleed page per module. Every module owns
 //! a two-color gradient that fills the whole window; content floats on it as Liquid Glass.
-//! Decorative art is optional: drop `Resources/Art/<id>.png` in and it replaces the SF Symbol.
+//! Decorative art is optional: drop `Resources/Art/<id>.heic` (or `.png`) in and it replaces the SF Symbol.
 
 import AppKit
 import SwiftUI
@@ -266,7 +266,7 @@ extension View {
     }
 }
 
-/// Optional artwork from `Resources/Art/<id>.png`; falls back to a symbol on a glass disc.
+/// Optional artwork from `Resources/Art/<id>.heic` or `.png`; falls back to a symbol on a glass disc.
 struct Art: View {
     let id: String
     let symbol: String
@@ -291,7 +291,7 @@ struct Art: View {
     @MainActor static func image(_ id: String) -> NSImage? {
         if let hit = images[id] { return hit }
         let repoArt = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Resources/Art")
-        let urls = [Bundle.main.url(forResource: id, withExtension: "png", subdirectory: "Art"), repoArt.appendingPathComponent("\(id).png")]
+        let urls = ["heic", "png"].flatMap { [Bundle.main.url(forResource: id, withExtension: $0, subdirectory: "Art"), repoArt.appendingPathComponent("\(id).\($0)")] }
         let image = urls.compactMap { $0 }.lazy.compactMap { NSImage(contentsOf: $0) }.first
         images[id] = image
         return image
