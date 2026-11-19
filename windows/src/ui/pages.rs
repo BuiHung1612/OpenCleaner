@@ -992,33 +992,18 @@ impl State {
         let s = self.dash.status.clone();
         let x = page.x + 18.0;
         let top = page.y + 40.0;
-        // health ring
-        let (rx, ry) = (x + 82.0, top + 82.0);
-        c.circle(rx, ry, 82.0, Some(argb(fg(), 18)), Some((argb(fg(), 50), 1.0)));
-        c.arc(rx, ry, 64.0, 14.0, 0.0, 360.0, argb(fg(), 30));
-        if let Some(score) = s["health_score"].as_f64() {
-            let color = if score >= 75.0 { mint() } else if score >= 50.0 { amber() } else { 0xFF8A65 };
-            c.arc(rx, ry, 64.0, 14.0, -90.0, (score / 100.0 * 360.0) as f32, argb(color, 255));
-            c.text(R::new(rx - 60.0, ry - 30.0, 120.0, 46.0), &format!("{score:.0}"), 40.0, true, fg(), Align::Center);
-        } else {
-            c.text(R::new(rx - 60.0, ry - 30.0, 120.0, 46.0), "—", 40.0, true, fg(), Align::Center);
-        }
-        c.text(R::new(rx - 60.0, ry + 16.0, 120.0, 20.0), "Health", 13.0, false, dim(), Align::Center);
-
-        let tx = x + 200.0;
+        let tx = x;
         c.text(R::new(tx, top + 6.0, 300.0, 40.0), "Dashboard", 32.0, true, fg(), Align::Left);
         self.icon_pill(c, tx + 190.0, top + 26.0, REFRESH, Action::DashRefresh);
-        let msg = s["health_score_msg"].as_str().unwrap_or("Measuring system status…");
-        c.text(R::new(tx, top + 56.0, page.w - 220.0, 22.0), msg, 15.0, false, dim(), Align::Left);
         let hw = &s["hardware"];
         let line: Vec<&str> = ["model", "cpu_model", "total_ram", "os_version"].iter().filter_map(|k| hw[*k].as_str()).filter(|v| !v.is_empty()).collect();
-        c.text(R::new(tx, top + 82.0, page.w - 220.0, 20.0), &line.join(" · "), 13.0, false, dim(), Align::Left);
+        c.text(R::new(tx, top + 56.0, page.w - 40.0, 20.0), &line.join(" · "), 13.0, false, dim(), Align::Left);
         if let Some(up) = s["uptime"].as_str() {
-            c.text(R::new(tx, top + 104.0, page.w - 220.0, 20.0), &format!("Up for {up}"), 13.0, false, dim(), Align::Left);
+            c.text(R::new(tx, top + 78.0, page.w - 40.0, 20.0), &format!("Up for {up}"), 13.0, false, dim(), Align::Left);
         }
 
         // tiles
-        let ty = top + 190.0;
+        let ty = top + 120.0;
         let tw = (page.w - 36.0 - 3.0 * 16.0) / 4.0;
         let disk = s["disks"].as_array().and_then(|d| d.first()).cloned().unwrap_or(Value::Null);
         let tiles: [(&str, String, Option<f64>, String); 4] = [
