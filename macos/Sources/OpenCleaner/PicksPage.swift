@@ -202,7 +202,7 @@ struct PicksList: View {
                     VStack(alignment: .leading, spacing: 2) {
                         if !group.name.isEmpty {
                             Text(verbatim: PickText.group(group.name, first: group.indexes.first.map { model.items[$0] }))
-                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
+                                .font(.app(13, weight: .semibold)).foregroundStyle(.dim)
                                 .lineLimit(1).truncationMode(.head).padding(.leading, 12)
                                 .accessibilityAddTraits(.isHeader)
                         }
@@ -235,14 +235,14 @@ struct PicksList: View {
         let open = model.parts.open.contains(path)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Image(systemName: partial ? "minus.circle.fill" : on ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
+                Image(systemName: partial ? "minus.circle.fill" : on ? "checkmark.circle.fill" : "circle").font(.app(17))
                 Image(nsImage: fileIcon(path)).resizable().frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: item.name.string ?? "?").font(.system(size: 14, weight: .medium)).lineLimit(1)
-                    Text(verbatim: PickText.detail(item)).font(.system(size: 12)).foregroundStyle(.dim).lineLimit(1)
+                    Text(verbatim: item.name.string ?? "?").font(.app(14, weight: .medium)).lineLimit(1)
+                    Text(verbatim: PickText.detail(item)).font(.app(12)).foregroundStyle(.dim).lineLimit(1)
                 }
                 Spacer()
-                Text(verbatim: bytes(model.parts.bytes(path, whole: item.bytes.double ?? 0))).font(.system(size: 14)).monospacedDigit()
+                Text(verbatim: bytes(model.parts.bytes(path, whole: item.bytes.double ?? 0))).font(.app(14)).monospacedDigit()
                 if model.phase == .review && Parts.canOpen(path) {
                     OpenButton(open: open) { model.toggleOpen(path) }
                 }
@@ -279,12 +279,12 @@ struct PicksOutcome: View {
             if (outcome.failed.double ?? 0) > 0 {
                 Text("\(Int(outcome.failed.double ?? 0)) items could not be removed").foregroundStyle(Color.warn)
                 if let first = outcome.first_failure.string {
-                    Text(verbatim: first).font(.system(size: 12)).foregroundStyle(.dim).lineLimit(2)
+                    Text(verbatim: first).font(.app(12)).foregroundStyle(.dim).lineLimit(2)
                 }
             }
             if trashed && removed > 0 { TrashNote().padding(.top, 6) }
         }
-        .font(.system(size: 15, weight: .medium))
+        .font(.app(15, weight: .medium))
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
         .glassPanel()
@@ -390,7 +390,7 @@ struct PicksPage: View {
             if model.phase == .finding {
                 Button(String(localized: "Stop")) { model.stop() }.buttonStyle(.pill).keyboardShortcut(.cancelAction)
             } else if model.phase == .review {
-                Text(verbatim: bytes(model.selectedBytes)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                Text(verbatim: bytes(model.selectedBytes)).font(.app(17, weight: .semibold)).monospacedDigit()
             }
         }
     }
@@ -535,12 +535,12 @@ struct UninstallerPage: View {
         let path = app.path.string ?? ""
         let on = model.chosen.contains(path)
         return HStack(spacing: 12) {
-            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
+            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.app(17))
             Image(nsImage: fileIcon(path)).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: app.name.string ?? "?").font(.system(size: 14, weight: .medium))
+                Text(verbatim: app.name.string ?? "?").font(.app(14, weight: .medium))
                 Text(verbatim: app.running.bool ? String(localized: "Open now: quit it before uninstalling") : (app.bundle_id.string ?? ""))
-                    .font(.system(size: 12)).foregroundStyle(app.running.bool ? Color.warn : .dim)
+                    .font(.app(12)).foregroundStyle(app.running.bool ? Color.warn : .dim)
             }
             Spacer()
             Text(verbatim: model.size(of: app).map { bytes($0) } ?? "…").monospacedDigit()
@@ -558,7 +558,7 @@ struct UninstallerPage: View {
                 Button(String(localized: "Start Over")) { model.startOver() }.buttonStyle(.pill)
             } else if picks.phase == .idle, !model.chosen.isEmpty {
                 let total = model.chosen.compactMap { model.sizeByPath[$0] }.reduce(0, +)
-                Text(verbatim: bytes(total)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                Text(verbatim: bytes(total)).font(.app(17, weight: .semibold)).monospacedDigit()
             }
         } center: {
             switch picks.phase {
@@ -575,7 +575,7 @@ struct UninstallerPage: View {
             if picks.phase == .finding {
                 Button(String(localized: "Stop")) { picks.stop() }.buttonStyle(.pill).keyboardShortcut(.cancelAction)
             } else if picks.phase == .review {
-                Text(verbatim: bytes(picks.selectedBytes)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                Text(verbatim: bytes(picks.selectedBytes)).font(.app(17, weight: .semibold)).monospacedDigit()
             }
         }
     }

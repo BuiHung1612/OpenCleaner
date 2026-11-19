@@ -319,7 +319,7 @@ struct SpaceLensPage: View {
                     .buttonStyle(.pill)
                     .help(String(localized: "Back"))
                     .keyboardShortcut("[", modifiers: .command)
-                Text(breadcrumb).font(.system(size: 15, weight: .semibold)).lineLimit(1).truncationMode(.head)
+                Text(breadcrumb).font(.app(15, weight: .semibold)).lineLimit(1).truncationMode(.head)
                 Spacer()
                 Button { model.load(model.stack.last ?? nil, force: true) } label: {
                     Label(String(localized: "Scan Again"), systemImage: "arrow.clockwise").labelStyle(.iconOnly)
@@ -333,7 +333,7 @@ struct SpaceLensPage: View {
             if let failure = model.trashError { ErrorBanner(message: failure) }
             if model.trashed > 0 {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(model.trashed) items moved to the Trash.").font(.system(size: 13, weight: .medium))
+                    Text("\(model.trashed) items moved to the Trash.").font(.app(13, weight: .medium))
                     TrashNote()
                 }
                 .padding(.horizontal, 16).padding(.vertical, 10)
@@ -347,7 +347,7 @@ struct SpaceLensPage: View {
                     ProgressView().controlSize(.small).brightScroller()
                     Text("Measuring… sizes keep growing until the scan finishes.")
                 }
-                .font(.system(size: 12)).foregroundStyle(.dim)
+                .font(.app(12)).foregroundStyle(.dim)
                 .padding(.horizontal, 14).padding(.vertical, 6)
                 .glassEffect(.clear.tint(.white.opacity(0.07)), in: .capsule)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -363,7 +363,7 @@ struct SpaceLensPage: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         if current.scan_status.string == "partial" {
                             Text("Some folders could not be read fully; sizes are at least this big.")
-                                .font(.system(size: 12)).foregroundStyle(.dim)
+                                .font(.app(12)).foregroundStyle(.dim)
                                 .multilineTextAlignment(.center)
                         }
                     }
@@ -418,7 +418,7 @@ struct SpaceLensPage: View {
         ZStack(alignment: .leading) {
             if let v = model.volume {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(verbatim: "\(v.name): \(bytes(v.used)) / \(bytes(v.total))").font(.system(size: 13, weight: .medium))
+                    Text(verbatim: "\(v.name): \(bytes(v.used)) / \(bytes(v.total))").font(.app(13, weight: .medium))
                     UsageBar(fraction: v.used / v.total).frame(width: 220)
                 }
             }
@@ -428,7 +428,7 @@ struct SpaceLensPage: View {
                 if !model.selection.isEmpty { BigButton(title: String(localized: "Move to Trash")) { confirming = true } }
             } trailing: {
                 if !model.selection.isEmpty {
-                    Text(verbatim: bytes(model.selectedSize)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                    Text(verbatim: bytes(model.selectedSize)).font(.app(17, weight: .semibold)).monospacedDigit()
                 }
             }
         }
@@ -444,9 +444,9 @@ struct VolumeCard: View {
             // custom art when provided, otherwise the drive icon macOS uses
             Image(nsImage: Art.image(volume.isStartup ? "volumeInternal" : "volumeExternal") ?? fileIcon(volume.url.path))
                 .resizable().scaledToFit().frame(width: 88, height: 88)
-            Text(volume.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+            Text(volume.name).font(.app(15, weight: .semibold)).lineLimit(1)
             UsageBar(fraction: volume.used / volume.total)
-            Text("\(bytes(volume.free)) free of \(bytes(volume.total))").font(.system(size: 12)).foregroundStyle(.dim)
+            Text("\(bytes(volume.free)) free of \(bytes(volume.total))").font(.app(12)).foregroundStyle(.dim)
             Button(String(localized: "Scan"), action: scan).buttonStyle(.pill)
         }
         .padding(20)
@@ -491,7 +491,7 @@ struct EntryRow: View {
         HStack(spacing: 12) {
             // overview rows (Home, Applications…) are summaries: never offered for removal
             Button(action: toggle) {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle").font(.app(17))
             }
             .buttonStyle(.plain)
             .opacity(entry.selectable.bool ? 1 : 0)
@@ -501,15 +501,15 @@ struct EntryRow: View {
             .accessibilityValue(selected ? String(localized: "Selected") : String(localized: "Not selected"))
             Image(nsImage: fileIcon(path)).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: name).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                Text(verbatim: name).font(.app(14, weight: .medium)).lineLimit(1)
                 if entry.cleanable.bool {
-                    Text("Safe to clean").font(.system(size: 12)).foregroundStyle(Color.ok)
+                    Text("Safe to clean").font(.app(12)).foregroundStyle(Color.ok)
                 } else if entry.scan_status.string == "partial" {
-                    Text("Partly measured").font(.system(size: 12)).foregroundStyle(.dim)
+                    Text("Partly measured").font(.app(12)).foregroundStyle(.dim)
                 }
             }
             Spacer()
-            Text(verbatim: bytes(entry.size.double)).font(.system(size: 14)).monospacedDigit()
+            Text(verbatim: bytes(entry.size.double)).font(.app(14)).monospacedDigit()
             Image(systemName: "chevron.right").foregroundStyle(.dim).opacity(entry.is_dir.bool ? 1 : 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -637,8 +637,8 @@ private struct BubbleView: View {
         if r >= 48 {
             VStack(spacing: 4) {
                 icon.frame(width: min(r * 0.42, 64), height: min(r * 0.42, 64))
-                Text(verbatim: item.name).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7)
-                Text(verbatim: bytes(item.size)).font(.system(size: 12)).monospacedDigit().foregroundStyle(.dim)
+                Text(verbatim: item.name).font(.app(13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                Text(verbatim: bytes(item.size)).font(.app(12)).monospacedDigit().foregroundStyle(.dim)
             }
             .frame(width: r * 1.5)
         } else if r >= 20 {

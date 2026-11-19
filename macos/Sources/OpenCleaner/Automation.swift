@@ -1,6 +1,6 @@
-//! Automation while the app or its menu bar item runs: scheduled System Junk cleaning, the menu
-//! bar item, the low disk alert and the Trash / Downloads watch. Checked on launch, free space
-//! every minute, the rest every hour. No launchd agent: nothing runs when the app is quit.
+//! Automation while the app is open: scheduled System Junk cleaning, the low disk alert and the
+//! Trash / Downloads watch. Checked on launch, free space every minute, the rest every hour.
+//! No launchd agent and no menu bar item: nothing runs when the app is quit.
 
 import AppKit
 import SwiftUI
@@ -33,22 +33,18 @@ final class Automation: ObservableObject {
     static let shared = Automation()
 
     static let autoCleanKey = "autoClean", periodKey = "autoCleanPeriod", lastCleanKey = "autoCleanLast"
-    static let menuBarKey = "menuBar"
     static let lowDiskKey = "lowDiskAlert", lowDiskGBKey = "lowDiskGB", lowDiskNotifiedKey = "lowDiskNotified"
     static let watchKey = "watchFolders", watchGBKey = "watchGB"
 
-    @Published private(set) var freeBytes: Double?
-    @Published private(set) var busy = false
+    private var busy = false
     /// The page the main window should show next (set by a notification click).
     @Published var openModule: Module?
-    /// Set by a view that has `openWindow`, so a click can reopen a closed main window.
-    var openWindow: (() -> Void)?
     private var loop: Task<Void, Never>?
     private let defaults = UserDefaults.standard
 
     func start() {
         guard loop == nil else { return }
-        defaults.register(defaults: [Self.menuBarKey: true, Self.lowDiskKey: true, Self.lowDiskGBKey: 10, Self.watchGBKey: 5, Self.periodKey: "weekly"])
+        defaults.register(defaults: [Self.lowDiskKey: true, Self.lowDiskGBKey: 10, Self.watchGBKey: 5, Self.periodKey: "weekly"])
         loop = Task {
             var hourly = Date.distantPast
             while !Task.isCancelled {
@@ -58,7 +54,7 @@ final class Automation: ObservableObject {
                     Task { await runScheduleIfDue() }
                     Task { await watchFolders() }
                 }
-                try? await Task.sleep(for: .seconds(60))
+                try? await Task.sleep(for: .seconds(60), tolerance: .seconds(15))  // lets macOS batch the wakeup
             }
         }
     }
@@ -66,15 +62,15 @@ final class Automation: ObservableObject {
     func show(_ module: Module?) {
         openModule = module
         NSApp.activate()
-        if let openWindow { openWindow() } else { NSApp.windows.first { $0.identifier?.rawValue.contains("main") == true }?.makeKeyAndOrderFront(nil) }
+        NSApp.windows.first { $0.identifier?.rawValue.contains("main") == true }?.makeKeyAndOrderFront(nil)
     }
 
     func updateFree() async {
-        freeBytes = await Task.detached {
+        let free = await Task.detached {
             (try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
                 .volumeAvailableCapacityForImportantUsage.map(Double.init)
         }.value
-        guard let free = freeBytes, defaults.bool(forKey: Self.lowDiskKey) else { return }
+        guard let free, defaults.bool(forKey: Self.lowDiskKey) else { return }
         let step = AutoClean.lowDisk(free: free, threshold: Double(defaults.integer(forKey: Self.lowDiskGBKey)) * 1e9,
                                      notified: defaults.bool(forKey: Self.lowDiskNotifiedKey))
         defaults.set(step.notified, forKey: Self.lowDiskNotifiedKey)
@@ -93,24 +89,6 @@ final class Automation: ObservableObject {
         // stamped before running: a failing clean is retried next period, not every hour
         defaults.set(Date(), forKey: Self.lastCleanKey)
         guard let found = await Self.scan() else { return }
-        await finish(found)
-    }
-
-    /// Menu bar "Clean System Junk now": scan, confirm the size, clean.
-    func cleanNow() async {
-        guard !busy else { return }
-        busy = true
-        defer { busy = false }
-        guard let found = await Self.scan() else {
-            return Self.notify(String(localized: "Nothing to clean"), "")
-        }
-        NSApp.activate()
-        let alert = NSAlert()
-        alert.messageText = String(localized: "Remove \(bytes(found.bytes)) of junk? This cannot be undone.")
-        alert.informativeText = String(localized: "Only the items selected by default. The Trash is not emptied.")
-        alert.addButton(withTitle: String(localized: "Clean"))
-        alert.addButton(withTitle: String(localized: "Cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
         await finish(found)
     }
 
@@ -172,16 +150,14 @@ final class Automation: ObservableObject {
     }
 }
 
-/// Starts automation at launch, keeps the app alive for the menu bar item, routes notification clicks.
+/// Starts automation at launch, routes notification clicks.
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate = self }
         Task { @MainActor in Automation.shared.start() }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        !UserDefaults.standard.bool(forKey: Automation.menuBarKey)
-    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
@@ -198,71 +174,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             done()
         }
     }
-}
-
-// MARK: menu bar
-
-struct MenuBarLabel: View {
-    @ObservedObject var auto = Automation.shared
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        // a monochrome template symbol (SF Symbols has no broom) and the free space; menu bar
-        // labels keep only text and images, so both go in one Text
-        Text("\(Image(systemName: "sparkles")) \(auto.freeBytes.map(shortBytes) ?? "—")")
-            .accessibilityLabel(String(localized: "OpenCleaner: \(bytes(auto.freeBytes)) free"))
-        .onAppear { auto.openWindow = { openWindow(id: "main") } }
-    }
-}
-
-struct MenuBarView: View {
-    @ObservedObject var auto = Automation.shared
-    @State private var status = JSON(nil)
-    @State private var window: NSWindow?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            row(String(localized: "CPU"), percent(status.cpu.usage.double))
-            row(String(localized: "Memory"), percent(status.memory.used_percent.double))
-            row(String(localized: "Disk"), String(localized: "\(bytes(auto.freeBytes)) free"))
-            Divider()
-            Button(auto.busy ? String(localized: "Cleaning…") : String(localized: "Clean System Junk now")) {
-                Task { await auto.cleanNow() }
-            }
-            .disabled(auto.busy)
-            Button(String(localized: "Open OpenCleaner")) { auto.show(nil) }
-            Divider()
-            Button(String(localized: "Quit OpenCleaner")) { NSApp.terminate(nil) }
-        }
-        .buttonStyle(.borderless)
-        .padding(14)
-        .frame(width: 240, alignment: .leading)
-        .background(WindowReader { window = $0 })
-        // the menu window is kept when it closes; read only while it shows
-        .task {
-            while !Task.isCancelled {
-                if window?.isVisible ?? true {
-                    let s = await Task.detached { Engine.call(["op": "status"]) }.value
-                    if s.ok.bool { status = s }
-                }
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
-    }
-
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack { Text(verbatim: title); Spacer(); Text(verbatim: value).monospacedDigit().foregroundStyle(.secondary) }
-    }
-}
-
-private struct WindowReader: NSViewRepresentable {
-    let found: (NSWindow?) -> Void
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { found(view.window) }
-        return view
-    }
-    func updateNSView(_ view: NSView, context: Context) {}
 }
 
 // MARK: settings
@@ -288,9 +199,9 @@ struct AutomationSettings: View {
                 }
                 .disabled(!autoClean)
             } footer: {
-                Note("Runs System Junk while OpenCleaner or its menu bar item is open, removing only the items selected by default. The Trash is never emptied.")
+                Note("Runs System Junk while OpenCleaner is open, removing only the items selected by default. The Trash is never emptied.")
             }
-            Section(String(localized: "Alerts")) {
+            Section {
                 Toggle(String(localized: "Warn when the startup disk is almost full"), isOn: $lowDisk)
                 Picker(String(localized: "Below"), selection: $lowDiskGB) {
                     ForEach([5, 10, 20, 50], id: \.self) { Text("\($0) GB").tag($0) }
@@ -301,6 +212,10 @@ struct AutomationSettings: View {
                     ForEach([1, 2, 5, 10, 20], id: \.self) { Text("\($0) GB").tag($0) }
                 }
                 .disabled(!watch)
+            } header: {
+                Text("Alerts")
+            } footer: {
+                Note("Checked while OpenCleaner is open.")
             }
         }
         .formStyle(.grouped)

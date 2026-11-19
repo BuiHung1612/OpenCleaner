@@ -100,15 +100,15 @@ struct PartRows: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if depth == 1 && !kids.isEmpty {
                     Text("Only the first level can be ticked; deeper folders are for looking.")
-                        .font(.system(size: 11)).foregroundStyle(.dim).padding(.horizontal, 12).padding(.vertical, 2)
+                        .font(.app(11)).foregroundStyle(.dim).padding(.horizontal, 12).padding(.vertical, 2)
                 }
                 ForEach(kids, id: \.path.string) { child in row(child) }
-                if kids.isEmpty { Text("Empty").font(.system(size: 12)).foregroundStyle(.dim).padding(8) }
+                if kids.isEmpty { Text("Empty").font(.app(12)).foregroundStyle(.dim).padding(8) }
             }
         } else {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Loading…").font(.system(size: 12)).foregroundStyle(.dim)
+                Text("Loading…").font(.app(12)).foregroundStyle(.dim)
             }
             .padding(8)
         }
@@ -120,12 +120,12 @@ struct PartRows: View {
         let opened = parts.open.contains(path)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 14)).opacity(depth == 0 ? 1 : 0)
+                Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.app(14)).opacity(depth == 0 ? 1 : 0)
                 Image(nsImage: fileIcon(path)).resizable().frame(width: 18, height: 18)
                 Text(verbatim: child.name.string ?? URL(fileURLWithPath: path).lastPathComponent)
-                    .font(.system(size: 12)).lineLimit(1).truncationMode(.middle).help(path)
+                    .font(.app(12)).lineLimit(1).truncationMode(.middle).help(path)
                 Spacer()
-                Text(verbatim: bytes(child.size.double ?? 0)).font(.system(size: 12)).monospacedDigit().foregroundStyle(.dim)
+                Text(verbatim: bytes(child.size.double ?? 0)).font(.app(12)).monospacedDigit().foregroundStyle(.dim)
                 if child.is_dir.bool && Parts.canOpen(path) {
                     OpenButton(open: opened) { open(path) }
                 } else {
@@ -250,7 +250,7 @@ struct SearchField: View {
                     // Esc in the field clears the search first
                     .onExitCommand { if text.isEmpty { focused = false } else { text = "" } }
             }
-            .font(.system(size: 14))
+            .font(.app(14))
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
         .glassEffect(.clear.tint(.white.opacity(0.07)), in: .capsule)

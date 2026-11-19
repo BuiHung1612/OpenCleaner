@@ -27,7 +27,7 @@ struct DashboardPage: View {
                     if let up = s.uptime.string { Text("Up for \(up)") }
                     if let t = stream.updatedAt { Text("Updated \(t.formatted(date: .omitted, time: .standard))") }
                 }
-                .font(.system(size: 13)).foregroundStyle(.dim)
+                .font(.app(13)).foregroundStyle(.dim)
                 .padding(.top, -10)
 
                 if let error = stream.error { ErrorBanner(message: error) { stream.refresh() } }
@@ -47,14 +47,14 @@ struct DashboardPage: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Top processes").font(.system(size: 15, weight: .semibold))
+                    Text("Top processes").font(.app(15, weight: .semibold))
                     ForEach(Array(s.top_processes.array.prefix(6).enumerated()), id: \.offset) { _, p in
                         HStack {
                             Text(verbatim: p.name.string ?? "?").lineLimit(1)
                             Spacer()
                             Text(verbatim: "\(percent(p.cpu.double)) CPU · \(bytes(p.memory_bytes.double))").monospacedDigit().foregroundStyle(.dim)
                         }
-                        .font(.system(size: 13))
+                        .font(.app(13))
                     }
                 }
                 .padding(20)
@@ -103,7 +103,7 @@ struct DashboardPage: View {
         }
         return Tile(title: String(localized: "Trash"), icon: "trash", value: value, fraction: nil,
                     detail: size == nil ? String(localized: "Needs Full Disk Access") : nil) {
-            Button(String(localized: "Open Trash"), action: openTrash).buttonStyle(.link).font(.system(size: 13))
+            Button(String(localized: "Open Trash"), action: openTrash).buttonStyle(.link).font(.app(13))
         }
     }
 }
@@ -119,10 +119,10 @@ struct Tile<Accessory: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: icon).font(.system(size: 13, weight: .medium)).foregroundStyle(.dim)
-            Text(verbatim: value).font(.system(size: 28, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+            Label(title, systemImage: icon).font(.app(13, weight: .medium)).foregroundStyle(.dim)
+            Text(verbatim: value).font(.app(28, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
             if let fraction { UsageBar(fraction: fraction).id(replay) }
-            if let detail { Text(verbatim: detail).font(.system(size: 13)).foregroundStyle(.dim) }
+            if let detail { Text(verbatim: detail).font(.app(13)).foregroundStyle(.dim) }
             accessory
         }
         .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
@@ -167,8 +167,8 @@ struct HistoryPage: View {
                         HStack {
                             Image(systemName: Self.icon(s.command.string ?? "")).frame(width: 22).foregroundStyle(.dim)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(verbatim: Self.title(s.command.string ?? "?")).font(.system(size: 14, weight: .semibold))
-                                Text(verbatim: Self.when(s)).font(.system(size: 12)).foregroundStyle(.dim)
+                                Text(verbatim: Self.title(s.command.string ?? "?")).font(.app(14, weight: .semibold))
+                                Text(verbatim: Self.when(s)).font(.app(12)).foregroundStyle(.dim)
                             }
                             Spacer()
                             Text("\(Int(s.items.double ?? 0)) items · \(bytes(s.bytes.double))").monospacedDigit()
@@ -194,12 +194,12 @@ struct HistoryPage: View {
             }
             .brightScroller()
             .glassPanel()
-            if let putBackNote { Text(verbatim: putBackNote).font(.system(size: 12)).foregroundStyle(Color.warn) }
+            if let putBackNote { Text(verbatim: putBackNote).font(.app(12)).foregroundStyle(Color.warn) }
             if let log {
                 HStack {
                     Text("Every deleted file is listed in \((log as NSString).abbreviatingWithTildeInPath)")
-                        .font(.system(size: 12)).foregroundStyle(.dim)
-                    Button(String(localized: "Show in Finder")) { reveal(log) }.buttonStyle(.link).font(.system(size: 12))
+                        .font(.app(12)).foregroundStyle(.dim)
+                    Button(String(localized: "Show in Finder")) { reveal(log) }.buttonStyle(.link).font(.app(12))
                 }
             }
         }
@@ -253,7 +253,8 @@ struct SettingsView: View {
             Tab(String(localized: "Automation"), systemImage: "calendar.badge.clock") { AutomationSettings() }
             Tab(String(localized: "Dashboard"), systemImage: "gauge.with.dots.needle.50percent") { DashboardSettings() }
         }
-        .frame(width: 560)
+        .frame(width: 560 * max(1, TextScale.shared.value))
+        .font(TextScale.shared.value == 1 ? nil : .app(13))
         // the main window tints everything white for its gradients; Settings is a plain system window
         .tint(.accentColor)
     }
@@ -263,15 +264,15 @@ struct SettingsView: View {
 struct Note: View {
     let text: LocalizedStringKey
     init(_ text: LocalizedStringKey) { self.text = text }
-    var body: some View { Text(text).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+    var body: some View { Text(text).font(.app(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
 }
 
 private struct GeneralSettings: View {
     @AppStorage("language") private var language = ""
     @AppStorage(Updater.autoKey) private var checkUpdates = true
-    @AppStorage(Automation.menuBarKey) private var menuBar = true
     @State private var languageChanged = false
     @State private var engineVersion: String?
+    @State private var textScale = TextScale.shared
 
     var body: some View {
         Form {
@@ -285,7 +286,9 @@ private struct GeneralSettings: View {
                     UserDefaults.standard.set(language.isEmpty ? nil : [language], forKey: "AppleLanguages")
                     languageChanged = true
                 }
-                Toggle(String(localized: "Show in menu bar"), isOn: $menuBar)
+                Picker(String(localized: "Text size"), selection: $textScale.value) {
+                    ForEach(TextScale.choices, id: \.scale) { Text($0.name).tag($0.scale) }
+                }
             } footer: {
                 if languageChanged {
                     HStack {

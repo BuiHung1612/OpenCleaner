@@ -27,7 +27,7 @@ struct StartupPage: View {
                         // SMAppService login items have no public API to list them
                         HStack {
                             Text("Login items added in System Settings are not listed here.")
-                                .font(.system(size: 12)).foregroundStyle(.dim)
+                                .font(.app(12)).foregroundStyle(.dim)
                             Button("Open Login Items") { open("com.apple.LoginItems-Settings.extension") }
                                 .buttonStyle(.link)
                         }
@@ -57,22 +57,22 @@ struct StartupPage: View {
     }
 
     private func heading(_ title: LocalizedStringKey) -> some View {
-        Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim).padding(.leading, 12)
+        Text(title).font(.app(13, weight: .semibold)).foregroundStyle(.dim).padding(.leading, 12)
             .accessibilityAddTraits(.isHeader)
     }
 
     private func row(_ item: JSON) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: item.name.string ?? "").font(.system(size: 14, weight: .medium))
+                Text(verbatim: item.name.string ?? "").font(.app(14, weight: .medium))
                 Text(verbatim: item.program.string ?? item.label.string ?? "")
-                    .font(.system(size: 12)).foregroundStyle(.dim).lineLimit(1).truncationMode(.middle)
+                    .font(.app(12)).foregroundStyle(.dim).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
             if item.scope.string != "user" {
-                Label("System, needs admin", systemImage: "lock.fill").font(.system(size: 12)).foregroundStyle(.dim)
+                Label("System, needs admin", systemImage: "lock.fill").font(.app(12)).foregroundStyle(.dim)
             } else if !item.enabled.bool {
-                Text("Off").font(.system(size: 12)).foregroundStyle(.dim)
+                Text("Off").font(.app(12)).foregroundStyle(.dim)
             } else {
                 Button("Turn Off") { asking = item }.buttonStyle(.pill)
             }
@@ -86,7 +86,7 @@ struct StartupPage: View {
             if permissions.needs_full_disk_access.bool {
                 HStack {
                     Text("Seeing which apps hold permissions needs Full Disk Access for OpenCleaner.")
-                        .font(.system(size: 12)).foregroundStyle(.dim)
+                        .font(.app(12)).foregroundStyle(.dim)
                     Button("Open Privacy & Security") { open("com.apple.preference.security?Privacy_AllFiles") }
                         .buttonStyle(.link)
                 }
@@ -96,9 +96,9 @@ struct StartupPage: View {
                     let apps = permissions.grants.array.filter { $0.service.string == service.id }
                         .compactMap(\.client.string).map(Self.appName).sorted()
                     HStack(alignment: .top, spacing: 12) {
-                        Text(service.title).font(.system(size: 14, weight: .medium)).frame(width: 150, alignment: .leading)
+                        Text(service.title).font(.app(14, weight: .medium)).frame(width: 150, alignment: .leading)
                         Text(verbatim: apps.isEmpty ? "–" : apps.joined(separator: ", "))
-                            .font(.system(size: 12)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
+                            .font(.app(12)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.horizontal, 12).padding(.vertical, 6)
                 }
