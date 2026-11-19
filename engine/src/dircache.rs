@@ -24,7 +24,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
 
 /// Seconds a record is trusted (bounds how stale an in-place file growth can be).
 pub const MAX_AGE: i64 = 3600;
@@ -83,6 +83,8 @@ struct Row {
 /// The records of a cache file, sorted by (dev, ino).
 #[derive(Default)]
 pub struct Table {
+    /// records in the file, superseded and expired ones included
+    read: usize,
     rows: Vec<Row>,
     names: String,
     allocs: Vec<u64>,
@@ -192,8 +194,6 @@ impl Table {
     }
 }
 
-static CACHE: Mutex<Option<(PathBuf, Arc<Table>)>> = Mutex::new(None);
-
 fn file(dir: &Path) -> PathBuf {
     dir.join("space-dirs-v4.bin")
 }
@@ -239,20 +239,46 @@ fn u64s(input: &mut impl Read, n: usize) -> std::io::Result<Vec<u64>> {
         .collect())
 }
 
-fn get(input: &mut impl Read) -> std::io::Result<Rec> {
+/// One record, or an error at the end of the file or on a damaged record: a record cut
+/// short by a crash mid-append, or lengths that do not fit in the `left` bytes of the file
+/// (never trusted for an allocation).
+fn get(input: &mut impl Read, left: &mut u64) -> std::io::Result<Rec> {
+    const HEAD: u64 = 6 * 8 + 3 * 4;
+    let bad = || std::io::Error::from(std::io::ErrorKind::InvalidData);
+    if *left < HEAD {
+        return Err(bad());
+    }
     let nums = u64s(input, 6)?;
     let mut lens = [0u8; 12];
     input.read_exact(&mut lens)?;
-    let len = |i: usize| u32::from_le_bytes(lens[i * 4..i * 4 + 4].try_into().unwrap()) as usize;
-    let mut names = vec![0u8; len(0)];
+    let len = |i: usize| {
+        u64::from(u32::from_le_bytes(
+            lens[i * 4..i * 4 + 4].try_into().unwrap(),
+        ))
+    };
+    let body = len(0) + 8 * len(1) + 24 * len(2);
+    if body > *left - HEAD {
+        return Err(bad());
+    }
+    let mut names = vec![0u8; len(0) as usize];
     input.read_exact(&mut names)?;
-    let allocs = u64s(input, len(1))?;
-    let links = u64s(input, len(2) * 3)?
+    let allocs = u64s(input, len(1) as usize)?;
+    let links = u64s(input, len(2) as usize * 3)?
         .as_chunks::<3>()
         .0
         .iter()
         .map(|c| (c[0], c[1], c[2]))
         .collect();
+    let names = String::from_utf8(names).map_err(|_| bad())?;
+    let count = if allocs.is_empty() {
+        0
+    } else {
+        names.split('\0').count()
+    };
+    if count != allocs.len() {
+        return Err(bad());
+    }
+    *left -= HEAD + body;
     Ok(Rec {
         dev: nums[0],
         ino: nums[1],
@@ -260,7 +286,7 @@ fn get(input: &mut impl Read) -> std::io::Result<Rec> {
         at: nums[3] as i64,
         bytes: nums[4],
         files: nums[5],
-        names: String::from_utf8(names).map_err(std::io::Error::other)?,
+        names,
         allocs,
         links,
     })
@@ -268,46 +294,60 @@ fn get(input: &mut impl Read) -> std::io::Result<Rec> {
 
 use std::io::Read;
 
-/// The records kept in `dir` (kept for the scan that asked, then freed by `store`).
-pub fn load(dir: &Path) -> Arc<Table> {
-    let mut cache = CACHE.lock().unwrap();
-    if let Some((d, table)) = &*cache
-        && d == dir
-    {
-        return table.clone();
-    }
+/// Reads the records kept in `dir` on another thread: a small folder is listed before
+/// a whole-disk cache could be read, so the scan starts at once and uses the cache from
+/// the moment it is there.
+pub fn load_in_background(dir: &Path) -> Arc<OnceLock<Arc<Table>>> {
+    let slot = Arc::new(OnceLock::new());
+    let (dir, fill) = (dir.to_path_buf(), slot.clone());
+    std::thread::spawn(move || {
+        let _ = fill.set(Arc::new(read(&dir)));
+    });
+    slot
+}
+
+/// The records kept in `dir`.
+pub fn read(dir: &Path) -> Table {
     let now = now();
     let mut table = Table::default();
     if let Ok(f) = std::fs::File::open(file(dir)) {
+        let size = f.metadata().map_or(0, |m| m.len());
+        let mut left = size;
         let mut input = std::io::BufReader::with_capacity(1 << 20, f);
-        while let Ok(r) = get(&mut input) {
+        while left > 0 {
+            let Ok(r) = get(&mut input, &mut left) else {
+                // damaged tail (a crash mid-append): cut it off, so appends land after
+                // the last good record instead of behind the damage
+                if let Ok(f) = std::fs::OpenOptions::new().write(true).open(file(dir)) {
+                    let _ = f.set_len(size - left);
+                }
+                break;
+            };
+            table.read += 1;
             if now - r.at < MAX_AGE {
                 table.push(&r);
             }
         }
     }
-    let table = Arc::new(table.finish());
-    *cache = Some((dir.to_path_buf(), table.clone()));
-    table
+    table.finish()
 }
 
-/// Saves the records of a scan, then lets the table go: the app would otherwise hold it
-/// for its lifetime. Small scans append; a large share of new records rewrites the file
-/// with only what is still fresh.
-pub fn store(dir: &Path, found: Vec<Rec>) {
-    let old = CACHE
-        .lock()
-        .unwrap()
-        .take()
-        .filter(|(d, _)| d == dir)
-        .map(|(_, t)| t);
+/// Saves the records of a scan. `old` is the cache as read for that scan, if the read
+/// finished (if not, nothing is saved). Few new records in a file that is not mostly
+/// superseded records are appended; otherwise the file is rewritten with only what is
+/// still fresh. Nothing is kept in memory afterwards.
+pub fn store(dir: &Path, old: Option<Arc<Table>>, found: Vec<Rec>) {
     if found.is_empty() || std::fs::create_dir_all(dir).is_err() {
         return;
     }
-    let kept = old.as_ref().map_or(0, |t| t.rows.len());
     let path = file(dir);
-    let on_disk = std::fs::metadata(&path).map_or(0, |m| m.len());
-    let appending = found.len() * 4 < kept && on_disk < 256 << 20;
+    let appending = match &old {
+        // the background read has not finished (a quick scan): appending now could race
+        // with it, and a quick scan's few folders are not worth it
+        None if path.exists() => return,
+        None => false,
+        Some(t) => found.len() * 4 < t.rows.len() && t.read < t.rows.len() * 2,
+    };
     let result = if appending {
         std::fs::OpenOptions::new()
             .append(true)
@@ -379,17 +419,33 @@ mod tests {
     fn appended_records_win_and_round_trip() {
         let dir = std::env::temp_dir().join(format!("oc-dircache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        store(&dir, (1..=100).map(|i| rec(i, i)).collect());
-        load(&dir);
-        store(&dir, vec![rec(7, 7000)]); // few records: appended
-        let t = load(&dir);
+        store(&dir, None, (1..=100).map(|i| rec(i, i)).collect());
+        let t = Arc::new(read(&dir));
+        store(&dir, Some(t), vec![rec(7, 7000)]); // few records: appended
+        let t = read(&dir);
         assert_eq!(t.len(), 100);
         let v = t.get((1, 7)).unwrap();
         assert_eq!(v.bytes, 7000);
         assert_eq!(v.dirs().collect::<Vec<_>>(), vec![("a", 10), ("b c", 20)]);
         assert_eq!(v.links, &[(1, 99, 7)]);
         assert_eq!(t.get((1, 8)).unwrap().bytes, 8);
-        store(&dir, Vec::new());
+
+        // a crash mid-append: a header promising more than the file holds, then garbage
+        let path = file(&dir);
+        let good = std::fs::metadata(&path).unwrap().len();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(&[0xFF; 70]).unwrap();
+        drop(f);
+        let t = read(&dir);
+        assert_eq!(t.len(), 100, "the good records survive");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            good,
+            "the damaged tail is cut off"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

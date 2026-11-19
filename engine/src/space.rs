@@ -170,7 +170,7 @@ fn measure(
             .iter()
             .map(|p| AtomicU64::new(u64::from(p.walk)))
             .collect(),
-        cache: cache.map(dircache::load),
+        cache: cache.map(dircache::load_in_background),
         found: Mutex::new(Vec::new()),
         now: dircache::now(),
         sizes: parts.iter().map(|p| AtomicU64::new(p.fixed)).collect(),
@@ -255,8 +255,8 @@ fn measure(
     });
     let listing = snapshot(true);
     if let Some(dir) = cache {
-        sizer.cache = None; // store reads the old table and then frees it
-        dircache::store(dir, sizer.found.into_inner().unwrap());
+        let old = sizer.cache.take().and_then(|c| c.get().cloned());
+        dircache::store(dir, old, sizer.found.into_inner().unwrap());
     }
     listing
 }
@@ -274,7 +274,8 @@ thread_local! {
 struct PartSizer {
     /// directories of each part queued or being read; 0: the part is fully sized
     left: Vec<AtomicU64>,
-    cache: Option<Arc<dircache::Table>>,
+    /// The cache, once its background read is done (until then folders are read as usual)
+    cache: Option<Arc<std::sync::OnceLock<Arc<dircache::Table>>>>,
     /// directories read in this scan, for the cache
     found: Mutex<Vec<Rec>>,
     now: i64,
@@ -309,6 +310,7 @@ impl Visitor for PartSizer {
         let Some(cache) = &self.cache else {
             return false;
         };
+        let cache = cache.get();
         READING.set(None);
         let Ok(me) = fs::stat(dir, Detail::Basic) else {
             return false; // reading it reports the error
@@ -320,7 +322,7 @@ impl Visitor for PartSizer {
             return false;
         }
         let Some(r) = cache
-            .get((me.dev, me.ino))
+            .and_then(|c| c.get((me.dev, me.ino)))
             .filter(|r| r.usable(me.mtime, self.now))
         else {
             READING.set(Some(Rec {
