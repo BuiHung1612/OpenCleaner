@@ -7,6 +7,7 @@ pub mod api;
 pub mod apps;
 pub mod clean;
 pub mod context;
+pub mod devtools;
 pub mod dircache;
 pub mod ffi;
 pub mod files;

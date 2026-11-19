@@ -1,9 +1,13 @@
 import AppKit
+import Charts
 import SwiftUI
 
 struct DashboardPage: View {
     /// owned by the window, so coming back to the dashboard shows the last reading at once
     let stream: StatusStream
+    /// last results of other pages, for suggestions (nothing is scanned for them)
+    let junk: JunkModel
+    let devtools: DevToolsModel
     @AppStorage("autoRefresh") private var autoRefresh = false
     @AppStorage("refreshInterval") private var refreshInterval = 5
     @AppStorage("refreshOnFocus") private var refreshOnFocus = false
@@ -46,6 +50,10 @@ struct DashboardPage: View {
                     }
                 }
 
+                let tips = Self.suggestions(status: s, junkBytes: junk.phase == .review ? junk.plan.bytes.double : nil,
+                                            devtoolsBytes: devtools.reclaimable)
+                if !tips.isEmpty { suggestions(tips) }
+
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Top processes").font(.system(size: 15, weight: .semibold))
                     ForEach(Array(s.top_processes.array.prefix(6).enumerated()), id: \.offset) { _, p in
@@ -85,6 +93,54 @@ struct DashboardPage: View {
     private func restartStream() {
         stream.stop()
         if autoRefresh { stream.start(every: refreshInterval) }
+    }
+
+    struct Suggestion: Equatable {
+        let symbol: String
+        let text: String
+        let module: Module
+    }
+
+    /// Up to three things worth doing, from the status reading and results already at hand.
+    static func suggestions(status s: JSON, junkBytes: Double?, devtoolsBytes: Double) -> [Suggestion] {
+        let gb = 1e9
+        var out: [Suggestion] = []
+        if let disk = s.disks.array.first(where: { $0.mount.string == "/" }),
+           let total = disk.total.double, let used = disk.used.double, total > 0, (total - used) / total < 0.1 {
+            out.append(.init(symbol: "internaldrive", text: String(localized: "Your disk is almost full: \(bytes(total - used)) free"), module: .spaceLens))
+        }
+        if let trash = s.trash_size.double, trash > gb {
+            out.append(.init(symbol: "trash", text: String(localized: "Empty the Trash (\(bytes(trash)))"), module: .tool("clean")))
+        }
+        if let junk = junkBytes, junk > 2 * gb {
+            out.append(.init(symbol: "sparkles", text: String(localized: "Clean \(bytes(junk)) of junk"), module: .tool("clean")))
+        }
+        if devtoolsBytes > 2 * gb {
+            out.append(.init(symbol: "hammer", text: String(localized: "Free \(bytes(devtoolsBytes)) from Docker and simulators"), module: .tool("devtools")))
+        }
+        return Array(out.prefix(3))
+    }
+
+    private func suggestions(_ tips: [Suggestion]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Suggestions").font(.system(size: 15, weight: .semibold)).padding(.bottom, 6)
+            ForEach(tips, id: \.text) { tip in
+                Button { Automation.shared.openModule = tip.module } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: tip.symbol).frame(width: 22)
+                        Text(verbatim: tip.text)
+                        Spacer()
+                        Image(systemName: "chevron.right").foregroundStyle(.dim)
+                    }
+                    .font(.system(size: 13))
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(20)
+        .glassPanel()
     }
 
     /// Load average in words: more runnable work than cores means the Mac is busy.
@@ -140,6 +196,8 @@ extension Tile where Accessory == EmptyView {
 
 struct HistoryPage: View {
     @State private var sessions: [JSON]?
+    /// freed per month, oldest first (`{month: "2026-11", bytes, sessions}`)
+    @State private var months: [JSON] = []
     @State private var log: String?
     @State private var error: String?
     @State private var putBackNote: String?
@@ -161,6 +219,7 @@ struct HistoryPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(art: "history", symbol: Module.history.icon, title: String(localized: "History"))
+            if !months.isEmpty { monthly }
             ScrollView {
                 VStack(spacing: 4) {
                     ForEach(Array((sessions ?? []).enumerated()), id: \.offset) { _, s in
@@ -231,11 +290,60 @@ struct HistoryPage: View {
         error = nil
         if history.ok.bool {
             sessions = history.sessions.array
+            months = history.months.array
             log = history.logs.deletions.string
         } else {
             error = history.error.string ?? String(localized: "The engine did not answer.")
             sessions = []
         }
+    }
+
+    /// Freed per month (the last 12), with this month's and the all-time total.
+    private var monthly: some View {
+        let current = Self.month.string(from: Date())
+        let thisMonth = months.first { $0.month.string == current }?.bytes.double ?? 0
+        let allTime = months.compactMap(\.bytes.double).reduce(0, +)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Freed this month: \(bytes(thisMonth))").font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Text("All time: \(bytes(allTime))").font(.system(size: 13)).foregroundStyle(.dim)
+            }
+            Chart(Array(months.suffix(12)), id: \.month.string) { m in
+                BarMark(x: .value("Month", Self.label(m.month.string)), y: .value("Freed", m.bytes.double ?? 0))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .cornerRadius(4)
+            }
+            .chartYAxis {
+                AxisMarks { v in
+                    AxisGridLine().foregroundStyle(.white.opacity(0.2))
+                    AxisValueLabel { Text(verbatim: bytes(v.as(Double.self))).foregroundStyle(.dim) }
+                }
+            }
+            .chartXAxis {
+                AxisMarks { _ in AxisValueLabel().foregroundStyle(.dim) }
+            }
+            .frame(height: 130)
+        }
+        .padding(16)
+        .glassPanel()
+    }
+
+    /// The engine counts months in UTC; so does this.
+    static let month: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM"
+        return f
+    }()
+
+    /// "2026-11" -> "Nov 2026" in the user's language.
+    static func label(_ month: String?) -> String {
+        guard let date = month.flatMap(Self.month.date(from:)) else { return month ?? "" }
+        var style = Date.FormatStyle.dateTime.month(.abbreviated).year()
+        style.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return date.formatted(style)
     }
 
     static func when(_ s: JSON) -> String {

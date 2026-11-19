@@ -114,3 +114,19 @@ import Testing
         #expect(compiled, "\(script): \(String(describing: error))")
     }
 }
+
+@Test func dashboardSuggestsOnlyWhatIsWorthIt() {
+    let quiet = JSON(["trash_size": 500_000_000, "disks": [["mount": "/", "total": 1e12, "used": 5e11]]])
+    #expect(DashboardPage.suggestions(status: quiet, junkBytes: 1e9, devtoolsBytes: 0).isEmpty)
+    let busy = JSON(["trash_size": 8e9, "disks": [["mount": "/", "total": 1e12, "used": 9.5e11]]])
+    let tips = DashboardPage.suggestions(status: busy, junkBytes: 5e9, devtoolsBytes: 3e9)
+    #expect(tips.count == 3)
+    #expect(tips.first?.module == .spaceLens)
+    #expect(tips.map(\.module).contains(.tool("clean")))
+}
+
+/// Read-only ops (the listing runs `docker system df` and `simctl list`, never a cleanup).
+@Test func historyHasMonthsAndDevtoolsAnswers() {
+    #expect(Engine.call(["op": "history"]).months.raw is [Any])
+    #expect(Engine.call(["op": "devtools"]).ok.bool)
+}
