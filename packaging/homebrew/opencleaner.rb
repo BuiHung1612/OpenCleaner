@@ -13,7 +13,13 @@ cask "opencleaner" do
 
   app "OpenCleaner.app"
 
+  # not notarized (no Apple Developer account): without this macOS blocks the first launch
+  postflight do
+    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/OpenCleaner.app"]
+  end
+
   zap trash: [
+    "~/Library/Application Support/OpenCleaner",
     "~/Library/Caches/OpenCleaner",
     "~/Library/Preferences/io.github.opencleaner.plist",
   ]
