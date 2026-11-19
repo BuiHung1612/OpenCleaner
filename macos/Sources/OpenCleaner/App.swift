@@ -136,7 +136,7 @@ struct MainView: View {
         .tint(.white)
         .animation(.easeInOut(duration: 0.35), value: module)
         .task { version = Engine.version }
-        .task { Updater.startAutomaticChecks() }
+        .task { Updater.startAutomaticChecks(); CrashReports.offer() }
         .onReceive(Automation.shared.$openModule.compactMap { $0 }) { module = $0; Automation.shared.openModule = nil }
     }
 

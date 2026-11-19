@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+PackageIdentifier: BuiHung1612.OpenCleaner
+PackageVersion: {{VERSION}}
+PackageLocale: en-US
+Publisher: BuiHung1612
+PublisherUrl: https://github.com/BuiHung1612
+PackageName: OpenCleaner
+PackageUrl: https://github.com/BuiHung1612/OpenCleaner
+# TODO before submitting: the real license once chosen (README says "license TBD")
+License: TBD
+ShortDescription: Free, open-source disk cleaner.
+Tags:
+  - cleaner
+  - disk-space
+ReleaseNotesUrl: https://github.com/BuiHung1612/OpenCleaner/releases/tag/v{{VERSION}}
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0
