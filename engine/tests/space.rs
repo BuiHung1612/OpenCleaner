@@ -26,8 +26,12 @@ fn dir_cache_reuses_unchanged_directories() {
     let t = TempDir::new();
     let root = t.path().join("tree");
     let cache = t.path().join("cache");
-    for i in 0..30 {
-        write(&root.join(format!("a/{}/{i}.bin", i % 5)), 1000 + i * 4096);
+    // 40 files per folder
+    for i in 0..200 {
+        write(
+            &root.join(format!("a/{}/{i}.bin", i % 5)),
+            1000 + (i % 30) * 4096,
+        );
     }
     write(&root.join("b/deep/x/y/f.bin"), 70_000);
     write(&root.join("top.bin"), 5000);
@@ -37,7 +41,7 @@ fn dir_cache_reuses_unchanged_directories() {
     let full = list(&root, None);
     let first = list(&root, Some(&cache));
     assert_eq!(sizes(&first), sizes(&full));
-    assert!(cache.join("space-dirs-v1.json").is_file());
+    assert!(cache.join("space-dirs-v3.jsonl").is_file());
 
     // grows in place: a/3's mtime does not change, so the cached size stays
     std::fs::OpenOptions::new()

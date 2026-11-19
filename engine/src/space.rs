@@ -255,7 +255,7 @@ fn measure(
     });
     let listing = snapshot(true);
     if let Some(dir) = cache {
-        sizer.cache = None; // the last reference to the map: store updates it in place
+        sizer.cache = None; // store reads the old table and then frees it
         dircache::store(dir, sizer.found.into_inner().unwrap());
     }
     listing
@@ -274,7 +274,7 @@ thread_local! {
 struct PartSizer {
     /// directories of each part queued or being read; 0: the part is fully sized
     left: Vec<AtomicU64>,
-    cache: Option<Arc<dircache::Map>>,
+    cache: Option<Arc<dircache::Table>>,
     /// directories read in this scan, for the cache
     found: Mutex<Vec<Rec>>,
     now: i64,
@@ -320,7 +320,7 @@ impl Visitor for PartSizer {
             return false;
         }
         let Some(r) = cache
-            .get(&(me.dev, me.ino))
+            .get((me.dev, me.ino))
             .filter(|r| r.usable(me.mtime, self.now))
         else {
             READING.set(Some(Rec {
@@ -335,12 +335,12 @@ impl Visitor for PartSizer {
         let i = tag as usize;
         self.files[i].fetch_add(r.files, Ordering::Relaxed);
         let mut bytes = r.bytes;
-        for &(dev, ino, alloc) in &r.links {
+        for &(dev, ino, alloc) in r.links {
             if self.links.first_time(dev, ino) {
                 bytes += alloc;
             }
         }
-        for (name, alloc) in &r.dirs {
+        for (name, alloc) in r.dirs() {
             if self.skipped(dir, name.as_ref()) {
                 continue;
             }
@@ -360,7 +360,7 @@ impl Visitor for PartSizer {
                     return None;
                 }
                 self.note(|r| match (r.as_mut(), e.name.to_str()) {
-                    (Some(rec), Some(name)) => rec.dirs.push((name.to_owned(), e.alloc)),
+                    (Some(rec), Some(name)) => rec.add_dir(name, e.alloc),
                     _ => *r = None, // a name the cache file cannot hold
                 });
                 if self.skipped(dir, &e.name) {
@@ -409,6 +409,8 @@ impl Visitor for PartSizer {
             // modified in the last seconds: it could change again within the same mtime
             && rec.mtime + 2 <= self.now
         {
+            let mut rec = rec;
+            rec.shrink();
             self.found.lock().unwrap().push(rec);
         }
     }
