@@ -223,8 +223,9 @@
 "Fixes garbled or missing fonts. Takes effect after you log out." = "Sửa phông chữ bị lỗi hoặc thiếu. Có hiệu lực sau khi bạn đăng xuất.";
 "Rebuild the “Open With” list" = "Tạo lại danh sách “Mở bằng”";
 "Removes duplicate or deleted apps from Open With menus." = "Bỏ các ứng dụng trùng hoặc đã xóa khỏi menu Mở bằng.";
-"Free inactive memory" = "Giải phóng bộ nhớ không dùng";
-"Asks macOS to drop cached memory now. Apps may start a little slower afterwards." = "Yêu cầu macOS bỏ bộ nhớ đệm ngay. Ứng dụng có thể khởi động chậm hơn một chút sau đó.";
+"Free up memory" = "Giải phóng bộ nhớ";
+"macOS manages memory well on its own. This drops its file caches (purge), so apps may be slower right after while they reload. Useful mostly just before a heavy task." = "macOS tự quản lý bộ nhớ tốt. Tác vụ này bỏ bộ nhớ đệm tệp (purge), nên ngay sau đó ứng dụng có thể chậm hơn trong lúc nạp lại. Chủ yếu hữu ích ngay trước một việc nặng.";
+"Free memory: %@ before, %@ after" = "Bộ nhớ trống: %@ trước, %@ sau";
 "Intel code" = "Mã Intel";
 "Open now: quit it first" = "Đang mở: hãy thoát trước";
 "Needs administrator rights" = "Cần quyền quản trị";
@@ -430,3 +431,42 @@
 "Check Now" = "Kiểm tra ngay";
 "No excluded folders" = "Chưa loại trừ thư mục nào";
 "The new language shows after a relaunch." = "Ngôn ngữ mới sẽ hiện sau khi mở lại ứng dụng.";
+
+/* Developer Tools */
+"Developer Tools" = "Công cụ lập trình";
+"Give back space held by Docker and Xcode's iOS Simulators, with their own cleanup commands." = "Lấy lại dung lượng Docker và iOS Simulator của Xcode đang giữ, bằng chính lệnh dọn dẹp của chúng.";
+"Runs Docker's and Xcode's own commands" = "Chạy lệnh của chính Docker và Xcode";
+"Nothing runs until you press Clean" = "Không chạy gì cho đến khi bạn bấm Dọn dẹp";
+"Docker" = "Docker";
+"Docker is not running" = "Docker không chạy";
+"iOS Simulators" = "iOS Simulator";
+"Simulators use %@ in ~/Library/Developer/CoreSimulator/Devices" = "Các simulator chiếm %@ trong ~/Library/Developer/CoreSimulator/Devices";
+"No developer tools found" = "Không tìm thấy công cụ lập trình";
+"Docker and Xcode's simulators are not set up on this Mac." = "Docker và simulator của Xcode chưa được cài trên máy Mac này.";
+"Run the cleanup of %lld items? What they remove cannot be put back." = "Chạy dọn dẹp %lld mục? Những gì bị xóa không thể khôi phục.";
+"Freed %@." = "Đã giải phóng %@.";
+"Unused images" = "Image không dùng";
+"Images no container uses. Docker downloads them again when needed." = "Image không container nào dùng. Docker sẽ tải lại khi cần.";
+"Build cache" = "Bộ nhớ đệm build";
+"Cached build steps. The next build of each image takes longer." = "Các bước build đã lưu. Lần build tiếp theo của mỗi image sẽ lâu hơn.";
+"Stopped containers" = "Container đã dừng";
+"Containers that are not running, with any changes made inside them." = "Container không chạy, cùng mọi thay đổi bên trong chúng.";
+"Unused volumes" = "Volume không dùng";
+"Anonymous volumes no container uses. They can hold data such as databases, which is lost for good." = "Volume ẩn danh không container nào dùng. Chúng có thể chứa dữ liệu như cơ sở dữ liệu, và dữ liệu đó sẽ mất vĩnh viễn.";
+"Simulators of removed Xcode versions" = "Simulator của các bản Xcode đã gỡ";
+"Their runtime is no longer installed, so they cannot run any more." = "Runtime của chúng không còn được cài, nên không chạy được nữa.";
+"Unused simulator runtime" = "Runtime simulator không dùng";
+"No simulator uses it. Xcode downloads it again if you need it." = "Không simulator nào dùng. Xcode sẽ tải lại nếu bạn cần.";
+
+/* Dashboard suggestions */
+"Suggestions" = "Gợi ý";
+"Your disk is almost full: %@ free" = "Ổ đĩa gần đầy: còn trống %@";
+"Empty the Trash (%@)" = "Dọn sạch Thùng rác (%@)";
+"Clean %@ of junk" = "Dọn %@ rác";
+"Free %@ from Docker and simulators" = "Giải phóng %@ từ Docker và simulator";
+
+/* History by month */
+"Freed this month: %@" = "Đã giải phóng tháng này: %@";
+"All time: %@" = "Tổng cộng: %@";
+"Month" = "Tháng";
+"Freed" = "Đã giải phóng";

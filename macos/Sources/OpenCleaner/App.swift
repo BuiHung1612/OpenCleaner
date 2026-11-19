@@ -124,6 +124,7 @@ struct MainView: View {
     @State private var slim = PicksModel()
     @State private var largeOld = PicksModel()
     @State private var duplicates = PicksModel()
+    @State private var devtools = DevToolsModel()
     @AppStorage("largeMiB") private var largeMiB = 500
     @AppStorage("idleDays") private var idleDays = 180
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -214,7 +215,7 @@ struct MainView: View {
 
     @ViewBuilder private var page: some View {
         switch module {
-        case .dashboard: DashboardPage(stream: status)
+        case .dashboard: DashboardPage(stream: status, junk: junk, devtools: devtools)
         case .spaceLens: SpaceLensPage(model: lens)
         case .uninstaller: UninstallerPage(model: apps)
         case .history: HistoryPage()
@@ -230,6 +231,7 @@ struct MainView: View {
                 case "optimize": OptimizePage(tool: tool)
                 case "touchid": TouchIDPage(tool: tool)
                 case "startup": StartupPage(tool: tool)
+                case "devtools": DevToolsPage(tool: tool, model: devtools)
                 default: Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
                 }
             }

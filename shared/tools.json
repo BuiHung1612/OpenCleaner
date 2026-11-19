@@ -46,6 +46,21 @@
       ]
     },
     {
+      "id": "devtools",
+      "group": "Cleanup",
+      "title": "Developer Tools",
+      "subtitle": "Give back space held by Docker and Xcode's iOS Simulators, with their own cleanup commands.",
+      "points": [
+        "Runs Docker's and Xcode's own commands",
+        "Nothing runs until you press Clean"
+      ],
+      "icon": "hammer",
+      "colors": [
+        "#2F5D8A",
+        "#1A2140"
+      ]
+    },
+    {
       "id": "optimize",
       "group": "Speed",
       "title": "Optimization",

@@ -68,8 +68,8 @@ pub fn tasks() -> Vec<Task> {
         },
         Task {
             id: "memory",
-            title: "Free inactive memory",
-            note: "Asks macOS to drop cached memory now. Apps may start a little slower afterwards.",
+            title: "Free up memory",
+            note: "macOS manages memory well on its own. This drops its file caches (purge), so apps may be slower right after while they reload. Useful mostly just before a heavy task.",
             admin: true,
             commands: &[&["/usr/sbin/purge"]],
         },

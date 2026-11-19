@@ -83,6 +83,7 @@ pub fn sessions(ctx: &Context, limit: usize) -> Value {
     let mut out = Vec::new();
     // items come before their session line
     let mut trashed: Vec<Value> = Vec::new();
+    let mut freed = Vec::new();
     for line in lines(ctx) {
         match line {
             Line::Item {
@@ -100,19 +101,50 @@ pub fn sessions(ctx: &Context, limit: usize) -> Value {
                 bytes,
                 failed,
                 ..
-            } => out.push(json!({
+            } => {
+                freed.push((started, bytes));
+                out.push(json!({
                 "command": command,
                 "started_unix": started,
                 "items": items,
                 "bytes": bytes,
                 "failed": failed,
                 "trashed": std::mem::take(&mut trashed),
-            })),
+                }))
+            }
         }
     }
     out.reverse();
     out.truncate(limit);
-    json!({"sessions": out, "logs": {"deletions": path(ctx)}})
+    json!({"sessions": out, "months": months(&freed), "logs": {"deletions": path(ctx)}})
+}
+
+/// Bytes freed and sessions per month (UTC), oldest first, from (started, bytes) pairs.
+pub fn months(sessions: &[(u64, u64)]) -> Vec<Value> {
+    let mut by: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
+    for &(started, bytes) in sessions {
+        let m = by.entry(month(started)).or_default();
+        m.0 += bytes;
+        m.1 += 1;
+    }
+    by.into_iter()
+        .map(|(month, (bytes, sessions))| json!({"month": month, "bytes": bytes, "sessions": sessions}))
+        .collect()
+}
+
+/// "YYYY-MM" of a Unix time, in UTC (days to civil date, Howard Hinnant's algorithm).
+// ponytail: UTC, so a cleanup late on the last evening of a month can count for the next
+// one in time zones east of UTC; use the local offset if that ever matters.
+pub fn month(unix: u64) -> String {
+    let z = (unix / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}")
 }
 
 fn lines(ctx: &Context) -> impl Iterator<Item = Line> {
@@ -130,4 +162,24 @@ pub fn was_trashed(ctx: &Context, from: &Path, to: &Path) -> bool {
 
 pub fn exists(ctx: &Context) -> bool {
     Path::new(&path(ctx)).exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn months_add_up_per_calendar_month() {
+        assert_eq!(month(0), "1970-01");
+        assert_eq!(month(951_782_400), "2000-02"); // 2000-02-29 00:00 UTC
+        assert_eq!(month(1_798_761_599), "2026-12"); // 2026-12-31 23:59:59
+        assert_eq!(month(1_798_761_600), "2027-01");
+        let m = months(&[(1_798_761_599, 10), (1_798_761_000, 5), (1_798_761_600, 7)]);
+        assert_eq!(m.len(), 2);
+        assert_eq!(
+            m[0],
+            json!({"month": "2026-12", "bytes": 15, "sessions": 2})
+        );
+        assert_eq!(m[1], json!({"month": "2027-01", "bytes": 7, "sessions": 1}));
+    }
 }

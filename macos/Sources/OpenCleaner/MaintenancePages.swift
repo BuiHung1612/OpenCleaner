@@ -32,6 +32,8 @@ struct OptimizePage: View {
     @State private var running = false
     @State private var results: [String: String] = [:]
     @State private var done = false
+    /// "Free up memory": free memory before and after, so the effect is plain to see
+    @State private var memoryNote: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -91,6 +93,9 @@ struct OptimizePage: View {
                     }
                 }
                 Text(tr(task.note.string ?? "")).font(.system(size: 12)).foregroundStyle(.dim)
+                if id == "memory", let memoryNote {
+                    Text(verbatim: memoryNote).font(.system(size: 12, weight: .medium)).monospacedDigit()
+                }
             }
             Spacer()
             if let result = results[id] {
@@ -110,15 +115,22 @@ struct OptimizePage: View {
         }
     }
 
+    private static func freeMemory() async -> Double? {
+        await Engine.ask(["op": "status"]).memory.free.double
+    }
+
     private func run() async {
         running = true
         results = [:]
+        memoryNote = nil
         let ids = Array(selected)
         let reply = await Task.detached { Engine.call(["op": "optimize", "tasks": ids]) }.value
         for r in reply.results.array {
             if let id = r.id.string { results[id] = r.ok.bool ? "✓" : (r.message.string ?? String(localized: "Failed")) }
         }
         if let script = reply.admin_script.string {
+            let memory = ids.contains("memory")
+            let before = memory ? await Self.freeMemory() : nil
             let admin = tasks.filter { $0.admin.bool && selected.contains($0.id.string ?? "") }.compactMap(\.id.string)
             let mark: String
             switch await Privileged.run(script) {
@@ -127,6 +139,10 @@ struct OptimizePage: View {
             case .failed(let message): mark = message
             }
             for id in admin { results[id] = mark }
+            if memory, mark == "✓" {
+                let after = await Self.freeMemory()
+                memoryNote = String(localized: "Free memory: \(bytes(before)) before, \(bytes(after)) after")
+            }
         }
         running = false
         done = results.values.allSatisfy { $0 == "✓" }

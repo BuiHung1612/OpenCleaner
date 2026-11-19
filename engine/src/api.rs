@@ -132,6 +132,12 @@ enum Request {
     PutBack {
         items: Vec<Moved>,
     },
+    /// Developer Tools: what Docker and the iOS Simulator can give back (read-only).
+    Devtools,
+    /// Runs the cleanup commands of the chosen Developer Tools items (`freed`, `ran`, `failures`).
+    DevtoolsClean {
+        items: Vec<String>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -271,6 +277,17 @@ pub fn call(request: &str) -> Value {
             v["ok"] = json!(true);
             v
         }
+        Ok(Request::Devtools) => {
+            let mut v = serde_json::to_value(crate::devtools::list(ctx())).unwrap_or(Value::Null);
+            v["ok"] = json!(true);
+            v
+        }
+        Ok(Request::DevtoolsClean { items }) => {
+            let mut v =
+                serde_json::to_value(crate::devtools::clean(ctx(), &items)).unwrap_or(Value::Null);
+            v["ok"] = json!(true);
+            v
+        }
         Ok(Request::History { limit }) => {
             let mut v = ledger::sessions(ctx(), limit);
             v["ok"] = json!(true);
@@ -336,7 +353,9 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         | Request::TouchidScript { .. }
         | Request::StartupItems
         | Request::DisableStartup { .. }
-        | Request::Permissions => emit(json!({"event": "error", "error": "use call"})),
+        | Request::Permissions
+        | Request::Devtools
+        | Request::DevtoolsClean { .. } => emit(json!({"event": "error", "error": "use call"})),
         Request::Apps => {
             let list = apps::list(ctx(), &procs::Running::snapshot());
             emit(json!({"event": "apps", "apps": list}));

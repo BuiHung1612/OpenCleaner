@@ -40,6 +40,8 @@ pub struct Memory {
     pub total: u64,
     pub used: u64,
     pub used_percent: f64,
+    /// Not in use at all (file caches count as used here, unlike in `used`)
+    pub free: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -327,6 +329,11 @@ mod platform {
         } else {
             0
         };
+        let free = if rc == 0 {
+            vm.free_count as u64 * page
+        } else {
+            0
+        };
         Memory {
             total,
             used,
@@ -335,6 +342,7 @@ mod platform {
             } else {
                 0.0
             },
+            free,
         }
     }
 
@@ -493,6 +501,7 @@ mod platform {
             total: m.ullTotalPhys,
             used,
             used_percent: used as f64 / m.ullTotalPhys.max(1) as f64 * 100.0,
+            free: m.ullAvailPhys,
         }
     }
 
