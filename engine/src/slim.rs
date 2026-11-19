@@ -2,7 +2,9 @@
 //!
 //! The app is cloned (APFS clone: no extra space), every universal Mach-O file in the
 //! clone is cut down to its arm64 slice, and the clone must pass `codesign --verify
-//! --deep --strict` (the original too, first). Only then are the two swapped by rename and
+//! --deep --strict` (the original too, first). Files sealed as plain resources (loose
+//! dylibs inside some frameworks) break the seal when cut: codesign names them, they are
+//! put back from the original, and the check runs again. Only then are the two swapped by rename and
 //! the original goes to the Trash, so it can be put back.
 
 use crate::apps::App;
@@ -167,15 +169,36 @@ fn writable(path: &Path) -> bool {
 }
 
 fn verify(path: &Path) -> bool {
-    Command::new("/usr/bin/codesign")
-        .args(["--verify", "--deep", "--strict"])
-        .arg(path)
-        .output()
-        .is_ok_and(|o| o.status.success())
+    check(path).is_ok()
 }
 
-/// Thins one app in place (see the module comment). The original ends up in the Trash.
-pub fn slim_app(app: &Path) -> io::Result<()> {
+/// codesign's verdict: Ok, or what it blames: files modified or missing, or a nested
+/// bundle ("In subcomponent") without naming files (empty when it failed for another reason).
+fn check(path: &Path) -> Result<(), Vec<PathBuf>> {
+    let Ok(out) = Command::new("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict", "-vvvv"]) // -vvvv names the files that break the seal
+        .arg(path)
+        .output()
+    else {
+        return Err(Vec::new());
+    };
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter_map(|l| {
+            l.strip_prefix("file modified: ")
+                .or_else(|| l.strip_prefix("file missing: "))
+                .or_else(|| l.strip_prefix("In subcomponent: "))
+        })
+        .map(PathBuf::from)
+        .collect())
+}
+
+/// Thins one app in place (see the module comment) and returns the bytes it saved. The
+/// original ends up in the Trash.
+pub fn slim_app(app: &Path) -> io::Result<u64> {
     if !cfg!(target_arch = "aarch64") {
         return Err(io::Error::other("only on Apple Silicon"));
     }
@@ -207,18 +230,50 @@ pub fn slim_app(app: &Path) -> io::Result<()> {
     }
     clonefile(app, &clone)?;
     let result = (|| {
+        let mut saved: std::collections::HashMap<PathBuf, u64> = std::collections::HashMap::new();
         for (path, fat) in fat_files(&clone) {
             thin(&path, &fat)?;
+            saved.insert(path, fat.other_bytes);
         }
-        if !verify(&clone) {
+        // put back the thinned files codesign blames (a file, or everything thinned inside a
+        // nested bundle), one round per broken seal
+        for _ in 0..16 {
+            let Err(blamed) = check(&clone) else { break };
+            // codesign names a file, or only the bundle whose seal broke (or nothing, for the
+            // app itself): then the suspects are the thinned files that bundle seals as plain
+            // resources, never its own executable, which carries its own signature
+            let roots: Vec<PathBuf> = if blamed.is_empty() {
+                vec![clone.clone()]
+            } else {
+                blamed
+            };
+            let back: Vec<PathBuf> = saved
+                .keys()
+                .filter(|f| roots.iter().any(|b| *f == b || sealed_by(b, f)))
+                .cloned()
+                .collect();
+            if back.is_empty() {
+                break;
+            }
+            for f in back {
+                saved.remove(&f);
+                let rel = f.strip_prefix(&clone).map_err(io::Error::other)?;
+                fs::remove_file(&f)?;
+                clonefile(&app.join(rel), &f)?;
+            }
+        }
+        if saved.is_empty() || !verify(&clone) {
             return Err(io::Error::other("its signature would break; not changed"));
         }
-        Ok(())
+        Ok(saved.values().sum::<u64>())
     })();
-    if let Err(e) = result {
-        let _ = fs::remove_dir_all(&clone);
-        return Err(e);
-    }
+    let saved = match result {
+        Ok(saved) => saved,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&clone);
+            return Err(e);
+        }
+    };
     fs::rename(app, &old)?;
     if let Err(e) = fs::rename(&clone, app) {
         let _ = fs::rename(&old, app);
@@ -227,7 +282,39 @@ pub fn slim_app(app: &Path) -> io::Result<()> {
     }
     crate::trash::move_to_trash(&old)
         .map(|_| ())
-        .or_else(|_| fs::remove_dir_all(&old))
+        .or_else(|_| fs::remove_dir_all(&old))?;
+    Ok(saved)
+}
+
+/// A file `bundle` seals as a plain resource: inside it, not inside a bundle nested in it,
+/// and not its executable (`Contents/MacOS/*` of an app, `Versions/*/<Name>` of a framework).
+fn sealed_by(bundle: &Path, file: &Path) -> bool {
+    let Ok(rel) = file.strip_prefix(bundle) else {
+        return false;
+    };
+    let parts: Vec<&std::ffi::OsStr> = rel.iter().collect();
+    let is_bundle = |c: &std::ffi::OsStr| {
+        Path::new(c).extension().is_some_and(|e| {
+            ["app", "framework", "bundle", "xpc", "appex", "plugin"]
+                .contains(&e.to_string_lossy().as_ref())
+        })
+    };
+    if parts
+        .iter()
+        .take(parts.len().saturating_sub(1))
+        .any(|c| is_bundle(c))
+    {
+        return false;
+    }
+    let name = bundle.file_stem().unwrap_or_default();
+    let executable = match bundle.extension().and_then(|e| e.to_str()) {
+        Some("framework") => {
+            parts.last() == Some(&name)
+                && (parts.len() == 1 || parts.first() == Some(&"Versions".as_ref()))
+        }
+        _ => parts.first() == Some(&"Contents".as_ref()) && parts.get(1) == Some(&"MacOS".as_ref()),
+    };
+    !executable
 }
 
 /// Replaces a universal file with its arm64 slice, keeping its permissions.
@@ -285,6 +372,35 @@ mod tests {
         }
         out.resize(out.len() + pad, 0);
         out
+    }
+
+    #[test]
+    fn plain_sealed_files_are_told_apart_from_executables_and_nested_bundles() {
+        let app = Path::new("/A/X.app");
+        assert!(sealed_by(
+            app,
+            Path::new("/A/X.app/Contents/Resources/updater.node")
+        ));
+        assert!(!sealed_by(app, Path::new("/A/X.app/Contents/MacOS/X")));
+        assert!(!sealed_by(
+            app,
+            Path::new("/A/X.app/Contents/Frameworks/E.framework/Versions/A/Libraries/libEGL.dylib")
+        ));
+        let fw = Path::new("/A/X.app/Contents/Frameworks/E.framework");
+        assert!(sealed_by(
+            fw,
+            Path::new("/A/X.app/Contents/Frameworks/E.framework/Versions/A/Libraries/libEGL.dylib")
+        ));
+        assert!(!sealed_by(
+            fw,
+            Path::new("/A/X.app/Contents/Frameworks/E.framework/Versions/A/E")
+        ));
+        assert!(!sealed_by(
+            fw,
+            Path::new(
+                "/A/X.app/Contents/Frameworks/E.framework/Versions/A/Helpers/H.app/Contents/MacOS/H"
+            )
+        ));
     }
 
     #[test]

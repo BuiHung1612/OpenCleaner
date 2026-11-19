@@ -233,10 +233,15 @@ pub fn execute(
             Some(why) => Err(Failure::Skipped(why.clone())),
             None => act(pick, &running, ctx),
         };
+        // what it freed: measured for Slim (only part of the Intel code may go), else the listing's size
+        let freed = match &result {
+            Ok(done) => done.freed.unwrap_or(pick.bytes),
+            Err(_) => 0,
+        };
         let (word, reason) = match &result {
             Ok(_) => {
                 out.removed += 1;
-                out.bytes += pick.bytes;
+                out.bytes += freed;
                 ("removed", None)
             }
             Err(Failure::Skipped(why)) => {
@@ -258,10 +263,10 @@ pub fn execute(
             session,
             rule: command.clone(),
             path: pick.path.clone(),
-            bytes: if word == "removed" { pick.bytes } else { 0 },
+            bytes: freed,
             result: word.into(),
             reason,
-            trashed: result.ok().flatten(),
+            trashed: result.ok().and_then(|done| done.trashed),
         });
     }
     out.current = None;
@@ -282,8 +287,15 @@ enum Failure {
     Failed(String),
 }
 
-/// On success, where the item went in the Trash (when it went there and the system said).
-fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<Option<PathBuf>, Failure> {
+/// What acting on one pick did.
+struct Done {
+    /// where the item went in the Trash (when it went there and the system said)
+    trashed: Option<PathBuf>,
+    /// bytes freed, when measured rather than the listing's estimate
+    freed: Option<u64>,
+}
+
+fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<Done, Failure> {
     let (Some(purpose), Some(id)) = (pick.purpose, pick.id) else {
         return Err(Failure::Skipped("not checked".into()));
     };
@@ -300,10 +312,17 @@ fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<Option<PathBuf>,
     if !guard::still_same(&pick.path, &id) {
         return Err(Failure::Skipped("changed since it was listed".into()));
     }
+    let done = |trashed| Done {
+        trashed,
+        freed: None,
+    };
     let result = match pick.action {
-        Action::Trash => trash::move_to_trash(&pick.path),
-        Action::Delete => remove(&pick.path, id.kind).map(|()| None),
-        Action::Slim => slim(&pick.path).map(|()| None),
+        Action::Trash => trash::move_to_trash(&pick.path).map(done),
+        Action::Delete => remove(&pick.path, id.kind).map(|()| done(None)),
+        Action::Slim => slim(&pick.path).map(|freed| Done {
+            trashed: None,
+            freed: Some(freed),
+        }),
     };
     result.map_err(|e| Failure::Failed(e.to_string()))
 }
@@ -316,11 +335,11 @@ fn remove(path: &Path, kind: Kind) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn slim(path: &Path) -> std::io::Result<()> {
+fn slim(path: &Path) -> std::io::Result<u64> {
     crate::slim::slim_app(path)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn slim(_path: &Path) -> std::io::Result<()> {
+fn slim(_path: &Path) -> std::io::Result<u64> {
     Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
