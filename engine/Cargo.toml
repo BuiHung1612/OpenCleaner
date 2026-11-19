@@ -1,6 +1,6 @@
 [package]
 name = "oc_engine"
-version = "0.2.2"
+version = "0.3.0"
 license = "MIT"
 edition = "2024"
 description = "OpenCleaner engine: disk scanning, sizing and cleaning for macOS and Windows"
