@@ -229,20 +229,19 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: s
         <table>
           <thead><tr><th><span class="en">Task</span><span class="vi">Tác vụ</span></th><th><span class="en">First run</span><span class="vi">Lần đầu</span></th><th><span class="en">Again</span><span class="vi">Lần sau</span></th><th><span class="en">Peak RAM</span><span class="vi">RAM tối đa</span></th></tr></thead>
           <tbody>
-            <tr><td><span class="en">System Junk scan</span><span class="vi">Quét Rác hệ thống</span></td><td><b>7.3 s</b></td><td>0.1 s</td><td>17 MiB</td></tr>
-            <tr><td><span class="en">Space Lens: ~/Library</span><span class="vi">Space Lens: ~/Library</span></td><td><b>5.1 s</b></td><td>0.37 s</td><td>97 MiB</td></tr>
-            <tr><td><span class="en">Space Lens: /Applications</span><span class="vi">Space Lens: /Applications</span></td><td><b>2.1 s</b></td><td>—</td><td>90 MiB</td></tr>
-            <tr><td><span class="en">Space Lens: startup disk</span><span class="vi">Space Lens: ổ khởi động</span></td><td><b>20.6 s</b></td><td>10.5 s</td><td>450 MiB</td></tr>
-            <tr><td><span class="en">App list with sizes</span><span class="vi">Danh sách ứng dụng kèm dung lượng</span></td><td><b>1.5 s</b></td><td>0.06 s</td><td>11 MiB</td></tr>
-            <tr><td><span class="en">Project Junk search</span><span class="vi">Tìm Rác dự án</span></td><td><b>4.4 s</b></td><td>—</td><td>10 MiB</td></tr>
-            <tr><td><span class="en">Installers</span><span class="vi">Tệp cài đặt</span></td><td><b>0.08 s</b></td><td>—</td><td>6 MiB</td></tr>
-            <tr><td><span class="en">Dashboard reading</span><span class="vi">Đọc số liệu Tổng quan</span></td><td><b>0.4 s</b></td><td>—</td><td>7 MiB</td></tr>
+            <tr><td><span class="en">System Junk scan</span><span class="vi">Quét Rác hệ thống</span></td><td><b>6.5 s</b></td><td><span class="en">0.1 s</span><span class="vi">0,1 s</span></td><td>25 MiB</td></tr>
+            <tr><td><span class="en">Space Lens: ~/Library</span><span class="vi">Space Lens: ~/Library</span></td><td><b>5.0 s</b></td><td><span class="en">0.20 s</span><span class="vi">0,20 s</span></td><td>36 MiB</td></tr>
+            <tr><td><span class="en">Space Lens: startup disk</span><span class="vi">Space Lens: ổ khởi động</span></td><td><b>20.5 s</b></td><td><span class="en">1.1 s</span><span class="vi">1,1 s</span></td><td>144 MiB</td></tr>
+            <tr><td><span class="en">App list with sizes</span><span class="vi">Danh sách ứng dụng kèm dung lượng</span></td><td><b>2.0 s</b></td><td><span class="en">0.05 s</span><span class="vi">0,05 s</span></td><td>11 MiB</td></tr>
+            <tr><td><span class="en">Project Junk search</span><span class="vi">Tìm Rác dự án</span></td><td><b>4.4 s</b></td><td><span class="en"></span><span class="vi"></span></td><td>10 MiB</td></tr>
+            <tr><td><span class="en">Installers</span><span class="vi">Tệp cài đặt</span></td><td><b>0.08 s</b></td><td><span class="en"></span><span class="vi"></span></td><td>6 MiB</td></tr>
+            <tr><td><span class="en">Dashboard reading</span><span class="vi">Đọc số liệu Tổng quan</span></td><td><b>0.38 s</b></td><td><span class="en"></span><span class="vi"></span></td><td>7 MiB</td></tr>
           </tbody>
         </table>
         </div>
         <p class="note">
-          <span class="en">Apple M2 Mac mini, 16 GB, macOS 27.2, about 450 GB used, busy with other work (load average 3–5). Each task is the engine on its own (<code>oce run</code>), reading only. "Again": System Junk shows the last sizes at once while it measures again; Space Lens and the app list reuse what has not changed.</span>
-          <span class="vi">Apple M2 Mac mini, 16 GB, macOS 27.2, đã dùng khoảng 450 GB, máy đang bận việc khác (load average 3–5). Mỗi tác vụ là engine chạy riêng (<code>oce run</code>), chỉ đọc. "Lần sau": Rác hệ thống hiện ngay số đo lần trước trong lúc đo lại; Space Lens và danh sách ứng dụng dùng lại phần không thay đổi.</span>
+          <span class="en">Apple M2 Mac mini, 16 GB, macOS 27.2, about 450 GB used, load average 5–6; the engine on its own, reading only, median of 3 runs. "Again": System Junk shows the last sizes at once while it measures again; Space Lens asks macOS which folders changed and reads only those. Idle, the app uses about 0.1% CPU and 45 MB of memory.</span>
+          <span class="vi">Apple M2 Mac mini, 16 GB, macOS 27.2, đã dùng khoảng 450 GB, load average 5–6; engine chạy riêng, chỉ đọc, trung vị của 3 lần. "Lần sau": Rác hệ thống hiện ngay số đo lần trước trong lúc đo lại; Space Lens hỏi macOS thư mục nào đã đổi và chỉ đọc lại các thư mục đó. Khi để không, ứng dụng dùng khoảng 0,1% CPU và 45 MB bộ nhớ.</span>
         </p>
       </div>
       <div class="card">

@@ -80,20 +80,21 @@ Caches are deleted; apps, installers and slimmed originals go to the Trash (put 
 
 ### Speed
 
-Measured on an Apple M2 Mac mini (16 GB, macOS 27.2, about 450 GB used, busy with other work: load average 3–5), the engine on its own (`oce run '<request>'`), reading only:
+Measured on an Apple M2 Mac mini (16 GB, macOS 27.2, about 450 GB used, load average 5–6), the engine on its own (`oce run '<request>'`), reading only, median of 3 runs:
 
 | Task | First run | Again | Peak RAM |
 |---|---:|---:|---:|
-| System Junk scan | 7.3 s | 0.1 s (last sizes shown at once, measured again in 4.4 s) | 17 MiB |
-| Space Lens: ~/Library | 5.1 s | 0.37 s | 97 MiB |
-| Space Lens: /Applications | 2.1 s | | 90 MiB |
-| Space Lens: startup disk | 20.6 s | 10.5 s | 450 MiB |
-| App list with sizes | 1.5 s | 0.06 s | 11 MiB |
-| Project Junk search | 4.4 s | | 10 MiB |
-| Installers | 0.08 s | | 6 MiB |
-| Dashboard reading | 0.4 s | | 7 MiB |
+| System Junk scan | 6.5 s | 0.1 s (shown at once; exact again after 4.7 s) | 25 MiB |
+| Space Lens: ~/Library | 5.0 s | 0.20 s | 36 MiB |
+| Space Lens: startup disk | 20.5 s | 1.1 s | 144 MiB |
+| App list with sizes | 2.0 s | 0.05 s | 11 MiB |
+| Project Junk search | 4.4 s |  | 10 MiB |
+| Installers | 0.08 s |  | 6 MiB |
+| Dashboard reading | 0.38 s |  | 7 MiB |
 
-"Again" reuses what has not changed: the last System Junk sizes (only for display; what is removed and the bytes freed come from the new measurement), Space Lens's per-folder sizes (trusted for an hour), the app sizes (until an app changes). Directory walks are bound by the kernel.
+"Again" reuses what has not changed: System Junk shows the last sizes at once (only for display; what is removed and the bytes freed come from the new measurement); Space Lens asks macOS (FSEvents) which folders changed since the last scan and reads only those; app sizes are kept until an app changes.
+
+The app itself, idle (window open on the Dashboard or System Junk, or closed with the menu bar item): about 0.1% CPU and 45 MB of memory.
 
 ## Translations
 
