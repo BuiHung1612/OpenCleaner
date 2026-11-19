@@ -156,29 +156,78 @@ pub fn timers(hwnd: HWND, spinning: bool) {
     }
 }
 
+/// Kept between paints: the back buffer, and the backdrop (gradient, light blobs, sidebar
+/// glass), redrawn only when the page colors, theme, size or DPI change.
+struct Buffers {
+    back: HDC,
+    back_bmp: HBITMAP,
+    bg: HDC,
+    bg_bmp: HBITMAP,
+    size: (i32, i32),
+    /// (page colors, light theme, scale bits) the backdrop was drawn for
+    key: Option<((u32, u32), bool, u32)>,
+}
+
+thread_local! {
+    static BUFFERS: RefCell<Option<Buffers>> = const { RefCell::new(None) };
+}
+
+/// Paints only the invalidated area: the backdrop is copied from its cache, the page is drawn
+/// clipped to that area (so a spinner tick repaints a few dozen pixels, not the window).
 fn paint(hwnd: HWND) {
     unsafe {
         let mut ps: PAINTSTRUCT = std::mem::zeroed();
         let hdc = BeginPaint(hwnd, &mut ps);
         let mut rc = RECT { left: 0, top: 0, right: 0, bottom: 0 };
         GetClientRect(hwnd, &mut rc);
-        let mem = CreateCompatibleDC(hdc);
-        let bmp = CreateCompatibleBitmap(hdc, rc.right.max(1), rc.bottom.max(1));
-        let old = SelectObject(mem, bmp);
+        let (w, h) = (rc.right.max(1), rc.bottom.max(1));
+        let d = ps.rcPaint;
         let s = scale(hwnd);
-        let fonts = with(|st| {
-            let mut c = Canvas::new(mem, s);
-            st.draw(&mut c, rc.right as f32 / s, rc.bottom as f32 / s);
-            (c, std::mem::take(&mut st.fonts))
+        BUFFERS.with(|cell| {
+            let Ok(mut b) = cell.try_borrow_mut() else { return };
+            let b = b.get_or_insert_with(|| Buffers {
+                back: CreateCompatibleDC(hdc),
+                back_bmp: null_mut(),
+                bg: CreateCompatibleDC(hdc),
+                bg_bmp: null_mut(),
+                size: (0, 0),
+                key: None,
+            });
+            if b.size != (w, h) {
+                for (dc, bmp) in [(b.back, &mut b.back_bmp), (b.bg, &mut b.bg_bmp)] {
+                    let new = CreateCompatibleBitmap(hdc, w, h);
+                    SelectObject(dc, new);
+                    if !bmp.is_null() {
+                        DeleteObject(*bmp);
+                    }
+                    *bmp = new;
+                }
+                b.size = (w, h);
+                b.key = None;
+            }
+            let (lw, lh) = (w as f32 / s, h as f32 / s);
+            if let Some(colors) = with(|st| st.palette()) {
+                let key = (colors, gfx::light(), s.to_bits());
+                if b.key != Some(key) {
+                    let c = Canvas::new(b.bg, s, None);
+                    pages::draw_backdrop(&c, colors, lw, lh);
+                    c.finish(&mut gfx::Fonts::default());
+                    b.key = Some(key);
+                }
+            }
+            let (dw, dh) = (d.right - d.left, d.bottom - d.top);
+            BitBlt(b.back, d.left, d.top, dw, dh, b.bg, d.left, d.top, SRCCOPY);
+            let drawn = with(|st| {
+                let mut c = Canvas::new(b.back, s, Some(d));
+                st.draw(&mut c, lw, lh);
+                (c, std::mem::take(&mut st.fonts))
+            });
+            if let Some((c, mut fonts)) = drawn {
+                c.finish(&mut fonts);
+                with(|st| st.fonts = fonts);
+            }
+            BitBlt(hdc, d.left, d.top, dw, dh, b.back, d.left, d.top, SRCCOPY);
         });
-        if let Some((c, mut fonts)) = fonts {
-            c.finish(&mut fonts);
-            with(|st| st.fonts = fonts);
-        }
-        BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
-        SelectObject(mem, old);
-        DeleteObject(bmp);
-        DeleteDC(mem);
         EndPaint(hwnd, &ps);
     }
 }
@@ -262,9 +311,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_KEYDOWN => {
-            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL};
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
             let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
-            if let Some(Some(action)) = with(|st| st.key(wparam as u16, ctrl)) {
+            let shift = unsafe { GetKeyState(VK_SHIFT as i32) } < 0;
+            if let Some(Some(action)) = with(|st| st.key(wparam as u16, ctrl, shift)) {
                 pages::perform(hwnd, action);
             }
             invalidate(hwnd);
@@ -286,7 +336,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_TIMER => {
-            invalidate(hwnd);
+            // only the spinners move: repaint their squares
+            let s = scale(hwnd);
+            for r in with(|st| st.spinners()).unwrap_or_default() {
+                let px = |v: f32| (v * s).round() as i32;
+                let rect = RECT { left: px(r.x), top: px(r.y), right: px(r.right()), bottom: px(r.bottom()) };
+                unsafe { InvalidateRect(hwnd, &rect, 0) };
+            }
             0
         }
         WM_ACTIVATE => {
