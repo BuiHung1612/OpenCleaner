@@ -17,7 +17,11 @@ enum Updater {
     }
 
     /// Only a real .app can replace itself; `swift run` builds skip all of this.
-    static var installed: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+    /// A shipped app: not `swift run`, and not a local "OpenCleaner Dev" build (those must
+    /// never offer to replace themselves with a release).
+    static var installed: Bool {
+        Bundle.main.bundleURL.pathExtension == "app" && !(Bundle.main.bundleIdentifier ?? "").hasSuffix(".dev")
+    }
 
     @MainActor static func startAutomaticChecks() {
         guard installed else { return }

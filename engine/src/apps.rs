@@ -33,7 +33,7 @@ pub struct App {
 
 /// Apps that come with the system, or that are OpenCleaner itself.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-const KEEP: &[&str] = &["com.apple.Safari", "io.github.opencleaner"];
+const KEEP: &[&str] = &["com.apple.Safari", "io.github.opencleaner", "io.github.opencleaner.dev"];
 
 /// Installed apps, by name. Sizes come separately (`sizes`), since reading them takes a
 /// walk of every bundle.

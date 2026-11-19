@@ -15,6 +15,11 @@ for arg in "$@"; do
   esac
 done
 VERSION=$(cat ../VERSION)
+# Builds made outside CI are "OpenCleaner Dev" with their own bundle id: macOS would
+# otherwise open whichever copy it saw last when the user starts the installed app.
+BUNDLE_ID=io.github.opencleaner
+NAME=OpenCleaner
+if [[ -z "${CI:-}" ]]; then BUNDLE_ID+=.dev; NAME="OpenCleaner Dev"; fi
 STRINGS=$(mktemp -d)
 
 ../engine/build-lib.sh "${ENGINE_FLAGS[@]}" >/dev/null  # the Rust engine, linked into the app
@@ -40,9 +45,9 @@ cat > $APP/Contents/Info.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>OpenCleaner</string>
-  <key>CFBundleDisplayName</key><string>OpenCleaner</string>
-  <key>CFBundleIdentifier</key><string>io.github.opencleaner</string>
+  <key>CFBundleName</key><string>$NAME</string>
+  <key>CFBundleDisplayName</key><string>$NAME</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleExecutable</key><string>OpenCleaner</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
