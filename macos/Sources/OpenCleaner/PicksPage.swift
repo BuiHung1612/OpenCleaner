@@ -200,14 +200,18 @@ struct PicksList: View {
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
                 ForEach(shown, id: \.name) { group in
+                    // rows are keyed by the item's path, and indexes are checked against the
+                    // current list: a new list (rescan, Start Over, after removing) can arrive
+                    // while SwiftUI still holds rows built from the old one
+                    let rows = group.indexes.filter(model.items.indices.contains)
                     VStack(alignment: .leading, spacing: 2) {
                         if !group.name.isEmpty {
-                            Text(verbatim: PickText.group(group.name, first: group.indexes.first.map { model.items[$0] }))
+                            Text(verbatim: PickText.group(group.name, first: rows.first.map { model.items[$0] }))
                                 .font(.app(13, weight: .semibold)).foregroundStyle(.dim)
                                 .lineLimit(1).truncationMode(.head).padding(.leading, 12)
                                 .accessibilityAddTraits(.isHeader)
                         }
-                        ForEach(group.indexes, id: \.self) { i in row(i) }
+                        ForEach(rows, id: \.self) { i in row(i).id(model.items[i].path.string ?? "\(i)") }
                     }
                 }
                 if shown.isEmpty {
@@ -228,7 +232,13 @@ struct PicksList: View {
         .quickLookList()
     }
 
-    private func row(_ i: Int) -> some View {
+    /// A row re-renders on its own when the list changes, possibly before its parent drops
+    /// it: an index past the new list draws nothing instead of crashing.
+    @ViewBuilder private func row(_ i: Int) -> some View {
+        if model.items.indices.contains(i) { rowBody(i) }
+    }
+
+    private func rowBody(_ i: Int) -> some View {
         let item = model.items[i]
         let path = item.path.string ?? ""
         let on = model.selected.contains(i)
