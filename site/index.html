@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCleaner</title>
+<meta name="description" content="Free, open-source disk cleaner for macOS and Windows, on one Rust engine. Nothing is removed without your review.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/favicon.png">
+<style>
+:root {
+  --bg: #f4f5fb; --fg: #161a2e; --dim: #5a6078; --card: rgba(255,255,255,.72); --line: rgba(20,26,60,.12);
+  --code: #ffffff; --accent: #3a3fb8;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0e1020; --fg: #eceefa; --dim: #a3a8c4; --card: rgba(255,255,255,.06); --line: rgba(255,255,255,.12);
+    --code: #070812; --accent: #9ea2ff; }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+html[lang=vi] .en, html[lang=en] .vi { display: none; }
+a { color: var(--accent); }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+section { padding: 64px 0; }
+h2 { font-size: clamp(26px, 4vw, 36px); line-height: 1.2; margin: 0 0 8px; letter-spacing: -.01em; }
+.lead { color: var(--dim); margin: 0 0 32px; max-width: 60ch; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; }
+
+/* hero: the Dashboard gradient, glass on top, white text as in the app */
+.hero { position: relative; color: #fff; padding: 20px 0 72px;
+  background: radial-gradient(ellipse at 15% 0%, #5a5fe0 0, transparent 55%),
+              radial-gradient(ellipse at 90% 30%, #0c7889 0, transparent 50%),
+              linear-gradient(160deg, #3a3fb8, #1b1446); }
+.hero a:not(.btn) { color: #fff; }
+nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+nav .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; text-decoration: none; }
+nav .brand img { width: 28px; height: 28px; }
+.nav-r { display: flex; gap: 8px; align-items: center; }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.35); background: rgba(255,255,255,.14); color: #fff;
+  font: inherit; font-size: 14px; text-decoration: none; cursor: pointer;
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.pill:hover { background: rgba(255,255,255,.24); }
+.hero-body { text-align: center; padding-top: 56px; }
+.hero-body > img { width: 132px; height: 132px; filter: drop-shadow(0 14px 30px rgba(0,0,0,.35)); }
+.hero h1 { font-size: clamp(40px, 7vw, 64px); margin: 20px 0 8px; letter-spacing: -.02em; line-height: 1.05; }
+.hero p.pitch { font-size: clamp(18px, 2.4vw, 22px); margin: 0 auto 32px; max-width: 34em; opacity: .9; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.btn { display: inline-flex; flex-direction: column; align-items: center; padding: 14px 28px; border-radius: 999px;
+  text-decoration: none; font-weight: 600; color: #1b1446; background: #fff; min-width: 230px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+.btn small { font-weight: 400; font-size: 12px; opacity: .7; }
+.btn.ghost { color: #fff; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.4); box-shadow: none;
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.oneliner { margin: 28px auto 0; max-width: 760px; display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 16px;
+  border-radius: 16px; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.2); text-align: left; }
+.oneliner code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 4px 0; }
+.oneliner .pill { flex: none; }
+.hint { font-size: 13px; opacity: .75; margin-top: 10px; }
+
+/* screenshots */
+.shots { display: grid; gap: 20px; }
+.shots figure { margin: 0; }
+.shots img { width: 100%; height: auto; display: block; border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+.shots figcaption { color: var(--dim); font-size: 14px; margin-top: 10px; text-align: center; }
+@media (min-width: 760px) { .shots { grid-template-columns: minmax(0,1fr) minmax(0,1fr); } .shots figure:first-child { grid-column: 1 / -1; } }
+
+/* features: one gradient card per tool, colors from shared/tools.json */
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.tool { position: relative; overflow: hidden; color: #fff; border-radius: 22px; padding: 20px;
+  background: linear-gradient(150deg, var(--a), var(--b)); min-height: 210px; }
+.tool::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  border: 1px solid rgba(255,255,255,.22); background: linear-gradient(180deg, rgba(255,255,255,.12), transparent 40%); }
+.tool img { width: 72px; height: 72px; display: block; margin-bottom: 10px; }
+.tool h3 { margin: 0 0 4px; font-size: 18px; }
+.tool p { margin: 0; font-size: 14.5px; opacity: .88; }
+.tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-top: 10px;
+  background: rgba(255,255,255,.18); }
+
+/* glass cards on the page background */
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 22px;
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.two { display: grid; gap: 16px; grid-template-columns: minmax(0,1fr); }
+@media (min-width: 860px) { .two { grid-template-columns: minmax(0,1fr) minmax(0,1fr); } }
+.card h3 { margin: 0 0 10px; font-size: 18px; }
+.card ul { margin: 0; padding-left: 20px; }
+.card li { margin: 6px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+th, td { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; white-space: normal; }
+th { color: var(--dim); font-weight: 500; font-size: 13px; }
+td b { color: var(--accent); }
+.note { color: var(--dim); font-size: 13.5px; margin: 12px 0 0; }
+.table-scroll { overflow-x: auto; }
+.safe { background: linear-gradient(180deg, transparent, rgba(58,63,184,.08)); }
+pre { background: var(--code); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; overflow-x: auto; margin: 10px 0; }
+footer { padding: 32px 0 48px; color: var(--dim); font-size: 14px; border-top: 1px solid var(--line); }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="./"><img src="img/icon.webp" alt="" width="28" height="28">OpenCleaner</a>
+      <div class="nav-r">
+        <button class="pill" id="lang" type="button" aria-label="Language / Ngôn ngữ"><span class="en">Tiếng Việt</span><span class="vi">English</span></button>
+        <a class="pill" href="https://github.com/BuiHung1612/OpenCleaner">GitHub</a>
+      </div>
+    </nav>
+    <div class="hero-body">
+      <img src="img/icon.webp" alt="OpenCleaner icon" width="132" height="132">
+      <h1>OpenCleaner</h1>
+      <p class="pitch">
+        <span class="en">A free, open-source disk cleaner for macOS and Windows. Fast Rust engine, and nothing is removed until you have reviewed it.</span>
+        <span class="vi">Trình dọn ổ đĩa miễn phí, mã nguồn mở cho macOS và Windows. Engine Rust nhanh, và không có gì bị xóa trước khi bạn xem lại.</span>
+      </p>
+      <div class="cta">
+        <a class="btn" href="https://github.com/BuiHung1612/OpenCleaner/releases/latest/download/OpenCleaner.dmg">
+          <span class="en">Download for macOS</span><span class="vi">Tải cho macOS</span>
+          <small><span class="en">macOS 26 or later · Apple Silicon and Intel</span><span class="vi">macOS 26 trở lên · Apple Silicon và Intel</span></small>
+        </a>
+        <a class="btn ghost" href="https://github.com/BuiHung1612/OpenCleaner/releases/latest/download/OpenCleaner.exe">
+          <span class="en">Download for Windows</span><span class="vi">Tải cho Windows</span>
+          <small><span class="en">Windows 10 and 11 · one .exe</span><span class="vi">Windows 10 và 11 · một tệp .exe</span></small>
+        </a>
+      </div>
+      <div class="oneliner">
+        <code id="cmd">curl -fsSL https://raw.githubusercontent.com/BuiHung1612/OpenCleaner/main/install.sh | sh</code>
+        <button class="pill" id="copy" type="button"><span class="en">Copy</span><span class="vi">Sao chép</span></button>
+      </div>
+      <p class="hint">
+        <span class="en">macOS: paste in Terminal to install or update. No Gatekeeper prompt this way.</span>
+        <span class="vi">macOS: dán vào Terminal để cài hoặc cập nhật. Cách này không hiện hộp thoại Gatekeeper.</span>
+      </p>
+    </div>
+  </div>
+</header>
+
+<main>
+<section id="screens">
+  <div class="wrap">
+    <h2><span class="en">A look inside</span><span class="vi">Bên trong ứng dụng</span></h2>
+    <p class="lead"><span class="en">Every tool has its own color, with glass panels on top, in the macOS 26 style. Screenshots from the macOS app.</span><span class="vi">Mỗi công cụ có màu riêng, với các tấm kính phía trên, theo phong cách macOS 26. Ảnh chụp từ ứng dụng macOS.</span></p>
+    <div class="shots">
+      <figure><img src="img/dashboard.webp" alt="Dashboard: CPU, memory, disk and the busiest processes." width="1080" height="720"><figcaption><span class="en">Dashboard: CPU, memory, disk and the busiest processes.</span><span class="vi">Tổng quan: CPU, bộ nhớ, ổ đĩa và các tiến trình bận nhất.</span></figcaption></figure>
+      <figure><img src="img/system-junk.webp" alt="System Junk: scan first, then review what would go." width="1080" height="720" loading="lazy"><figcaption><span class="en">System Junk: scan first, then review what would go.</span><span class="vi">Rác hệ thống: quét trước, rồi xem lại những gì sẽ bị xóa.</span></figcaption></figure>
+      <figure><img src="img/space-lens.webp" alt="Space Lens: pick a drive to map." width="1080" height="720" loading="lazy"><figcaption><span class="en">Space Lens: pick a drive to map.</span><span class="vi">Space Lens: chọn một ổ đĩa để xem bản đồ.</span></figcaption></figure>
+      <figure><img src="img/uninstaller.webp" alt="Uninstaller: apps by size; open apps must be quit first." width="1080" height="720" loading="lazy"><figcaption><span class="en">Uninstaller: apps by size; open apps must be quit first.</span><span class="vi">Gỡ ứng dụng: xếp theo dung lượng; ứng dụng đang mở phải thoát trước.</span></figcaption></figure>
+      <figure><img src="img/slim-apps.webp" alt="Slim Apps: the original goes to the Trash." width="1080" height="720" loading="lazy"><figcaption><span class="en">Slim Apps: the original goes to the Trash.</span><span class="vi">Thu gọn ứng dụng: bản gốc vào Thùng rác.</span></figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="features" style="padding-top:0">
+  <div class="wrap">
+    <h2><span class="en">What it does</span><span class="vi">Ứng dụng làm được gì</span></h2>
+    <p class="lead"><span class="en">Each tool scans first and shows you what it found. You choose what goes.</span><span class="vi">Mỗi công cụ quét trước và cho bạn xem những gì tìm thấy. Bạn chọn thứ cần bỏ.</span></p>
+    <div class="grid">
+      <div class="tool" style="--a:#0A6A66;--b:#14366B"><img src="img/art/clean.webp" alt="" width="72" height="72">
+        <h3><span class="en">System Junk</span><span class="vi">Rác hệ thống</span></h3>
+        <p><span class="en">Caches, logs, temporary files and leftovers of apps you already removed. Never touches your documents.</span><span class="vi">Bộ nhớ đệm, nhật ký, tệp tạm và phần sót lại của ứng dụng đã gỡ. Không bao giờ đụng vào tài liệu của bạn.</span></p></div>
+      <div class="tool" style="--a:#9D4C28;--b:#5B1F4A"><img src="img/art/installer.webp" alt="" width="72" height="72">
+        <h3><span class="en">Installers</span><span class="vi">Tệp cài đặt</span></h3>
+        <p><span class="en">Leftover .dmg, .pkg, .iso, .xip and .zip installers, each with its size.</span><span class="vi">Các tệp cài đặt .dmg, .pkg, .iso, .xip, .zip còn sót, kèm dung lượng từng tệp.</span></p></div>
+      <div class="tool" style="--a:#366B22;--b:#123D3A"><img src="img/art/purge.webp" alt="" width="72" height="72">
+        <h3><span class="en">Project Junk</span><span class="vi">Rác dự án</span></h3>
+        <p><span class="en">Rebuildable build folders: node_modules, target, build, dist and more. Skips projects touched in the last 7 days.</span><span class="vi">Thư mục build dựng lại được: node_modules, target, build, dist… Bỏ qua dự án sửa trong 7 ngày gần đây.</span></p></div>
+      <div class="tool" style="--a:#0C7889;--b:#123063"><img src="img/art/spaceLens.webp" alt="" width="72" height="72">
+        <h3>Space Lens</h3>
+        <p><span class="en">See which folders take the space on each disk, and move what you do not need to the Trash.</span><span class="vi">Xem thư mục nào chiếm chỗ trên từng ổ đĩa, và chuyển thứ không cần vào Thùng rác.</span></p></div>
+      <div class="tool" style="--a:#2961BA;--b:#2A1857"><img src="img/art/uninstaller.webp" alt="" width="72" height="72">
+        <h3><span class="en">Uninstaller</span><span class="vi">Gỡ ứng dụng</span></h3>
+        <p><span class="en">Remove apps together with their caches, preferences and support files. Apps go to the Trash.</span><span class="vi">Gỡ ứng dụng cùng bộ nhớ đệm, tùy chọn và tệp hỗ trợ của nó. Ứng dụng vào Thùng rác.</span></p></div>
+      <div class="tool" style="--a:#936B09;--b:#5A2A12"><img src="img/art/large_old.webp" alt="" width="72" height="72">
+        <h3><span class="en">Large &amp; Old Files</span><span class="vi">Tệp lớn &amp; cũ</span></h3>
+        <p><span class="en">Big files you have not opened for months, and old screenshots on the Desktop.</span><span class="vi">Tệp lớn bạn không mở trong nhiều tháng, và ảnh chụp màn hình cũ trên Màn hình nền.</span></p>
+        <span class="tag">macOS</span></div>
+      <div class="tool" style="--a:#28794C;--b:#1A2F5A"><img src="img/art/duplicates.webp" alt="" width="72" height="72">
+        <h3><span class="en">Duplicates</span><span class="vi">Tệp trùng lặp</span></h3>
+        <p><span class="en">Files whose contents are exactly the same. Keep one copy of each.</span><span class="vi">Các tệp có nội dung giống hệt nhau. Giữ lại một bản của mỗi tệp.</span></p>
+        <span class="tag">macOS</span></div>
+      <div class="tool" style="--a:#6A3FB5;--b:#1E2A78"><img src="img/art/slim.webp" alt="" width="72" height="72">
+        <h3><span class="en">Slim Apps</span><span class="vi">Thu gọn ứng dụng</span></h3>
+        <p><span class="en">Remove the Intel code from universal apps on Apple Silicon. Originals go to the Trash.</span><span class="vi">Gỡ phần mã Intel khỏi ứng dụng universal trên Apple Silicon. Bản gốc vào Thùng rác.</span></p>
+        <span class="tag">macOS</span></div>
+      <div class="tool" style="--a:#A73225;--b:#4A1942"><img src="img/art/optimize.webp" alt="" width="72" height="72">
+        <h3><span class="en">Optimization</span><span class="vi">Tối ưu</span></h3>
+        <p><span class="en">Refresh system caches and services, and repair safe maintenance issues.</span><span class="vi">Làm mới bộ nhớ đệm và dịch vụ hệ thống, sửa các lỗi bảo trì an toàn.</span></p>
+        <span class="tag">macOS</span></div>
+      <div class="tool" style="--a:#1B6A7A;--b:#1B2A4A"><img src="img/art/startup.webp" alt="" width="72" height="72">
+        <h3><span class="en">Startup Items</span><span class="vi">Mục khởi động</span></h3>
+        <p><span class="en">See what starts when you log in and turn off what you do not need. System items are shown, never changed.</span><span class="vi">Xem những gì chạy khi đăng nhập và tắt thứ không cần. Mục hệ thống chỉ hiển thị, không bị thay đổi.</span></p>
+        <span class="tag">macOS</span></div>
+      <div class="tool" style="--a:#A8325E;--b:#3B1C4A"><img src="img/art/touchid.webp" alt="" width="72" height="72">
+        <h3><span class="en">Touch ID for sudo</span><span class="vi">Touch ID cho sudo</span></h3>
+        <p><span class="en">Use your fingerprint instead of typing your password in Terminal.</span><span class="vi">Dùng vân tay thay vì gõ mật khẩu trong Terminal.</span></p>
+        <span class="tag">macOS</span></div>
+      <div class="tool" style="--a:#3A3FB8;--b:#1B1446"><img src="img/art/dashboard.webp" alt="" width="72" height="72">
+        <h3><span class="en">Dashboard and menu bar</span><span class="vi">Tổng quan và thanh menu</span></h3>
+        <p><span class="en">Disk, memory and CPU at a glance, also from the menu bar.</span><span class="vi">Ổ đĩa, bộ nhớ và CPU trong một cái nhìn, cả từ thanh menu.</span></p></div>
+      <div class="tool" style="--a:#4D5B73;--b:#1C2233"><img src="img/art/schedule.webp" alt="" width="72" height="72">
+        <h3><span class="en">Scheduled cleaning</span><span class="vi">Dọn theo lịch</span></h3>
+        <p><span class="en">Let System Junk run on a schedule while the app or its menu bar item is open.</span><span class="vi">Cho Rác hệ thống tự chạy theo lịch khi ứng dụng hoặc biểu tượng trên thanh menu đang mở.</span></p>
+        <span class="tag">macOS</span></div>
+      <div class="tool" style="--a:#4D5B73;--b:#1C2233"><img src="img/art/history.webp" alt="" width="72" height="72">
+        <h3><span class="en">History</span><span class="vi">Lịch sử</span></h3>
+        <p><span class="en">Every removal attempt is written down, so you can see what went and where.</span><span class="vi">Mọi lần xóa đều được ghi lại, để bạn biết thứ gì đã đi và đi đâu.</span></p></div>
+    </div>
+    <p class="note"><span class="en">The Windows app has the Dashboard, System Junk, Installers, Project Junk, Uninstaller (runs each app's own uninstaller), Space Lens (to the Recycle Bin) and History, in English for now. Tools marked macOS are on the Mac only.</span><span class="vi">Bản Windows có Tổng quan, Rác hệ thống, Tệp cài đặt, Rác dự án, Gỡ ứng dụng (chạy trình gỡ của chính ứng dụng), Space Lens (vào Thùng rác) và Lịch sử, hiện chỉ có tiếng Anh. Các công cụ gắn nhãn macOS chỉ có trên Mac.</span></p>
+  </div>
+</section>
+
+<section id="safe" class="safe">
+  <div class="wrap">
+    <h2><span class="en">Fast, and careful</span><span class="vi">Nhanh, và cẩn thận</span></h2>
+    <p class="lead"><span class="en">The engine is OpenCleaner's own, written in Rust and linked into the app: no helper processes, one code base for macOS and Windows.</span><span class="vi">Engine do OpenCleaner tự viết bằng Rust và liên kết thẳng vào ứng dụng: không có tiến trình phụ, một mã nguồn cho cả macOS và Windows.</span></p>
+    <div class="two">
+      <div class="card">
+        <h3><span class="en">Compared with the old engine</span><span class="vi">So với engine cũ</span></h3>
+        <div class="table-scroll">
+        <table>
+          <thead><tr><th><span class="en">Task</span><span class="vi">Tác vụ</span></th><th><span class="en">Old</span><span class="vi">Cũ</span></th><th>Rust</th><th><span class="en">Peak RAM</span><span class="vi">RAM tối đa</span></th></tr></thead>
+          <tbody>
+            <tr><td><span class="en">System Junk preview</span><span class="vi">Xem trước Rác hệ thống</span></td><td>77.8 s</td><td><b>8.1 s</b></td><td>159 → 19 MiB</td></tr>
+            <tr><td><span class="en">Space Lens: startup disk</span><span class="vi">Space Lens: ổ khởi động</span></td><td>35.5 s</td><td><b>17.2 s</b></td><td>83 → 22 MiB</td></tr>
+            <tr><td>Space Lens: ~/Library</td><td>11.9 s</td><td><b>4.2 s</b></td><td>31 → 19 MiB</td></tr>
+            <tr><td><span class="en">App list with sizes</span><span class="vi">Danh sách ứng dụng kèm dung lượng</span></td><td>1.9 s</td><td><b>1.2 s</b></td><td>14 → 12 MiB</td></tr>
+            <tr><td><span class="en">Dashboard reading</span><span class="vi">Đọc số liệu Tổng quan</span></td><td>0.85 s</td><td><b>0.27 s</b></td><td>23 → 7 MiB</td></tr>
+            <tr><td><span class="en">Installers</span><span class="vi">Tệp cài đặt</span></td><td>0.62 s</td><td><b>0.01 s</b></td><td>6 → 6 MiB</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p class="note">
+          <span class="en">Measured on an Apple M2 Mac mini (8 cores, busy: load average about 5), best of 2 runs, against <a href="https://github.com/tw93/mole">mo</a>, which earlier versions bundled. Since then the System Junk preview takes 3.2 s. The two engines do not find exactly the same things; details in the <a href="https://github.com/BuiHung1612/OpenCleaner#rust-engine-vs-mo">README</a>.</span>
+          <span class="vi">Đo trên Apple M2 Mac mini (8 nhân, đang bận: load average khoảng 5), lấy kết quả tốt nhất trong 2 lần, so với <a href="https://github.com/tw93/mole">mo</a>, engine mà các bản trước đi kèm. Sau đó, xem trước Rác hệ thống còn 3,2 s. Hai engine không tìm ra hoàn toàn giống nhau; chi tiết trong <a href="https://github.com/BuiHung1612/OpenCleaner#rust-engine-vs-mo">README</a>.</span>
+        </p>
+      </div>
+      <div class="card">
+        <h3><span class="en">How it stays safe</span><span class="vi">Cách giữ an toàn</span></h3>
+        <ul class="en">
+          <li><b>Nothing is removed without review.</b> Every tool scans first and shows what it would remove; you confirm.</li>
+          <li><b>One set of guards for every tool</b>, checked at scan time and again right before removal: only inside your home folder, never personal folders (Documents, Desktop, Pictures, iCloud Drive, Keychains, Mail, Messages, .ssh…), no symlinks on the way, not while the owning app is running.</li>
+          <li><b>Still the same file</b> (device, inode, type) that was measured, or it is left alone.</li>
+          <li><b>Trash where it matters:</b> apps, installers and slimmed originals go to the Trash, so you can put them back from Finder. Caches are deleted.</li>
+          <li><b>Written down:</b> every attempt goes to a history file you can read in the app.</li>
+        </ul>
+        <ul class="vi">
+          <li><b>Không xóa gì khi bạn chưa xem lại.</b> Mỗi công cụ quét trước và cho thấy sẽ xóa gì; bạn xác nhận.</li>
+          <li><b>Một bộ quy tắc bảo vệ cho mọi công cụ</b>, kiểm tra lúc quét và lần nữa ngay trước khi xóa: chỉ trong thư mục người dùng, không bao giờ đụng thư mục cá nhân (Tài liệu, Màn hình nền, Ảnh, iCloud Drive, Keychains, Mail, Tin nhắn, .ssh…), không đi qua symlink, không xóa khi ứng dụng sở hữu đang chạy.</li>
+          <li><b>Vẫn đúng tệp đã đo</b> (thiết bị, inode, loại), nếu khác thì bỏ qua.</li>
+          <li><b>Vào Thùng rác khi cần:</b> ứng dụng, tệp cài đặt và bản gốc trước khi thu gọn vào Thùng rác, có thể khôi phục từ Finder. Bộ nhớ đệm thì xóa hẳn.</li>
+          <li><b>Có ghi lại:</b> mọi lần xóa được ghi vào lịch sử, xem được trong ứng dụng.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2><span class="en">Install notes</span><span class="vi">Lưu ý khi cài</span></h2>
+    <p class="lead"><span class="en">OpenCleaner is not notarized by Apple and the Windows exe is not code-signed, so the first launch needs one extra step.</span><span class="vi">OpenCleaner chưa được Apple notarize và tệp exe cho Windows chưa ký số, nên lần mở đầu tiên cần thêm một bước.</span></p>
+    <div class="two">
+      <div class="card">
+        <h3>macOS</h3>
+        <p class="en"><b>Easiest:</b> paste this in Terminal. It downloads the latest release, checks the app's signature and copies it to Applications (an older copy goes to the Trash). The app opens directly, without the "could not verify" prompt.</p>
+        <p class="vi"><b>Dễ nhất:</b> dán lệnh này vào Terminal. Lệnh tải bản mới nhất, kiểm tra chữ ký của ứng dụng rồi chép vào Applications (bản cũ vào Thùng rác). Ứng dụng mở ngay, không hiện thông báo "không thể xác minh".</p>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/BuiHung1612/OpenCleaner/main/install.sh | sh</code></pre>
+        <p class="en"><b>Or the DMG:</b> drag the app onto Applications. On first launch macOS blocks it once: open <b>System Settings → Privacy &amp; Security</b> and click <b>Open Anyway</b>. After that the app updates itself.</p>
+        <p class="vi"><b>Hoặc tệp DMG:</b> kéo ứng dụng vào Applications. Lần mở đầu macOS sẽ chặn một lần: mở <b>Cài đặt hệ thống → Quyền riêng tư &amp; Bảo mật</b> rồi bấm <b>Vẫn mở</b>. Sau đó ứng dụng tự cập nhật.</p>
+        <p class="note"><span class="en">Needs macOS 26 or later.</span><span class="vi">Cần macOS 26 trở lên.</span> <a href="https://github.com/BuiHung1612/OpenCleaner/blob/main/install.sh"><span class="en">Read install.sh</span><span class="vi">Xem install.sh</span></a></p>
+      </div>
+      <div class="card">
+        <h3>Windows</h3>
+        <p class="en">Download <b>OpenCleaner.exe</b> and run it; there is nothing to install. SmartScreen may warn about an unknown publisher: click <b>More info → Run anyway</b>.</p>
+        <p class="vi">Tải <b>OpenCleaner.exe</b> và chạy; không cần cài đặt. SmartScreen có thể cảnh báo nhà phát hành không xác định: bấm <b>More info → Run anyway</b>.</p>
+        <p class="note"><span class="en">Windows 10 and 11.</span><span class="vi">Windows 10 và 11.</span> <a href="https://github.com/BuiHung1612/OpenCleaner/releases"><span class="en">All releases</span><span class="vi">Tất cả bản phát hành</span></a></p>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span><span class="en">OpenCleaner is free and open source under the <a href="https://github.com/BuiHung1612/OpenCleaner/blob/main/LICENSE">MIT license</a>.</span><span class="vi">OpenCleaner miễn phí, mã nguồn mở theo <a href="https://github.com/BuiHung1612/OpenCleaner/blob/main/LICENSE">giấy phép MIT</a>.</span></span>
+    <a href="https://github.com/BuiHung1612/OpenCleaner">github.com/BuiHung1612/OpenCleaner</a>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement, saved = null;
+  try { saved = localStorage.getItem("lang"); } catch (e) {}
+  var lang = saved || (/^vi\b/i.test(navigator.language || "") ? "vi" : "en");
+  root.lang = lang;
+  document.getElementById("lang").onclick = function () {
+    root.lang = lang = lang === "vi" ? "en" : "vi";
+    try { localStorage.setItem("lang", lang); } catch (e) {}
+  };
+  var copy = document.getElementById("copy");
+  copy.onclick = function () {
+    navigator.clipboard.writeText(document.getElementById("cmd").textContent).then(function () {
+      copy.style.background = "rgba(124,242,200,.35)";
+      setTimeout(function () { copy.style.background = ""; }, 1200);
+    });
+  };
+})();
+</script>
+</body>
+</html>
