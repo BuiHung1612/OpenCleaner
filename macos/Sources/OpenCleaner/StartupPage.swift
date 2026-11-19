@@ -1,11 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Startup Items: what starts at login (the user's own can be turned off; the system's need
+/// Startup Items: what starts at login (the user's own can be turned off, and back on from
+/// "Turned off by OpenCleaner"; the system's need
 /// administrator rights and are only shown), and which apps hold privacy permissions.
 struct StartupPage: View {
     let tool: Tool
     @State private var items: [JSON] = []
+    /// items OpenCleaner turned off that can be turned back on
+    @State private var turnedOff: [JSON] = []
     @State private var permissions = JSON(nil)
     @State private var asking: JSON?
     @State private var message: String?
@@ -32,6 +35,12 @@ struct StartupPage: View {
                                 .buttonStyle(.link)
                         }
                         .padding(.horizontal, 12).padding(.top, 4)
+                    }
+                    if !turnedOff.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            heading("Turned off by OpenCleaner")
+                            ForEach(Array(turnedOff.enumerated()), id: \.offset) { _, item in offRow(item) }
+                        }
                     }
                     permissionsSection
                 }
@@ -80,6 +89,19 @@ struct StartupPage: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
+    private func offRow(_ item: JSON) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: item.name.string ?? "").font(.system(size: 14, weight: .medium))
+                Text(verbatim: item.program.string ?? item.label.string ?? "")
+                    .font(.system(size: 12)).foregroundStyle(.dim).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer()
+            Button("Turn On") { Task { await turnOn(item) } }.buttonStyle(.pill)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
     @ViewBuilder private var permissionsSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             heading("Permissions")
@@ -119,14 +141,18 @@ struct StartupPage: View {
 
     private func refresh() async {
         let (list, perms) = await Task.detached {
-            (Engine.call(["op": "startup_items"]).items.array, Engine.call(["op": "permissions"]))
+            (Engine.call(["op": "startup_items"]), Engine.call(["op": "permissions"]))
         }.value
-        items = list
+        items = list.items.array
+        turnedOff = list.turned_off.array
         permissions = perms
     }
 
-    private func turnOff(_ item: JSON) async {
-        let request: [String: Any] = ["op": "disable_startup", "path": item.path.string ?? "", "label": item.label.string ?? ""]
+    private func turnOff(_ item: JSON) async { await act("disable_startup", item) }
+    private func turnOn(_ item: JSON) async { await act("enable_startup", item) }
+
+    private func act(_ op: String, _ item: JSON) async {
+        let request: [String: Any] = ["op": op, "path": item.path.string ?? "", "label": item.label.string ?? ""]
         let reply = await Task.detached { Engine.call(request) }.value
         message = reply.ok.bool ? nil : reply.error.string
         await refresh()

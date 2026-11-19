@@ -50,6 +50,9 @@ pub enum Line {
         path: PathBuf,
         label: String,
         program: String,
+        /// Where the plist went in the Trash (absent in older lines and for Run values).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trashed: Option<PathBuf>,
     },
 }
 
@@ -147,7 +150,7 @@ pub fn month(unix: u64) -> String {
     format!("{y:04}-{m:02}")
 }
 
-fn lines(ctx: &Context) -> impl Iterator<Item = Line> {
+pub(crate) fn lines(ctx: &Context) -> impl Iterator<Item = Line> {
     fs::File::open(path(ctx))
         .into_iter()
         .flat_map(|f| BufReader::new(f).lines().map_while(Result::ok))

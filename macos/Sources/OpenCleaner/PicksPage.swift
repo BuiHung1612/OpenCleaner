@@ -37,11 +37,11 @@ final class PicksModel {
         parts.whole(path(i))
     }
 
+    /// Ticks or unticks something at any depth inside item `i`.
     func toggle(child: String, of i: Int) {
-        if !selected.contains(i) {
+        if parts.toggle(child, root: path(i), rootOn: selected.contains(i)) {
             selected.insert(i)
-            parts.only(child, in: path(i))
-        } else if !parts.toggle(child, in: path(i)) {
+        } else {
             selected.remove(i)
         }
     }
@@ -98,7 +98,7 @@ final class PicksModel {
             var final = JSON(nil)
             // folders opened with only some children ticked: those children only
             let byPath = Dictionary(selected.map { (path($0), $0) }, uniquingKeysWith: { a, _ in a })
-            let chosen = parts.request { byPath[$0] != nil }
+            let chosen = parts.request(byPath.keys)
             let request: [String: Any] = [
                 "op": "remove", "plan": Int(plan), "items": selected.sorted(),
                 "parts": Dictionary(uniqueKeysWithValues: chosen.compactMap { key, kids in byPath[key].map { ("\($0)", kids) } }),
@@ -158,7 +158,8 @@ enum PickText {
             if flags.contains("active") { text += " · " + String(localized: "active this week") }
             return text
         }
-        return tr(item.detail.string ?? "")
+        let text = tr(item.detail.string ?? "")
+        return flags.contains("shared") ? text + " · " + String(localized: "also used by the other copy of this app") : text
     }
 
     /// A group's header: a duplicate set ("a.zip · 2 copies" from the engine) says how many copies it has.
@@ -531,6 +532,15 @@ struct UninstallerPage: View {
         }
     }
 
+    /// The bundle id (or that the app is open); for two apps of one name, also where each
+    /// is and its version.
+    static func subtitle(_ app: JSON) -> String {
+        let open = app.running.bool ? String(localized: "Open now: quit it before uninstalling") : nil
+        guard app.twin.bool else { return open ?? app.bundle_id.string ?? "" }
+        let place = ((app.path.string ?? "") as NSString).abbreviatingWithTildeInPath
+        return [open, place, app.version.string].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
     private func appRow(_ app: JSON) -> some View {
         let path = app.path.string ?? ""
         let on = model.chosen.contains(path)
@@ -539,7 +549,7 @@ struct UninstallerPage: View {
             Image(nsImage: fileIcon(path)).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: app.name.string ?? "?").font(.system(size: 14, weight: .medium))
-                Text(verbatim: app.running.bool ? String(localized: "Open now: quit it before uninstalling") : (app.bundle_id.string ?? ""))
+                Text(verbatim: Self.subtitle(app))
                     .font(.system(size: 12)).foregroundStyle(app.running.bool ? Color.warn : .dim)
             }
             Spacer()

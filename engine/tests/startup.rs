@@ -148,3 +148,81 @@ fn tcc_grants_are_read_and_a_missing_database_has_none() {
     assert_eq!(grants[0]["service"], "camera");
     assert_eq!(grants[0]["client"], "us.zoom.xos");
 }
+
+/// Records `path` as turned off by OpenCleaner, its plist at `trashed`.
+fn turned_off(ctx: &Context, path: &Path, label: &str, trashed: Option<&Path>) {
+    use oc_engine::ledger::{Line, Writer};
+    Writer::open(ctx).write(&Line::Startup {
+        session: 1,
+        path: path.to_path_buf(),
+        label: label.into(),
+        program: "/Applications/Example.app/Contents/MacOS/helper".into(),
+        trashed: trashed.map(Path::to_path_buf),
+    });
+}
+
+#[test]
+fn a_plist_turned_off_by_opencleaner_is_put_back_from_the_trash() {
+    let (_t, ctx) = home();
+    let dir = startup::agents_dir(&ctx);
+    let trash = ctx.home.join(".Trash");
+    let original = dir.join("com.example.helper.plist");
+    let in_trash = trash.join("com.example.helper 2.plist");
+    plist(
+        &in_trash,
+        "<key>Label</key><string>com.example.helper</string>",
+    );
+    turned_off(&ctx, &original, "com.example.helper", Some(&in_trash));
+
+    let listed = startup::turned_off(&ctx);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "Example");
+    assert_eq!(listed[0].path, original);
+
+    // something else took its place: refused, nothing moved
+    plist(&original, "<key>Label</key><string>other</string>");
+    assert!(startup::put_back(&ctx, &original).is_err());
+    assert!(startup::turned_off(&ctx).is_empty());
+    assert!(in_trash.exists());
+    std::fs::remove_file(&original).unwrap();
+
+    startup::put_back(&ctx, &original).unwrap();
+    assert!(original.exists() && !in_trash.exists());
+    assert!(startup::turned_off(&ctx).is_empty());
+    assert!(
+        startup::put_back(&ctx, &original).is_err(),
+        "not in the Trash any more"
+    );
+
+    // never turned off by OpenCleaner
+    let stranger = dir.join("x.plist");
+    plist(&trash.join("x.plist"), "<key>Label</key><string>x</string>");
+    assert!(startup::put_back(&ctx, &stranger).is_err());
+    // a record pointing out of the Trash, or out of LaunchAgents
+    let loose = ctx.home.join("loose.plist");
+    plist(&loose, "<key>Label</key><string>y</string>");
+    turned_off(&ctx, &dir.join("y.plist"), "y", Some(&loose));
+    assert!(startup::put_back(&ctx, &dir.join("y.plist")).is_err());
+    assert!(loose.exists());
+    let elsewhere = ctx.home.join("Library/z.plist");
+    plist(&trash.join("z.plist"), "<key>Label</key><string>z</string>");
+    turned_off(&ctx, &elsewhere, "z", Some(&trash.join("z.plist")));
+    assert!(startup::put_back(&ctx, &elsewhere).is_err());
+    assert!(!elsewhere.exists());
+
+    // older records without the Trash path: the same name in the Trash, same label only
+    let old = dir.join("old.plist");
+    plist(
+        &trash.join("old.plist"),
+        "<key>Label</key><string>old</string>",
+    );
+    turned_off(&ctx, &old, "old", None);
+    let other = dir.join("other.plist");
+    plist(
+        &trash.join("other.plist"),
+        "<key>Label</key><string>not-it</string>",
+    );
+    turned_off(&ctx, &other, "other", None);
+    startup::put_back(&ctx, &old).unwrap();
+    assert!(startup::put_back(&ctx, &other).is_err());
+}

@@ -20,6 +20,10 @@ pub struct App {
     /// The bundle (macOS) or install folder (Windows, may be empty).
     pub path: PathBuf,
     pub running: bool,
+    /// Another installed app has the same name (two copies, or a renamed one): the list
+    /// shows where each one is.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub twin: bool,
     /// Windows: who made it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publisher: Option<String>,
@@ -83,7 +87,40 @@ pub fn list(ctx: &Context, running: &Running) -> Vec<App> {
     }
     apps.sort_by_key(|a| a.name.to_lowercase());
     apps.dedup_by(|a, b| a.path == b.path);
+    mark_twins(&mut apps);
     apps
+}
+
+/// Marks apps whose name another app in the list also has (`twin`). Copies at different
+/// paths are each an app the user may remove, so none is dropped.
+pub fn mark_twins(apps: &mut [App]) {
+    let names: Vec<String> = apps.iter().map(|a| a.name.to_lowercase()).collect();
+    for (i, app) in apps.iter_mut().enumerate() {
+        app.twin = names.iter().filter(|n| **n == names[i]).count() > 1;
+    }
+}
+
+/// What uninstalling `app` (one of `chosen`) moves to the Trash. When another copy with
+/// the same bundle id stays installed, the leftovers in the Library are that copy's data
+/// too: they are listed but not ticked, and flagged "shared".
+pub fn uninstall_plan(
+    app: &App,
+    installed: &[App],
+    chosen: &[PathBuf],
+    ctx: &Context,
+    cancel: &AtomicBool,
+) -> Vec<Pick> {
+    let mut picks = uninstall_picks(app, ctx, cancel);
+    let shared = installed
+        .iter()
+        .any(|o| o.bundle_id == app.bundle_id && o.path != app.path && !chosen.contains(&o.path));
+    if shared {
+        for p in picks.iter_mut().filter(|p| p.path != app.path) {
+            p.preselect = false;
+            p.flags.push("shared");
+        }
+    }
+    picks
 }
 
 #[cfg(not(windows))]
@@ -444,6 +481,7 @@ mod win {
                         PathBuf::new()
                     },
                     running: false,
+                    twin: false,
                     publisher: string(key, &sub, "Publisher"),
                     estimated_size: dword(key, &sub, "EstimatedSize")
                         .map(|kb| u64::from(kb) * 1024),

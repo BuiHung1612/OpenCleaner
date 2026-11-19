@@ -114,6 +114,13 @@ enum Request {
         #[serde(default)]
         label: String,
     },
+    /// Turns back on an item OpenCleaner turned off (`path` and `label` as listed under
+    /// `turned_off` by `startup_items`).
+    EnableStartup {
+        path: PathBuf,
+        #[serde(default)]
+        label: String,
+    },
     /// macOS: apps allowed to use the camera, microphone, screen, all files or
     /// accessibility (`grants`), or `needs_full_disk_access`.
     Permissions,
@@ -261,7 +268,13 @@ pub fn call(request: &str) -> Value {
             json!({"ok": true, "results": results})
         }
         Ok(Request::StartupItems) => {
-            json!({"ok": true, "items": crate::startup::list(ctx())})
+            json!({"ok": true, "items": crate::startup::list(ctx()), "turned_off": crate::startup::turned_off(ctx())})
+        }
+        Ok(Request::EnableStartup { path, label }) => {
+            match crate::startup::enable(ctx(), &path, &label) {
+                Ok(()) => json!({"ok": true}),
+                Err(e) => json!({"ok": false, "error": e}),
+            }
         }
         Ok(Request::DisableStartup { path, label }) => {
             match crate::startup::disable(ctx(), &path, &label) {
@@ -353,6 +366,7 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         | Request::TouchidScript { .. }
         | Request::StartupItems
         | Request::DisableStartup { .. }
+        | Request::EnableStartup { .. }
         | Request::Permissions
         | Request::Devtools
         | Request::DevtoolsClean { .. } => emit(json!({"event": "error", "error": "use call"})),
@@ -369,9 +383,11 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             let running = procs::Running::snapshot();
             let known = apps::list(ctx(), &running);
             let mut all = Vec::new();
-            for path in paths {
-                match known.iter().find(|a| a.path == path) {
-                    Some(app) => all.extend(apps::uninstall_picks(app, ctx(), cancel)),
+            for path in &paths {
+                match known.iter().find(|a| a.path == *path) {
+                    Some(app) => {
+                        all.extend(apps::uninstall_plan(app, &known, &paths, ctx(), cancel))
+                    }
                     None => emit(
                         json!({"event": "error", "path": path, "error": "not an installed app OpenCleaner can remove"}),
                     ),
