@@ -12,7 +12,6 @@ struct DashboardPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 HStack(spacing: 28) {
-                    HealthRing(score: s.health_score.double).id(stream.replay)
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 12) {
                             Text(String(localized: "Dashboard")).font(.system(size: 34, weight: .bold)).lineLimit(1).fixedSize()
@@ -23,8 +22,6 @@ struct DashboardPage: View {
                             .disabled(stream.loading)
                             .help(String(localized: "Refresh"))
                         }
-                        Text(verbatim: s.health_score_msg.string.map(tr) ?? String(localized: "Measuring system status…"))
-                            .font(.system(size: 15)).foregroundStyle(.dim)
                         let hw = s.hardware
                         Text(verbatim: [hw.model, hw.cpu_model, hw.total_ram, hw.os_version].compactMap(\.string).filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(.system(size: 13)).foregroundStyle(.dim)
@@ -92,35 +89,6 @@ struct DashboardPage: View {
     private func restartStream() {
         stream.stop()
         if autoRefresh { stream.start(every: refreshInterval) }
-    }
-}
-
-/// Sweeps up from empty when it appears (the parent re-creates it on each one-shot read);
-/// auto-refresh updates move it without animation.
-struct HealthRing: View {
-    let score: Double?
-    @State private var shown = 0.0
-
-    var body: some View {
-        ZStack {
-            Circle().stroke(.white.opacity(0.12), lineWidth: 14)
-            Circle()
-                .trim(from: 0, to: shown / 100)
-                .stroke(
-                    AngularGradient(colors: [Color(hex: "#FF8A65"), Color(hex: "#FFD54F"), Color(hex: "#7CF2C8")], center: .center),
-                    style: StrokeStyle(lineWidth: 14, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: 0) {
-                Text(verbatim: score.map { String(Int($0)) } ?? "—").font(.system(size: 48, weight: .bold)).monospacedDigit()
-                Text("Health").font(.system(size: 13)).foregroundStyle(.dim)
-            }
-        }
-        .frame(width: 140, height: 140)
-        .padding(12)
-        .glassEffect(.clear.tint(.white.opacity(0.07)), in: .circle)
-        .onAppear { withAnimation(.easeOut(duration: 1.1)) { shown = score ?? 0 } }
-        .onChange(of: score) { shown = score ?? 0 }
     }
 }
 

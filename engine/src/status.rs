@@ -8,8 +8,6 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Status {
-    pub health_score: f64,
-    pub health_score_msg: &'static str,
     pub hardware: Hardware,
     /// e.g. "3d 4h"
     pub uptime: String,
@@ -116,7 +114,7 @@ pub fn read() -> Status {
 
     let memory = platform::memory();
     let disks = platform::disks();
-    let mut status = Status {
+    Status {
         hardware: platform::hardware(),
         uptime: platform::uptime().map(format_uptime).unwrap_or_default(),
         trash_size: platform::trash_size(),
@@ -124,10 +122,7 @@ pub fn read() -> Status {
         cpu,
         memory,
         disks,
-        ..Default::default()
-    };
-    (status.health_score, status.health_score_msg) = health(&status);
-    status
+    }
 }
 
 fn sample() -> Sample {
@@ -139,43 +134,6 @@ fn sample() -> Sample {
             .map(|(pid, _, ns, _)| (pid, ns))
             .collect(),
     }
-}
-
-/// 100 when nothing is under pressure; each pressure takes points off, the worst one
-/// names the message.
-fn health(s: &Status) -> (f64, &'static str) {
-    let disk = s.disks.first().map(|d| d.used_percent).unwrap_or(0.0);
-    let load_ratio = s
-        .cpu
-        .load1
-        .map(|l| l / s.cpu.cores.max(1) as f64)
-        .unwrap_or(0.0);
-    let penalties = [
-        ((disk - 80.0).max(0.0) * 2.0).min(35.0),
-        ((s.memory.used_percent - 75.0).max(0.0) * 1.0).min(25.0),
-        ((s.cpu.usage - 70.0).max(0.0) * 0.5).min(15.0),
-        ((load_ratio - 1.0).max(0.0) * 10.0).min(15.0),
-    ];
-    let messages = [
-        "Your disk is almost full",
-        "Memory is under pressure",
-        "The processor is busy",
-        "More work is queued than the processor can run",
-    ];
-    let score = (100.0 - penalties.iter().sum::<f64>())
-        .clamp(0.0, 100.0)
-        .round();
-    let (worst, amount) = penalties
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.total_cmp(b.1))
-        .unwrap();
-    let msg = if *amount < 1.0 {
-        "Everything is running well"
-    } else {
-        messages[worst]
-    };
-    (score, msg)
 }
 
 fn format_uptime(d: Duration) -> String {
