@@ -50,7 +50,7 @@ The Windows app is one executable: native Win32 painted with GDI+ (the same grad
 | `shared/tools.json` | Sidebar tools: title, group, colors, icon, points (how a tool looks; what it does is in the engine) |
 | `Support.swift` | The JSON reader for engine replies, `Tools`, and the on-disk cache of earlier results |
 | `macos/Resources/<lang>.lproj` | Translations. Keys are the English text |
-| `macos/Resources/Art/` | Optional illustrations, see below |
+| `design/`, `macos/Resources/Art/` | Art and icon masters, and the optimized copies the apps ship; see Art below |
 
 ## Engine
 
@@ -90,10 +90,13 @@ Write UI text in English in code. `./build.sh` lists every string missing from e
 
 ## Art
 
-Every page works without art: a missing illustration falls back to an SF Symbol on a glass disc. Drop PNGs (1024×1024, transparent background) into `macos/Resources/Art/` named after the module id, then rebuild:
+Every page works without art: a missing illustration falls back to an SF Symbol on a glass disc. Masters live in `design/` (not bundled): `design/art/<module id>.png` (1024×1024, transparent background, glass 3D style) and `design/AppIcon.png` (1024×1024, full bleed). `python3 design/export.py [art|icons]` (needs Pillow and numpy) writes what ships and is committed; drop a new master in and rerun:
 
-`dashboard`, `spaceLens`, `uninstaller`, `history`, `clean`, `installer`, `purge`, `optimize`, `slim`, `touchid`.
-The app icon is `macos/Resources/AppIcon.png` (1024×1024); `build.sh` turns it into `.icns`.
+- `macos/Resources/Art/<id>.heic`: margins trimmed so every subject fills ~86% of the frame, 520 px (largest use is 260 pt @2x), HEIC with alpha;
+- `macos/Resources/AppIcon.icns`: squircle on Apple's 824/1024 grid with a drop shadow; 16–64 px use `design/AppIcon-small.png` if present (a bolder, simpler master), else a white broom drawn by the script on a darker tile;
+- `windows/app.ico`: the same, with a tighter margin, 16–256 px.
+
+Art ids: `dashboard`, `spaceLens`, `uninstaller`, `history`, `scanning`, `done`, `volumeInternal`, `volumeExternal`, and every tool id in `shared/tools.json`. Still missing (SF Symbol fallback): `startup`, `large_old`, `duplicates`.
 
 ## License
 

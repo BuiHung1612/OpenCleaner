@@ -31,13 +31,8 @@ cp ../shared/tools.json $APP/Contents/Resources/
 cp -R Resources/*.lproj $APP/Contents/Resources/
 [[ -d Resources/Art ]] && cp -R Resources/Art $APP/Contents/Resources/
 ICON_KEY=""
-if [[ -f Resources/AppIcon.png ]]; then
-  SET=$(mktemp -d)/AppIcon.iconset && mkdir -p $SET
-  for n in 16 32 128 256 512; do
-    sips -z $n $n Resources/AppIcon.png --out $SET/icon_${n}x${n}.png >/dev/null
-    sips -z $((n * 2)) $((n * 2)) Resources/AppIcon.png --out $SET/icon_${n}x${n}@2x.png >/dev/null
-  done
-  iconutil -c icns $SET -o $APP/Contents/Resources/AppIcon.icns
+if [[ -f Resources/AppIcon.icns ]]; then  # art and icon are generated from design/ by design/export.py
+  cp Resources/AppIcon.icns $APP/Contents/Resources/
   ICON_KEY="<key>CFBundleIconFile</key><string>AppIcon</string>"
 fi
 
