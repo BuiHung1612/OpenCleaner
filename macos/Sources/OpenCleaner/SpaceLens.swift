@@ -10,6 +10,15 @@ struct Volume: Identifiable {
     var isStartup: Bool { url.path == "/" }
     var used: Double { total - free }
 
+    /// The innermost volume `path` is on ("/Volumes/X" before "/").
+    static func holding(_ path: String, in volumes: [Volume]) -> Volume? {
+        volumes.filter { v in
+            let root = v.url.path
+            return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+        }
+        .max { $0.url.path.count < $1.url.path.count }
+    }
+
     static func all() -> [Volume] {
         let keys: [URLResourceKey] = [.volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
@@ -52,6 +61,14 @@ final class SpaceLensModel: ObservableObject {
         volume = v
         stack = []
         open(v.isStartup ? nil : v.url.path)
+    }
+
+    /// A folder dropped on the page, shown on the volume it lives on (Back leaves it).
+    func openDropped(_ path: String) {
+        cancelPrefetch()
+        volume = Volume.holding(path, in: volumes) ?? volumes.first(where: \.isStartup)
+        stack = []
+        open(path)
     }
 
     func open(_ path: String?) {
@@ -248,6 +265,14 @@ struct SpaceLensPage: View {
             }
         }
         .padding(.horizontal, 28)
+        // a folder dragged in from Finder opens here
+        .contentShape(Rectangle())
+        .dropDestination(for: URL.self) { urls, _ in
+            var dir: ObjCBool = false
+            guard let url = urls.first, FileManager.default.fileExists(atPath: url.path, isDirectory: &dir), dir.boolValue else { return false }
+            model.openDropped(url.path)
+            return true
+        }
         .confirmationDialog(
             String(localized: "Move \(model.selection.count) items (\(bytes(model.selectedSize))) to the Trash?"),
             isPresented: $confirming
@@ -366,6 +391,7 @@ struct SpaceLensPage: View {
         }
         .brightScroller()
         .glassPanel()
+        .quickLookList()
     }
 
     private var bottomBar: some View {
@@ -463,9 +489,8 @@ struct EntryRow: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(selected || highlighted ? 0.12 : 0)))
         .contentShape(Rectangle())
         .onTapGesture(perform: open)
-        .contextMenu {
-            Button(String(localized: "Show in Finder")) { reveal(entry.path.string) }
-        }
+        .peekable(entry.path.string ?? "")
+        .contextMenu { FileMenu(path: entry.path.string ?? "") }
     }
 }
 

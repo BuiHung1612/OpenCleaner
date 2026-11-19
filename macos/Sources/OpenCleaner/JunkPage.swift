@@ -166,6 +166,7 @@ struct JunkPage: View {
     let tool: Tool
     @ObservedObject var model: JunkModel
     @State private var confirming = false
+    @State private var filter = ListFilter()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -219,13 +220,17 @@ struct JunkPage: View {
     private var review: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
+            if model.phase == .review { FilterBar(filter: $filter) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     ForEach(model.groups, id: \.id.string) { group in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(tr(group.title.string ?? "")).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
-                                .padding(.leading, 12)
-                            ForEach(group.rules.array, id: \.id.string) { rule in ruleRow(rule) }
+                        let rules = shownRules(group)
+                        if !rules.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(tr(group.title.string ?? "")).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
+                                    .padding(.leading, 12)
+                                ForEach(rules, id: \.id.string) { rule in ruleRow(rule) }
+                            }
                         }
                     }
                     if model.groups.isEmpty {
@@ -242,7 +247,21 @@ struct JunkPage: View {
             }
             .brightScroller()
             .glassPanel()
+            .quickLookList()
         }
+    }
+
+    /// A rule stays when its title or one of its items matches the search.
+    private func shownRules(_ group: JSON) -> [JSON] {
+        filter.sorted(group.rules.array.filter { !shownItems($0).isEmpty || filter.matches(tr($0.title.string ?? "")) },
+                      name: { tr($0.title.string ?? "") }, size: { $0.bytes.double ?? 0 })
+    }
+
+    /// All of a rule's items when its title matches, else the items whose path does.
+    private func shownItems(_ rule: JSON) -> [(path: String, bytes: Double)] {
+        let all = JunkModel.items(rule)
+        let items = filter.matches(tr(rule.title.string ?? "")) ? all : all.filter { filter.matches($0.path) }
+        return filter.sorted(items, name: { URL(fileURLWithPath: $0.path).lastPathComponent }, size: \.bytes)
     }
 
     private func ruleRow(_ rule: JSON) -> some View {
@@ -290,7 +309,7 @@ struct JunkPage: View {
             }
             if open && ready {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(items, id: \.path) { item in itemRow(item, in: rule) }
+                    ForEach(shownItems(rule), id: \.path) { item in itemRow(item, in: rule) }
                 }
                 .padding(.leading, 29).padding(.bottom, 6)
             }
@@ -320,11 +339,11 @@ struct JunkPage: View {
             .padding(.horizontal, 12).padding(.vertical, 4)
             .contentShape(Rectangle())
             .onTapGesture { model.toggleItem(item.path, in: rule) }
-            .contextMenu {
-                Button(String(localized: "Show in Finder")) { reveal(item.path) }
-            }
+            .peekable(item.path)
+            .contextMenu { FileMenu(path: item.path) }
             if open {
-                PartRows(parent: item.path, parts: model.parts, parentOn: on) { model.toggleChild($0, of: item.path, in: rule) }
+                PartRows(parent: item.path, parts: model.parts, parentOn: on,
+                         toggle: { model.toggleChild($0, of: item.path, in: rule) }, open: model.toggleOpen)
                     .padding(.leading, 24)
             }
         }

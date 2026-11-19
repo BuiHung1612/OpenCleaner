@@ -38,8 +38,7 @@ final class PicksModel: ObservableObject {
         }
     }
 
-    func toggleOpen(_ i: Int) {
-        let p = path(i)
+    func toggleOpen(_ p: String) {
         parts.toggleOpen(p) { [weak self] kids in self?.parts.children[p] = kids }
     }
     /// Items in list order, grouped by what they belong to (an app, a project…).
@@ -126,11 +125,33 @@ final class PicksModel: ObservableObject {
 /// The checkbox list of a pick list, grouped.
 struct PicksList: View {
     @ObservedObject var model: PicksModel
+    @State private var filter = ListFilter()
 
     var body: some View {
+        VStack(spacing: 10) {
+            if model.phase == .review {
+                if let error = model.error { Text(verbatim: error).foregroundStyle(Color(hex: "#FFD54F")).frame(maxWidth: .infinity, alignment: .leading) }
+                if !model.items.isEmpty { FilterBar(filter: $filter) }
+            }
+            list
+        }
+    }
+
+    /// Groups keep the engine's order; the filter picks and orders the rows inside each.
+    private var shown: [(name: String, indexes: [Int])] {
+        model.groups.compactMap { group in
+            let item = { (i: Int) in model.items[i] }
+            let rows = filter.sorted(
+                group.indexes.filter { filter.matches(item($0).name.string ?? "", item($0).path.string ?? "") },
+                name: { item($0).name.string ?? "" }, size: { item($0).bytes.double ?? 0 })
+            return rows.isEmpty ? nil : (group.name, rows)
+        }
+    }
+
+    private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
-                ForEach(model.groups, id: \.name) { group in
+                ForEach(shown, id: \.name) { group in
                     VStack(alignment: .leading, spacing: 2) {
                         if !group.name.isEmpty {
                             Text(verbatim: group.name).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
@@ -139,7 +160,7 @@ struct PicksList: View {
                         ForEach(group.indexes, id: \.self) { i in row(i) }
                     }
                 }
-                if model.items.isEmpty {
+                if shown.isEmpty {
                     Text("Nothing found.").foregroundStyle(.dim).padding(20)
                 }
             }
@@ -148,6 +169,7 @@ struct PicksList: View {
         }
         .brightScroller()
         .glassPanel()
+        .quickLookList()
     }
 
     private func row(_ i: Int) -> some View {
@@ -167,15 +189,16 @@ struct PicksList: View {
                 Spacer()
                 Text(verbatim: bytes(model.parts.bytes(path, whole: item.bytes.double ?? 0))).font(.system(size: 14)).monospacedDigit()
                 if model.phase == .review && Parts.canOpen(path) {
-                    OpenButton(open: open) { model.toggleOpen(i) }
+                    OpenButton(open: open) { model.toggleOpen(path) }
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
             .contentShape(Rectangle())
             .onTapGesture { if model.phase == .review { model.toggle(i) } }
-            .contextMenu { Button(String(localized: "Show in Finder")) { reveal(path) } }
+            .peekable(path)
+            .contextMenu { FileMenu(path: path) }
             if open && model.phase == .review {
-                PartRows(parent: path, parts: model.parts, parentOn: on) { model.toggle(child: $0, of: i) }
+                PartRows(parent: path, parts: model.parts, parentOn: on, toggle: { model.toggle(child: $0, of: i) }, open: model.toggleOpen)
                     .padding(.leading, 40).padding(.bottom, 6)
             }
         }
@@ -351,6 +374,13 @@ final class AppsModel: ObservableObject {
         picks.find(["op": "uninstall_plan", "paths": Array(chosen)])
     }
 
+    /// Apps dropped on the page: the engine refuses any it does not list as installed.
+    func uninstall(_ paths: [String]) {
+        picks.reset()
+        chosen = Set(paths)
+        review()
+    }
+
     func startOver() {
         picks.reset()
         chosen = []
@@ -392,6 +422,14 @@ struct UninstallerPage: View {
         }
         .padding(.horizontal, 32)
         .task { if model.apps == nil { model.load() } }
+        // an app dragged in from Finder goes straight to the review of what it leaves behind
+        .contentShape(Rectangle())
+        .dropDestination(for: URL.self) { urls, _ in
+            let apps = urls.filter { $0.pathExtension == "app" }.map(\.path)
+            guard !apps.isEmpty, picks.phase != .acting else { return false }
+            model.uninstall(apps)
+            return true
+        }
         .confirmationDialog(
             String(localized: "Move \(picks.selected.count) items (\(bytes(picks.selectedBytes))) to the Trash?"),
             isPresented: $confirming
@@ -411,17 +449,7 @@ struct UninstallerPage: View {
     }
 
     private var search: some View {
-        HStack {
-            Image(systemName: "magnifyingglass").foregroundStyle(.dim)
-            ZStack(alignment: .leading) {
-                if model.query.isEmpty { Text(String(localized: "Search apps")).foregroundStyle(.dim).allowsHitTesting(false) }
-                TextField("", text: $model.query).textFieldStyle(.plain)
-            }
-            .font(.system(size: 14))
-        }
-        .padding(.horizontal, 14).padding(.vertical, 8)
-        .frame(width: 240)
-        .glassEffect(.clear.tint(.white.opacity(0.07)), in: .capsule)
+        SearchField(prompt: String(localized: "Search apps"), text: $model.query).frame(width: 240)
     }
 
     @ViewBuilder private var appList: some View {
@@ -436,6 +464,7 @@ struct UninstallerPage: View {
             }
             .brightScroller()
             .glassPanel()
+            .quickLookList()
         }
     }
 
@@ -457,7 +486,8 @@ struct UninstallerPage: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(on ? 0.12 : 0)))
         .contentShape(Rectangle())
         .onTapGesture { if on { model.chosen.remove(path) } else { model.chosen.insert(path) } }
-        .contextMenu { Button(String(localized: "Show in Finder")) { reveal(path) } }
+        .peekable(path)
+        .contextMenu { FileMenu(path: path) }
     }
 
     private var bar: some View {
