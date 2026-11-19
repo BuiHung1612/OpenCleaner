@@ -158,8 +158,32 @@ fn turned_off(ctx: &Context, path: &Path, label: &str, trashed: Option<&Path>) {
         label: label.into(),
         program: "/Applications/Example.app/Contents/MacOS/helper".into(),
         trashed: trashed.map(Path::to_path_buf),
+        stamp: trashed.and_then(oc_engine::guard::stamp),
         reg_type: None,
     });
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn turn_on_moves_back_only_the_plist_that_went_to_the_trash() {
+    let (_t, ctx) = home();
+    let dir = startup::agents_dir(&ctx);
+    let original = dir.join("com.example.swap.plist");
+    let in_trash = ctx.home.join(".Trash").join("com.example.swap.plist");
+    plist(
+        &in_trash,
+        "<key>Label</key><string>com.example.swap</string>",
+    );
+    turned_off(&ctx, &original, "com.example.swap", Some(&in_trash));
+    // the Trash item was replaced by another file with the same name and label
+    std::fs::remove_file(&in_trash).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    plist(
+        &in_trash,
+        "<key>Label</key><string>com.example.swap</string><!-- other -->",
+    );
+    assert!(startup::put_back(&ctx, &original).is_err());
+    assert!(!original.exists() && in_trash.exists());
 }
 
 #[test]

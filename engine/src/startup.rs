@@ -59,12 +59,14 @@ pub fn check_user_file(ctx: &Context, path: &Path, dir: &Path) -> Result<(), Ref
 fn record(ctx: &Context, item: &Item, trashed: Option<PathBuf>, reg_type: Option<u32>) {
     let mut ledger = ledger::Writer::open(ctx);
     let now = ledger::now();
+    let stamp = trashed.as_deref().and_then(guard::stamp);
     ledger.write(&Line::Startup {
         session: now,
         path: item.path.clone(),
         label: item.label.clone(),
         program: item.program.clone(),
         trashed,
+        stamp,
         reg_type,
     });
     ledger.write(&Line::Session {
@@ -81,6 +83,18 @@ fn record(ctx: &Context, item: &Item, trashed: Option<PathBuf>, reg_type: Option
 /// What OpenCleaner turned off, oldest first, the latest record of each item only, with
 /// where its file went in the Trash.
 #[cfg(any(target_os = "macos", windows))]
+/// What the latest record of `path` says its plist looked like in the Trash.
+#[cfg(target_os = "macos")]
+fn stamp_of(ctx: &Context, path: &Path) -> Option<guard::Stamp> {
+    ledger::lines(ctx)
+        .filter_map(|l| match l {
+            Line::Startup { path: p, stamp, .. } if p == path => Some(stamp),
+            _ => None,
+        })
+        .last()
+        .flatten()
+}
+
 fn records(ctx: &Context) -> Vec<(Item, Option<PathBuf>)> {
     let mut out: Vec<(Item, Option<PathBuf>)> = Vec::new();
     for line in ledger::lines(ctx) {
@@ -271,7 +285,13 @@ mod mac {
             .find(|(i, _)| i.path == path)
             .ok_or("not turned off by OpenCleaner")?;
         let from = trashed_copy(ctx, &item, &trashed).ok_or("no longer in the Trash")?;
-        crate::trash::put_back(path, &from).map_err(|e| e.to_string())
+        // the very file that went to the Trash (newer records say what it was); older
+        // records fall back to the label check in trashed_copy
+        match stamp_of(ctx, path) {
+            Some(was) => crate::trash::put_back_checked(path, &from, &was),
+            None => crate::trash::put_back(path, &from),
+        }
+        .map_err(|e| e.to_string())
     }
 
     /// Turns an item OpenCleaner turned off back on: its plist back in place, then loaded

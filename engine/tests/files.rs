@@ -148,7 +148,7 @@ fn removing_duplicates_always_leaves_one_unchanged_copy() {
 
     // the copy that stays was edited since (same file, new length): the set is left alone
     std::fs::OpenOptions::new()
-        .append(true)
+        .write(true) // set_len needs write access (append is not enough on Windows)
         .open(&list.items[kept].path)
         .unwrap()
         .set_len(2 * MIB as u64 + 1)

@@ -301,19 +301,19 @@ pub fn local_endpoint(endpoint: &str, home: &Path) -> bool {
     let Some(socket) = endpoint.strip_prefix("unix://") else {
         return false;
     };
-    let socket = Path::new(socket);
-    // a plain path: no ".." to climb out of the allowed folders
-    if !socket.is_absolute()
-        || socket
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
+    // compared as text: these are paths on the daemon's (Unix) side, which a Windows
+    // `Path` would not even call absolute
+    if !socket.starts_with('/') || socket.split('/').any(|c| c == ".." || c == ".") {
         return false;
     }
-    socket.starts_with(home)
+    let under = |dir: &str| {
+        let dir = dir.trim_end_matches('/');
+        socket.len() > dir.len() && socket.starts_with(dir) && socket.as_bytes()[dir.len()] == b'/'
+    };
+    under(&home.to_string_lossy().replace('\\', "/"))
         || ["/var/run", "/private/var/run", "/run"]
             .iter()
-            .any(|d| socket.starts_with(d))
+            .any(|d| under(d))
 }
 
 /// `docker version --format '{{.Server.APIVersion}}'` ("1.47"): API 1.42 (Engine 23) and
