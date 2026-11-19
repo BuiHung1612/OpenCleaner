@@ -124,7 +124,7 @@ fn worker(
 
         subdirs.clear();
         if !cancel.load(Ordering::Relaxed) && !visitor.known(&dir, tag, &mut subdirs) {
-            let result = super::read_dir(&dir, detail, &mut |e: &Entry| {
+            let result = super::read_dir_cancellable(&dir, detail, cancel, &mut |e: &Entry| {
                 if let Some(code) = e.error {
                     visitor.error(&dir.join(&e.name), tag, io::Error::from_raw_os_error(code));
                     return;
@@ -135,7 +135,10 @@ fn worker(
                     subdirs.push((dir.join(&e.name), sub_tag));
                 }
             });
-            if let Err(err) = result {
+            // a listing stopped by cancel is not an error the user should see
+            if let Err(err) = result
+                && !cancel.load(Ordering::Relaxed)
+            {
                 visitor.error(&dir, tag, err);
             }
         }
@@ -147,9 +150,25 @@ fn worker(
         let added = subdirs.len();
         q.dirs.append(&mut subdirs);
         q.pending = q.pending + added - 1;
+        let finished = q.pending == 0;
         drop(q);
-        // wake idle workers for the new directories, and everyone when the walk is done
-        ready.notify_all();
+        // Workers sleep only while the queue is empty and someone is still reading, so they
+        // need waking for exactly two things:
+        // - the walk is over (pending == 0): wake everyone so they return. Once cancelled,
+        //   nobody queues anything, so pending reaches 0 as the queued directories are
+        //   skipped and this wakes everyone; waking all on cancel too just drains faster.
+        // - new directories: this worker takes one of them itself on its next turn, so wake
+        //   one sleeper per other directory. A wake-up that finds the queue already emptied
+        //   (by a worker that was not asleep) goes back to sleep; a notify with no sleeper
+        //   is harmless, as every awake worker pops before it waits.
+        // notify_all after every directory woke every idle worker to fight over one entry.
+        if finished || cancel.load(Ordering::Relaxed) {
+            ready.notify_all();
+        } else {
+            for _ in 1..added {
+                ready.notify_one();
+            }
+        }
     }
 }
 

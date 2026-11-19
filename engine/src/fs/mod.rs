@@ -9,6 +9,7 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -97,9 +98,21 @@ impl Entry {
 
 /// Calls `visit` for every entry of the directory `dir` (not recursive, no `.`/`..`).
 pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
+    read_dir_cancellable(dir, detail, &AtomicBool::new(false), visit)
+}
+
+/// `read_dir` that stops between bulk batches once `cancel` is set, so a directory with
+/// millions of entries does not hold up a cancelled walk. Stopping returns
+/// `ErrorKind::Interrupted` (the listing is partial: never cache it as complete).
+pub fn read_dir_cancellable(
+    dir: &Path,
+    detail: Detail,
+    cancel: &AtomicBool,
+    visit: &mut dyn FnMut(&Entry),
+) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
-        match mac::read_dir(dir, detail, visit) {
+        match mac::read_dir(dir, detail, cancel, visit) {
             Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
             other => return other,
         }
@@ -107,12 +120,13 @@ pub fn read_dir(dir: &Path, detail: Detail, visit: &mut dyn FnMut(&Entry)) -> io
     #[cfg(windows)]
     {
         let _ = detail;
-        match win::read_dir(dir, visit) {
+        match win::read_dir(dir, cancel, visit) {
             Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
             other => return other,
         }
     }
-    let _ = detail;
+    // ponytail: the portable fallback lists in one go, no cancel check (fallback volumes only)
+    let _ = (detail, cancel);
     portable::read_dir(dir, visit)
 }
 

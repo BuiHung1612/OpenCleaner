@@ -228,3 +228,50 @@ fn freed_excludes_clone_blocks_shared_with_files_outside() {
     assert!(alloc >= 5 << 20, "{alloc}");
     assert!((1 << 20..2 << 20).contains(&freed), "{freed}");
 }
+
+/// A cancelled listing stops between bulk batches and says it is partial.
+#[cfg(any(target_os = "macos", windows))]
+#[test]
+fn cancelled_listing_stops_between_batches() {
+    let t = TempDir::new();
+    tree(t.path());
+    let mut seen = 0;
+    let cancel = AtomicBool::new(true);
+    let err =
+        fs::read_dir_cancellable(t.path(), Detail::Basic, &cancel, &mut |_| seen += 1).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
+    assert_eq!(seen, 0);
+}
+
+/// Many workers on a small tree, many times: every walk ends (no worker sleeps forever)
+/// and sees every entry, whether a directory adds subdirectories or none.
+#[test]
+fn walks_with_many_idle_workers_finish() {
+    use oc_engine::fs::Entry;
+    use oc_engine::fs::walk::{self, Visitor};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Count(AtomicUsize);
+    impl Visitor for Count {
+        fn entry(&self, _: &Path, tag: u32, e: &Entry) -> Option<u32> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            (e.kind == Kind::Dir).then_some(tag)
+        }
+        fn error(&self, _: &Path, _: u32, _: std::io::Error) {}
+    }
+    let t = TempDir::new();
+    tree(t.path());
+    for threads in [1, 2, 16, 64] {
+        for _ in 0..50 {
+            let c = Count(AtomicUsize::new(0));
+            walk::walk(
+                t.path(),
+                threads,
+                Detail::Basic,
+                &AtomicBool::new(false),
+                &c,
+            );
+            // a + a/0..6, 40 files; big.bin; deep/x/y/z/w + f.bin
+            assert_eq!(c.0.load(Ordering::Relaxed), 8 + 40 + 1 + 6);
+        }
+    }
+}

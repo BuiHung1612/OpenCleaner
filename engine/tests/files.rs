@@ -127,3 +127,79 @@ fn files_purpose_takes_plain_files_only() {
     write(&h(".ssh/id"), 10);
     assert!(check_for(&h(".ssh/id"), &ctx.home, &ctx, Purpose::Files).is_err());
 }
+
+/// Two copies and a same-size, same-head impostor, all a few days old (files changed in
+/// the last seconds are never cached).
+fn dup_home() -> (TempDir, Context) {
+    let (t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    write(&h("Downloads/a.zip"), 2 * MIB);
+    write(&h("Documents/copy of a.zip"), 2 * MIB);
+    let mut other = vec![7u8; 2 * MIB];
+    *other.last_mut().unwrap() = 8;
+    std::fs::create_dir_all(h("Desktop")).unwrap();
+    std::fs::write(h("Desktop/other.zip"), &other).unwrap();
+    for p in [
+        "Downloads/a.zip",
+        "Documents/copy of a.zip",
+        "Desktop/other.zip",
+    ] {
+        age(&h(p), 3);
+    }
+    (t, ctx)
+}
+
+/// Runs `duplicates`; returns the names found and how many files were read to hash.
+fn dups(ctx: &Context) -> (Vec<String>, usize) {
+    let before = files::files_hashed();
+    let found = files::duplicates(ctx, 1, &AtomicBool::new(false));
+    let mut names: Vec<String> = found.iter().map(|p| p.name.clone()).collect();
+    names.sort();
+    (names, files::files_hashed() - before)
+}
+
+#[test]
+fn duplicates_reuse_cached_hashes_and_rehash_changed_files() {
+    let (_t, ctx) = dup_home();
+    let want = vec!["a.zip".to_string(), "copy of a.zip".to_string()];
+    // first run: head hash of 3 files, full hash of 3 (other.zip shares the head)
+    assert_eq!(dups(&ctx), (want.clone(), 6));
+    // unchanged: everything from the cache
+    assert_eq!(dups(&ctx), (want.clone(), 0));
+    // a changed mtime is a changed file: its two hashes are read again
+    age(&ctx.home.join("Documents/copy of a.zip"), 5);
+    assert_eq!(dups(&ctx), (want.clone(), 2));
+    assert_eq!(dups(&ctx), (want.clone(), 0));
+    // a damaged tail is cut off, the lines before it still count
+    let cache = ctx.data_dir.join("dup-hashes-v1.jsonl");
+    let mut text = std::fs::read_to_string(&cache).unwrap();
+    let last = text.trim_end().rfind('\n').unwrap() + 1;
+    text.truncate(last + 5);
+    std::fs::write(&cache, text).unwrap();
+    assert_eq!(dups(&ctx), (want.clone(), 2));
+    assert_eq!(dups(&ctx), (want, 0));
+}
+
+#[test]
+fn a_forged_hash_cache_never_makes_a_different_file_a_duplicate() {
+    let (_t, ctx) = dup_home();
+    files::duplicates(&ctx, 1, &AtomicBool::new(false));
+    // every cached file now claims the same head and full hash
+    let cache = ctx.data_dir.join("dup-hashes-v1.jsonl");
+    let text = std::fs::read_to_string(&cache).unwrap();
+    let mut lines = text.lines();
+    let mut forged = format!("{}\n", lines.next().unwrap());
+    for line in lines {
+        let mut v: Vec<serde_json::Value> = serde_json::from_str(line).unwrap();
+        v[4] = 1.into();
+        v[5] = 1.into();
+        forged.push_str(&serde_json::to_string(&v).unwrap());
+        forged.push('\n');
+    }
+    assert_eq!(forged.lines().count(), 4);
+    std::fs::write(&cache, forged).unwrap();
+    let (names, hashed) = dups(&ctx);
+    assert_eq!(hashed, 0, "the forged entries were used");
+    // the byte-for-byte comparison still keeps other.zip out
+    assert_eq!(names, ["a.zip", "copy of a.zip"]);
+}

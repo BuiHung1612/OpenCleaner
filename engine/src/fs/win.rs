@@ -8,6 +8,7 @@ use std::ffi::OsString;
 use std::io;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED, GetLastError,
     HANDLE, INVALID_HANDLE_VALUE,
@@ -50,7 +51,7 @@ pub(crate) fn wide(path: &Path) -> Vec<u16> {
     out
 }
 
-pub fn read_dir(dir: &Path, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
+pub fn read_dir(dir: &Path, cancel: &AtomicBool, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
     let path = wide(dir);
     let h = unsafe {
         CreateFileW(
@@ -80,6 +81,10 @@ pub fn read_dir(dir: &Path, visit: &mut dyn FnMut(&Entry)) -> io::Result<()> {
     let mut class = FileIdBothDirectoryRestartInfo;
     let mut first = true;
     loop {
+        // between batches: a huge directory stops promptly once the walk is cancelled
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
         let ok = unsafe {
             GetFileInformationByHandleEx(
                 h.0,
