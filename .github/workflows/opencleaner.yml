@@ -278,7 +278,8 @@ jobs:
           WIN=$(sha256sum dist/OpenCleaner.exe | cut -d' ' -f1)
           render packaging/homebrew/opencleaner.rb "$MAC"
           for f in packaging/winget/*.yaml; do render "$f" "${WIN^^}"; done
-          ! grep -l '{{' dist/opencleaner.rb dist/*.yaml # every placeholder filled
+          # every placeholder of ours filled ({{appdir}} in the cask is Homebrew's own token)
+          ! grep -lE '\{\{(VERSION|SHA256)\}\}' dist/opencleaner.rb dist/*.yaml
       # dist/ holds OpenCleaner.dmg and OpenCleaner.exe from the macos and windows-app jobs, and the manifests
       - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --generate-notes
         env:
