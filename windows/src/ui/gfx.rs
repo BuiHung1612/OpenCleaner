@@ -65,6 +65,41 @@ pub fn set_light(on: bool) {
     LIGHT.store(on, Ordering::Relaxed);
 }
 
+/// Settings > Accessibility > Visual effects > Animation effects. Off: pages switch, bars and
+/// bubbles appear at once, like Reduce Motion on the Mac.
+static MOTION: AtomicBool = AtomicBool::new(true);
+
+pub fn motion() -> bool {
+    MOTION.load(Ordering::Relaxed)
+}
+
+pub fn read_motion() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
+    let mut on = 1i32;
+    unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &mut on as *mut i32 as *mut _, 0) };
+    MOTION.store(on != 0, Ordering::Relaxed);
+}
+
+/// Animation curves over t in 0...1.
+pub fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+}
+
+pub fn ease_in_out(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
+}
+
+/// SwiftUI's `.spring(response:dampingFraction:)` from 0 to 1, `t` seconds in (overshoots a little).
+pub fn spring(t: f32, response: f32, damping: f32) -> f32 {
+    if t <= 0.0 {
+        return 0.0;
+    }
+    let w = std::f32::consts::TAU / response;
+    let wd = w * (1.0 - damping * damping).sqrt();
+    1.0 - (-damping * w * t).exp() * ((wd * t).cos() + damping * w / wd * (wd * t).sin())
+}
+
 /// Text, icons and the tints of hovered or picked rows.
 pub fn fg() -> u32 {
     if light() { 0x1B2333 } else { WHITE }
@@ -281,6 +316,47 @@ impl Canvas {
             GdipDrawPath(self.g, pen, path);
             GdipDeletePen(pen);
             GdipDeleteBrush(rim);
+            GdipDeletePath(path);
+        }
+    }
+
+    /// A rounded bar filled left to right from `from` to `to` (the dashboard's meters).
+    pub fn bar(&self, r: R, from: u32, to: u32) {
+        if r.w <= 0.5 {
+            return;
+        }
+        let s = self.s;
+        unsafe {
+            let path = self.round_path(r, r.h / 2.0);
+            let a = PointF { X: r.x * s - 1.0, Y: 0.0 };
+            let b = PointF { X: r.right() * s + 1.0, Y: 0.0 };
+            let mut brush = null_mut();
+            GdipCreateLineBrush(&a, &b, from, to, WrapModeTileFlipXY, &mut brush);
+            GdipFillPath(self.g, brush as *mut GpBrush, path);
+            GdipDeleteBrush(brush as *mut GpBrush);
+            GdipDeletePath(path);
+        }
+    }
+
+    /// A lit sphere: `color` at `center` alpha towards the top left, `edge` alpha at the rim
+    /// (Space Lens bubbles, like the Mac's radial gradients).
+    pub fn ball(&self, cx: f32, cy: f32, radius: f32, color: u32, center: u8, edge: u8) {
+        let s = self.s;
+        let (x, y, d) = ((cx - radius) * s, (cy - radius) * s, 2.0 * radius * s);
+        unsafe {
+            let mut path = null_mut();
+            GdipCreatePath(FillModeAlternate, &mut path);
+            GdipAddPathEllipse(path, x, y, d, d);
+            let mut brush = null_mut();
+            GdipCreatePathGradientFromPath(path, &mut brush);
+            GdipSetPathGradientCenterColor(brush, argb(color, center));
+            let p = PointF { X: (cx - radius * 0.45) * s, Y: (cy - radius * 0.45) * s };
+            GdipSetPathGradientCenterPoint(brush, &p);
+            let rim = argb(color, edge);
+            let mut n = 1;
+            GdipSetPathGradientSurroundColorsWithCount(brush, &rim, &mut n);
+            GdipFillPath(self.g, brush as *mut GpBrush, path);
+            GdipDeleteBrush(brush as *mut GpBrush);
             GdipDeletePath(path);
         }
     }

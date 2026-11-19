@@ -59,6 +59,7 @@ pub fn set_reg_dword(key: &str, name: &str, value: u32) {
 
 /// Reads the system's app theme (missing before Windows 10 1809: dark, the original look).
 fn read_theme() {
+    gfx::read_motion();
     gfx::set_light(reg_dword(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme") == Some(1));
 }
 
@@ -150,6 +151,19 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_SPIN: usize = 1;
 /// Hourly: is a scheduled clean due?
 const TIMER_AUTO: usize = 2;
+/// Runs while something moves across the window (page change, meters, bubbles): ~60 fps.
+const TIMER_ANIM: usize = 4;
+
+pub fn anim_timer(hwnd: HWND, on: bool) {
+    unsafe {
+        if on {
+            SetTimer(hwnd, TIMER_ANIM, 16, None);
+        } else {
+            KillTimer(hwnd, TIMER_ANIM);
+        }
+    }
+}
+
 /// Settings > Dashboard > Refresh automatically, while the dashboard is on screen.
 const TIMER_DASH: usize = 3;
 
@@ -216,7 +230,15 @@ struct Buffers {
     size: (i32, i32),
     /// (page colors, light theme, scale bits) the backdrop was drawn for
     key: Option<((u32, u32), bool, u32)>,
+    /// the last frame of the previous page, faded out over the new one (like the Mac's
+    /// 0.35 s cross-fade)
+    prev: HDC,
+    prev_bmp: HBITMAP,
+    page: Option<pages::Module>,
+    fade: Option<std::time::Instant>,
 }
+
+const FADE_SECS: f32 = 0.35;
 
 thread_local! {
     static BUFFERS: RefCell<Option<Buffers>> = const { RefCell::new(None) };
@@ -242,9 +264,13 @@ fn paint(hwnd: HWND) {
                 bg_bmp: null_mut(),
                 size: (0, 0),
                 key: None,
+                prev: CreateCompatibleDC(hdc),
+                prev_bmp: null_mut(),
+                page: None,
+                fade: None,
             });
             if b.size != (w, h) {
-                for (dc, bmp) in [(b.back, &mut b.back_bmp), (b.bg, &mut b.bg_bmp)] {
+                for (dc, bmp) in [(b.back, &mut b.back_bmp), (b.bg, &mut b.bg_bmp), (b.prev, &mut b.prev_bmp)] {
                     let new = CreateCompatibleBitmap(hdc, w, h);
                     SelectObject(dc, new);
                     if !bmp.is_null() {
@@ -265,6 +291,16 @@ fn paint(hwnd: HWND) {
                     b.key = Some(key);
                 }
             }
+            // a new page: keep the old one's last frame to fade out (`back` still holds it)
+            let page = with(|st| st.module());
+            if page != b.page {
+                if b.page.is_some() && gfx::motion() {
+                    BitBlt(b.prev, 0, 0, w, h, b.back, 0, 0, SRCCOPY);
+                    b.fade = Some(std::time::Instant::now());
+                    with(|st| st.animate(FADE_SECS));
+                }
+                b.page = page;
+            }
             let (dw, dh) = (d.right - d.left, d.bottom - d.top);
             BitBlt(b.back, d.left, d.top, dw, dh, b.bg, d.left, d.top, SRCCOPY);
             let drawn = with(|st| {
@@ -277,6 +313,16 @@ fn paint(hwnd: HWND) {
                 with(|st| st.fonts = fonts);
             }
             BitBlt(hdc, d.left, d.top, dw, dh, b.back, d.left, d.top, SRCCOPY);
+            if let Some(start) = b.fade {
+                let t = start.elapsed().as_secs_f32() / FADE_SECS;
+                if t < 1.0 {
+                    let alpha = (255.0 * (1.0 - gfx::ease_in_out(t))) as u8;
+                    let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: alpha, AlphaFormat: 0 };
+                    AlphaBlend(hdc, d.left, d.top, dw, dh, b.prev, d.left, d.top, dw, dh, blend);
+                } else {
+                    b.fade = None;
+                }
+            }
         });
         EndPaint(hwnd, &ps);
     }
@@ -382,6 +428,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEWHEEL => {
             let delta = ((wparam >> 16) & 0xFFFF) as i16 as f32;
             with(|st| st.scroll_by(-delta / 120.0 * 60.0));
+            invalidate(hwnd);
+            0
+        }
+        WM_TIMER if wparam == TIMER_ANIM => {
+            if with(|st| st.animating()) != Some(true) {
+                anim_timer(hwnd, false);
+            }
             invalidate(hwnd);
             0
         }

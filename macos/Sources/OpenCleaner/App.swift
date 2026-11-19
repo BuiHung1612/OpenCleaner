@@ -38,10 +38,11 @@ struct OpenCleanerApp: App {
             CommandGroup(after: .appInfo) {
                 Button(String(localized: "Check for Updates…")) { Task { await Updater.check(manual: true) } }
             }
-        }
-
-        Settings {
-            SettingsView()
+            // Settings is a page of the main window, not a window of its own
+            CommandGroup(replacing: .appSettings) {
+                Button(String(localized: "Settings…")) { Automation.shared.openModule = .settings }
+                    .keyboardShortcut(",")
+            }
         }
 
         // actions only: numbers there would go stale between readings
@@ -78,7 +79,7 @@ struct QuickMenu: View {
 // MARK: navigation
 
 enum Module: Hashable {
-    case dashboard, spaceLens, uninstaller, history
+    case dashboard, spaceLens, uninstaller, history, settings
     case tool(String)
 
     var title: String {
@@ -87,6 +88,7 @@ enum Module: Hashable {
         case .spaceLens: String(localized: "Space Lens")
         case .uninstaller: String(localized: "Uninstaller")
         case .history: String(localized: "History")
+        case .settings: String(localized: "Settings")
         case .tool(let id): Tools.all.first { $0.id == id }?.title ?? id
         }
     }
@@ -97,13 +99,14 @@ enum Module: Hashable {
         case .spaceLens: "circle.hexagongrid"
         case .uninstaller: "xmark.app"
         case .history: "clock.arrow.circlepath"
+        case .settings: "gearshape"
         case .tool(let id): Tools.all.first { $0.id == id }?.icon ?? "terminal"
         }
     }
 
     var group: String {
         switch self {
-        case .dashboard, .history: ""
+        case .dashboard, .history, .settings: ""
         case .spaceLens: "Files"
         case .uninstaller: "Applications"
         case .tool(let id): Tools.all.first { $0.id == id }?.group ?? "Tools"
@@ -116,6 +119,7 @@ enum Module: Hashable {
         case .spaceLens: "spaceLens"
         case .uninstaller: "uninstaller"
         case .history: "history"
+        case .settings: "settings"
         case .tool(let id): id
         }
     }
@@ -127,6 +131,7 @@ enum Module: Hashable {
         case .spaceLens: [Color(hex: "#0C7889"), Color(hex: "#123063")]
         case .uninstaller: [Color(hex: "#2961BA"), Color(hex: "#2A1857")]
         case .history: [Color(hex: "#4D5B73"), Color(hex: "#1C2233")]
+        case .settings: [Color(hex: "#55557A"), Color(hex: "#1D1E33")]
         case .tool(let id): (Tools.all.first { $0.id == id }?.colors ?? []).map(Color.init(hex:)).paddedPalette
         }
     }
@@ -141,7 +146,7 @@ enum Module: Hashable {
                 let items = modules.filter { $0.group == g }
                 return items.isEmpty ? nil : (g, items)
             }
-            + [(" ", [.history])]
+            + [(" ", [.history, .settings])]
     }
 
     /// Sidebar order, for ⌘1…⌘9.
@@ -208,14 +213,8 @@ struct MainView: View {
                 .padding(10)
             }
             .brightScroller()
-            HStack {
-                Text("Engine \(version ?? "—")").font(.app(12)).foregroundStyle(.dim)
-                Spacer()
-                SettingsLink { Label(String(localized: "Settings"), systemImage: "gearshape").labelStyle(.iconOnly) }
-                    .buttonStyle(.borderless)
-                    .help(String(localized: "Settings"))
-            }
-            .padding(.horizontal, 20).padding(.vertical, 12)
+            Text("Engine \(version ?? "—")").font(.app(12)).foregroundStyle(.dim)
+                .padding(.horizontal, 20).padding(.vertical, 12)
         }
         .glassEffect(.clear.tint(.white.opacity(0.06)), in: .rect(cornerRadius: 22))
     }
@@ -257,6 +256,7 @@ struct MainView: View {
         case .spaceLens: SpaceLensPage(model: lens)
         case .uninstaller: UninstallerPage(model: apps)
         case .history: HistoryPage()
+        case .settings: SettingsPage()
         case .tool(let id):
             if let tool = Tools.all.first(where: { $0.id == id }) {
                 switch id {

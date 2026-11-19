@@ -371,28 +371,74 @@ struct HistoryPage: View {
     }
 }
 
-/// Settings in tabs, like the system's: each tab is a short grouped form, and every
-/// explanation sits in its section's footer instead of between the controls.
-struct SettingsView: View {
-    var body: some View {
-        TabView {
-            Tab(String(localized: "General"), systemImage: "gearshape") { GeneralSettings() }
-            Tab(String(localized: "Cleaning"), systemImage: "sparkles") { CleaningSettings() }
-            Tab(String(localized: "Automation"), systemImage: "calendar.badge.clock") { AutomationSettings() }
-            Tab(String(localized: "Dashboard"), systemImage: "gauge.with.dots.needle.50percent") { DashboardSettings() }
-            Tab(String(localized: "Permissions"), systemImage: "lock.shield") { PermissionsSettings() }
+/// Settings, a page of the main window: tabs as glass pills, each tab a short grouped form
+/// with every explanation in its section's footer. The forms are drawn dark (white text) and
+/// without their own background, so the page's gradient shows through like everywhere else.
+struct SettingsPage: View {
+    enum Pane: CaseIterable {
+        case general, cleaning, automation, dashboard, permissions
+        var title: String {
+            switch self {
+            case .general: String(localized: "General")
+            case .cleaning: String(localized: "Cleaning")
+            case .automation: String(localized: "Automation")
+            case .dashboard: String(localized: "Dashboard")
+            case .permissions: String(localized: "Permissions")
+            }
         }
-        .frame(width: 560 * max(1, TextScale.shared.value))
-        .font(TextScale.shared.value == 1 ? nil : .app(13))
-        // opens on the screen the main window is on, not wherever macOS last put it
-        .background(WindowProbe { settings in
-            guard let main = NSApp.windows.first(where: { $0.identifier?.rawValue.contains("main") == true && $0.isVisible }),
-                  let screen = main.screen, settings.screen != screen else { return }
-            let area = screen.visibleFrame
-            settings.setFrameTopLeftPoint(NSPoint(x: area.midX - settings.frame.width / 2, y: area.maxY - 80))
-        })
-        // the main window tints everything white for its gradients; Settings is a plain system window
-        .tint(.accentColor)
+        var icon: String {
+            switch self {
+            case .general: "gearshape"
+            case .cleaning: "sparkles"
+            case .automation: "calendar.badge.clock"
+            case .dashboard: "gauge.with.dots.needle.50percent"
+            case .permissions: "lock.shield"
+            }
+        }
+    }
+
+    @SceneStorage("settingsPane") private var paneName = "general"
+    private var pane: Pane { Pane.allCases.first { "\($0)" == paneName } ?? .general }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(art: "settings", symbol: Module.settings.icon, title: String(localized: "Settings"))
+            HStack(spacing: 8) {
+                ForEach(Pane.allCases, id: \.self) { p in
+                    Button { paneName = "\(p)" } label: {
+                        Label(p.title, systemImage: p.icon)
+                            .font(.app(13, weight: p == pane ? .semibold : .regular))
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(Capsule().fill(.white.opacity(p == pane ? 0.22 : 0.06)))
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(p == pane ? .isSelected : [])
+                }
+            }
+            ScrollView {
+                Group {
+                    switch pane {
+                    case .general: GeneralSettings()
+                    case .cleaning: CleaningSettings()
+                    case .automation: AutomationSettings()
+                    case .dashboard: DashboardSettings()
+                    case .permissions: PermissionsSettings()
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            // grouped forms in the dark look: white text on translucent rows over the gradient;
+            // switches in the system accent, not the window's white (a white knob on white)
+            .brightScroller()
+            .tint(.accentColor)
+            .id(pane)
+        }
+        .padding(.horizontal, Layout.side)
+        .padding(.bottom, Layout.bottom)
     }
 }
 

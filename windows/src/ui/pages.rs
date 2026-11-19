@@ -2,7 +2,7 @@
 //! belongs to the page, content on glass panels, the big round button centred at the
 //! bottom with pill buttons beside it. Each paint registers the areas that act on a click.
 
-use super::gfx::{Align, Canvas, Fonts, R, WHITE, amber, argb, backdrop, dim, fg, hex, light, mint};
+use super::gfx::{Align, Canvas, Fonts, R, WHITE, amber, argb, backdrop, dim, ease_out, fg, hex, light, mint, motion, spring};
 use super::auto;
 use super::jobs::{self, Job};
 use super::{confirm, dash_timer, invalidate, reveal, style_frame, timers};
@@ -279,6 +279,8 @@ struct Dash {
     job: Option<Job>,
     /// when the last reading was asked for (focus refreshes skip readings under 10 s old)
     read_at: Option<std::time::Instant>,
+    /// when the last reading arrived: the meters grow from empty, like the Mac's
+    shown_at: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -291,6 +293,8 @@ struct Space {
     remove_job: Option<Job>,
     error: Option<String>,
     scroll: f32,
+    /// the folder whose bubbles last popped in, and when
+    shown: Option<(String, Instant)>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -523,6 +527,8 @@ pub struct State {
     default_action: Option<Action>,
     /// this paint's busy spinners: the timer repaints only these
     spins: Vec<R>,
+    /// something moves across the window until then (the animation timer runs)
+    anim_until: Option<Instant>,
 }
 
 const FAST_VALUE: &str = "FastScans";
@@ -587,6 +593,7 @@ impl State {
             focus: None,
             default_action: None,
             spins: Vec::new(),
+            anim_until: None,
         }
     }
 
@@ -610,6 +617,31 @@ impl State {
 
     fn parts(&mut self, m: Module) -> &mut Parts {
         if m == Module::Junk { &mut self.junk.parts } else { &mut self.picks(m).parts }
+    }
+
+    pub fn module(&self) -> Module {
+        self.module
+    }
+
+    /// Repaints the whole window for the next `secs` (unless animations are off in Windows).
+    pub fn animate(&mut self, secs: f32) {
+        if !motion() {
+            return;
+        }
+        let until = Instant::now() + std::time::Duration::from_secs_f32(secs);
+        if self.anim_until.is_none_or(|u| u < until) {
+            self.anim_until = Some(until);
+        }
+        super::anim_timer(self.hwnd, true);
+    }
+
+    pub fn animating(&self) -> bool {
+        self.anim_until.is_some_and(|u| Instant::now() < u)
+    }
+
+    /// Seconds since `at`, or "long done" when animations are off.
+    fn since(at: Option<Instant>) -> f32 {
+        if motion() { at.map_or(f32::MAX, |t| t.elapsed().as_secs_f32()) } else { f32::MAX }
     }
 
     /// The current page's gradient colors.
@@ -865,7 +897,11 @@ impl State {
         let is = |j: &Option<Job>| j.as_ref().is_some_and(|j| j.id == job);
         if is(&self.dash.job) {
             match kind.as_str() {
-                "status" => self.dash.status = e,
+                "status" => {
+                    self.dash.status = e;
+                    self.dash.shown_at = Some(Instant::now());
+                    self.animate(0.9);
+                }
                 "done" => self.dash.job = None,
                 _ => {}
             }
@@ -1203,7 +1239,7 @@ impl State {
 
     /// Header for pages with results: symbol, title, status line.
     /// While finding, the scanning art; once done, the done art; else the page's own.
-    fn header(&self, c: &mut Canvas, page: R, m: Module, phase: Phase, title: &str, status: &str) -> f32 {
+    fn header(&mut self, c: &mut Canvas, page: R, m: Module, phase: Phase, title: &str, status: &str) -> f32 {
         let y = page.y + 30.0;
         let art = match phase {
             Phase::Finding => Some(&include_bytes!("../../art/scanning.png")[..]),
@@ -1211,7 +1247,17 @@ impl State {
             _ => m.art(),
         };
         if let Some(art) = art {
-            c.image(R::new(page.x - 4.0, y - 4.0, 80.0, 80.0), art);
+            let box_ = R::new(page.x - 4.0, y - 4.0, 80.0, 80.0);
+            // while scanning the art breathes (0.96 to 1.04 and back, 1.2 s each way)
+            let k = if phase == Phase::Finding && motion() {
+                self.spins.push(box_.inset(-6.0, -6.0));
+                let t = self.started.elapsed().as_secs_f32();
+                1.0 - 0.04 * (std::f32::consts::PI * t / 1.2).cos()
+            } else {
+                1.0
+            };
+            let (cx, cy) = (box_.x + 40.0, box_.y + 40.0);
+            c.image(R::new(cx - 40.0 * k, cy - 40.0 * k, 80.0 * k, 80.0 * k), art);
         } else {
             c.circle(page.x + 36.0, y + 36.0, 36.0, Some(argb(fg(), 18)), Some((argb(fg(), 60), 1.0)));
             c.icon(R::new(page.x, y, 72.0, 72.0), m.glyph(), 30.0, fg());
@@ -1246,7 +1292,14 @@ impl State {
         let top = page.y + 40.0;
         let tx = x;
         c.text(R::new(tx, top + 6.0, 300.0, 40.0), "Dashboard", 32.0, true, fg(), Align::Left);
-        self.icon_pill(c, tx + 190.0, top + 26.0, REFRESH, Action::DashRefresh);
+        if self.dash.job.is_some() {
+            // reading: the arrow turns, like the Mac's rotating refresh symbol
+            let r = R::new(tx + 190.0, top + 6.0, 40.0, 40.0);
+            c.rounded(r, 20.0, Some(argb(fg(), 41)), Some(argb(fg(), 60)));
+            self.spinner(c, r.x + 20.0, r.y + 20.0, 8.0);
+        } else {
+            self.icon_pill(c, tx + 190.0, top + 26.0, REFRESH, Action::DashRefresh);
+        }
         let hw = &s["hardware"];
         let line: Vec<&str> = ["model", "cpu_model", "total_ram", "os_version"].iter().filter_map(|k| hw[*k].as_str()).filter(|v| !v.is_empty()).collect();
         c.text(R::new(tx, top + 56.0, page.w - 40.0, 20.0), &line.join(" · "), 13.0, false, dim(), Align::Left);
@@ -1282,7 +1335,9 @@ impl State {
             if let Some(f) = fraction {
                 let bar = R::new(r.x + 18.0, r.y + 84.0, r.w - 36.0, 6.0);
                 c.rounded(bar, 3.0, Some(argb(fg(), 38)), None);
-                c.rounded(R::new(bar.x, bar.y, bar.w * (*f as f32 / 100.0).clamp(0.0, 1.0), 6.0), 3.0, Some(argb(amber(), 255)), None);
+                let grown = ease_out(Self::since(self.dash.shown_at) / 0.9);
+                let (from, to) = if light() { (0xE0A100, 0xF4511E) } else { (0xFFD54F, 0xFF8A65) };
+                c.bar(R::new(bar.x, bar.y, bar.w * (*f as f32 / 100.0).clamp(0.0, 1.0) * grown, 6.0), argb(from, 255), argb(to, 255));
             }
             c.text(R::new(r.x + 18.0, r.y + 98.0, r.w - 36.0, 20.0), detail, 13.0, false, dim(), Align::Left);
         }
@@ -1560,9 +1615,9 @@ impl State {
                 } else {
                     "Working…".into()
                 };
+                let progress = p.progress.clone();
                 let mut y = self.header(c, page.inset(18.0, 0.0), m, phase, &title, &status);
                 if !review {
-                    let progress = p.progress.clone();
                     self.removal_progress(c, R::new(page.x + 18.0, y, page.w - 36.0, 40.0), &progress);
                     y += 44.0;
                 }
@@ -1796,7 +1851,8 @@ impl State {
             yy - start
         });
         let chart = R::new(list_r.right() + 24.0, body.y, body.right() - list_r.right() - 24.0, body.h);
-        self.draw_bubbles(c, chart, &entries);
+        let key = self.space.stack.last().cloned().flatten().unwrap_or_default();
+        self.draw_bubbles(c, chart, &entries, &key);
         if live {
             c.text(R::new(chart.x, chart.bottom() - 24.0, chart.w, 20.0), "Measuring… sizes keep growing until the scan finishes.", 12.0, false, dim(), Align::Center);
         }
@@ -1813,7 +1869,7 @@ impl State {
         }
     }
 
-    fn draw_bubbles(&mut self, c: &mut Canvas, r: R, entries: &[Value]) {
+    fn draw_bubbles(&mut self, c: &mut Canvas, r: R, entries: &[Value], key: &str) {
         let sized: Vec<&Value> = entries.iter().filter(|e| e["size"].as_f64().unwrap_or(0.0) > 0.0).collect();
         let total: f64 = sized.iter().filter_map(|e| e["size"].as_f64()).sum();
         if total <= 0.0 {
@@ -1826,9 +1882,17 @@ impl State {
         if rest >= total * 0.015 {
             sizes.push(rest);
         }
+        // a folder shown for the first time: the bubbles pop in one after another
+        if self.space.shown.as_ref().is_none_or(|(k, _)| k != key) {
+            self.space.shown = Some((key.to_string(), Instant::now()));
+            self.animate(1.4);
+        }
+        let t0 = Self::since(self.space.shown.as_ref().map(|(_, t)| *t));
         let side = r.w.min(r.h);
         let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
-        c.circle(cx, cy, side / 2.0, Some(argb(fg(), 22)), Some((argb(fg(), 50), 1.0)));
+        let disc = side / 2.0 * (0.92 + 0.08 * spring(t0, 0.55, 0.7));
+        c.ball(cx, cy, disc, WHITE, if light() { 90 } else { 41 }, if light() { 40 } else { 8 });
+        c.circle(cx, cy, disc, None, Some((argb(fg(), 50), 1.0)));
         let tints = [0x5EE6D0, 0x4FC3F7, 0x7C9CFF, 0xB388FF, 0x64B5F6];
         for (rank, (i, bx, by, br)) in pack(&sizes, side / 2.0 * 0.9).into_iter().enumerate() {
             let (x, y) = (cx + bx, cy + by);
@@ -1836,9 +1900,17 @@ impl State {
             let tint = if entry.is_some() { tints[rank % tints.len()] } else { fg() };
             let hit = R::new(x - br, y - br, 2.0 * br, 2.0 * br);
             let hot = self.hot(hit);
-            c.circle(x, y, br, Some(argb(tint, if hot { 120 } else { 80 })), Some((argb(fg(), if hot { 150 } else { 80 }), 1.0)));
+            // spring from 0.2 to full size, 40 ms apart by rank; hovered ones grow 5%
+            let t = t0 - rank as f32 * 0.04;
+            let grow = 0.2 + 0.8 * spring(t, 0.55, 0.7);
+            let rr = br * grow * if hot { 1.05 } else { 1.0 };
+            if t <= 0.0 {
+                continue;
+            }
+            c.ball(x, y, rr, tint, if hot { 140 } else { 97 }, if hot { 77 } else { 41 });
+            c.circle(x, y, rr, None, Some((argb(WHITE, if hot { 153 } else { 77 }), 1.0)));
             let name = entry.and_then(|e| e["name"].as_str()).unwrap_or("Others");
-            if br >= 48.0 {
+            if br >= 48.0 && grow > 0.85 {
                 c.text(R::new(x - br * 0.75, y - 18.0, br * 1.5, 20.0), name, 13.0, true, fg(), Align::Center);
                 c.text(R::new(x - br * 0.75, y + 2.0, br * 1.5, 18.0), &bytes(Some(sizes[i])), 12.0, false, dim(), Align::Center);
             }
