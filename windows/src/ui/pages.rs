@@ -1962,12 +1962,14 @@ fn sidebar(h: f32) -> R {
     R::new(14.0, 14.0, 236.0, h - 28.0)
 }
 
-/// What stays put on a page: its gradient, two soft light blobs so the glass has something to
-/// sit on, and the sidebar's glass. Drawn into a cache, see `ui::paint`.
+/// What stays put on a page: its gradient, soft lights in the page's colors so the glass has
+/// something to sit on, and the sidebar's glass. Drawn into a cache, see `ui::paint`.
 pub fn draw_backdrop(c: &Canvas, (from, to): (u32, u32), w: f32, h: f32) {
     c.gradient(R::new(0.0, 0.0, w, h), backdrop(from), backdrop(to));
-    c.circle(w * 0.85, h * 0.08, 360.0, Some(argb(from, if light() { 40 } else { 70 })), None);
-    c.circle(w * 0.2, h * 0.98, 300.0, Some(argb(WHITE, 14)), None);
+    let (a, b) = if light() { (90, 70) } else { (150, 110) };
+    c.glow(w * 0.82, h * 0.05, w.max(h) * 0.45, from, a);
+    c.glow(w * 0.15, h * 0.95, w.max(h) * 0.40, to, b);
+    c.glow(w * 0.55, h * 0.55, w.max(h) * 0.30, WHITE, if light() { 60 } else { 22 });
     c.glass(sidebar(h), 22.0);
 }
 

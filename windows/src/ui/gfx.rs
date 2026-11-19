@@ -212,18 +212,36 @@ impl Canvas {
         }
     }
 
-    pub fn rounded(&self, r: R, radius: f32, fill: Option<u32>, stroke: Option<u32>) {
+    /// A rounded-rectangle path in device pixels; the caller deletes it.
+    fn round_path(&self, r: R, radius: f32) -> *mut GpPath {
         let s = self.s;
         let (x, y, w, h) = (r.x * s, r.y * s, r.w * s, r.h * s);
         let d = (radius * 2.0 * s).min(h).min(w).max(1.0);
+        let mut path = null_mut();
         unsafe {
-            let mut path = null_mut();
             GdipCreatePath(FillModeAlternate, &mut path);
             GdipAddPathArc(path, x, y, d, d, 180.0, 90.0);
             GdipAddPathArc(path, x + w - d, y, d, d, 270.0, 90.0);
             GdipAddPathArc(path, x + w - d, y + h - d, d, d, 0.0, 90.0);
             GdipAddPathArc(path, x, y + h - d, d, d, 90.0, 90.0);
             GdipClosePathFigure(path);
+        }
+        path
+    }
+
+    /// Top-to-bottom gradient brush over `r`.
+    fn vertical(&self, r: R, top: u32, bottom: u32) -> *mut GpBrush {
+        let s = self.s;
+        let rect = RectF { X: r.x * s, Y: r.y * s - 1.0, Width: (r.w * s).max(1.0), Height: r.h * s + 2.0 };
+        let mut b = null_mut();
+        unsafe { GdipCreateLineBrushFromRect(&rect, top, bottom, LinearGradientModeVertical, WrapModeTileFlipXY, &mut b) };
+        b as *mut GpBrush
+    }
+
+    pub fn rounded(&self, r: R, radius: f32, fill: Option<u32>, stroke: Option<u32>) {
+        let s = self.s;
+        unsafe {
+            let path = self.round_path(r, radius);
             if let Some(c) = fill {
                 let b = self.brush(c);
                 GdipFillPath(self.g, b, path);
@@ -239,12 +257,51 @@ impl Canvas {
         }
     }
 
-    /// The one glass surface for every panel (white tint over the gradient).
+    /// The one glass surface for every panel: a soft shadow under it, a tint brighter at the
+    /// top, and a rim that catches light along the top edge and fades towards the bottom.
     pub fn glass(&self, r: R, radius: f32) {
-        if light() {
-            self.rounded(r, radius, Some(argb(WHITE, 150)), Some(argb(0, 28)));
+        let s = self.s;
+        let (shadow, top, bottom, rim_top, rim_bottom) = if light() {
+            (argb(0x1B2333, 7), argb(WHITE, 175), argb(WHITE, 120), argb(WHITE, 255), argb(0, 22))
         } else {
-            self.rounded(r, radius, Some(argb(WHITE, 26)), Some(argb(WHITE, 56)));
+            (argb(0, 16), argb(WHITE, 38), argb(WHITE, 14), argb(WHITE, 120), argb(WHITE, 26))
+        };
+        for i in 1..=3 {
+            let o = i as f32 * 2.0;
+            self.rounded(R::new(r.x - o * 0.5, r.y + o, r.w + o, r.h + o * 0.5), radius + o, Some(shadow), None);
+        }
+        unsafe {
+            let path = self.round_path(r, radius);
+            let fill = self.vertical(r, top, bottom);
+            GdipFillPath(self.g, fill, path);
+            GdipDeleteBrush(fill);
+            let rim = self.vertical(R::new(r.x, r.y, r.w, r.h.min(radius * 6.0)), rim_top, rim_bottom);
+            let mut pen = null_mut();
+            GdipCreatePen2(rim, (1.2 * s).max(1.0), UnitPixel, &mut pen);
+            GdipDrawPath(self.g, pen, path);
+            GdipDeletePen(pen);
+            GdipDeleteBrush(rim);
+            GdipDeletePath(path);
+        }
+    }
+
+    /// A soft light: `color` at `alpha` in the middle, fading to nothing at `radius`.
+    pub fn glow(&self, cx: f32, cy: f32, radius: f32, color: u32, alpha: u8) {
+        let s = self.s;
+        let (x, y, d) = ((cx - radius) * s, (cy - radius) * s, 2.0 * radius * s);
+        unsafe {
+            let mut path = null_mut();
+            GdipCreatePath(FillModeAlternate, &mut path);
+            GdipAddPathEllipse(path, x, y, d, d);
+            let mut brush = null_mut();
+            GdipCreatePathGradientFromPath(path, &mut brush);
+            GdipSetPathGradientCenterColor(brush, argb(color, alpha));
+            let edge = argb(color, 0);
+            let mut n = 1;
+            GdipSetPathGradientSurroundColorsWithCount(brush, &edge, &mut n);
+            GdipFillPath(self.g, brush as *mut GpBrush, path);
+            GdipDeleteBrush(brush as *mut GpBrush);
+            GdipDeletePath(path);
         }
     }
 
