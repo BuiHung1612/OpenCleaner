@@ -1,7 +1,7 @@
 //! OpenCleaner for Windows: the same pages as the macOS app, painted natively (Win32 +
 //! GDI+), on the same Rust engine, called directly (no C ABI needed here).
 
-#![cfg_attr(windows, windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 mod github;
 #[cfg(windows)]

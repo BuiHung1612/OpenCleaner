@@ -63,7 +63,8 @@ jobs:
       - name: Build
         working-directory: windows
         run: |
-          cargo clippy --release -- -D warnings
+          cargo clippy --release --all-targets -- -D warnings
+          cargo test --release
           cargo build --release
       - name: Package
         shell: pwsh
@@ -71,6 +72,92 @@ jobs:
           $exe = "windows/target/release/OpenCleaner.exe"
           if (-not (Test-Path $exe)) { throw "OpenCleaner.exe was not built" }
           Get-Item $exe | Format-List Name, Length
+      # the app on a real Windows desktop: it must start, stay up and show its window; then
+      # each page through the keyboard (Tab along the sidebar, Enter), with a screenshot each
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Drawing, System.Windows.Forms
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class W {
+              [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+              [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+              [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+              [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+              [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+              public static string Title(IntPtr h) { var s = new StringBuilder(256); GetWindowText(h, s, 256); return s.ToString(); }
+          }
+          '@
+          $shots = Join-Path $env:RUNNER_TEMP 'screenshots'
+          New-Item -ItemType Directory -Force $shots | Out-Null
+          $crash = Join-Path $env:LOCALAPPDATA 'OpenCleaner\crash.log'
+          Remove-Item $crash -ErrorAction SilentlyContinue
+          function Shot($name) {
+              $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+              $g = [System.Drawing.Graphics]::FromImage($bmp)
+              $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+              $bmp.Save((Join-Path $shots "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+              $g.Dispose(); $bmp.Dispose()
+          }
+          function Alive($p, $when) {
+              if ($p.HasExited) {
+                  if (Test-Path $crash) { Get-Content $crash | Write-Host }
+                  throw "OpenCleaner exited $when (exit code $($p.ExitCode))"
+              }
+          }
+          # PostMessage, not SendKeys: works whether or not the window has the focus
+          function Key($hwnd, $vk) {
+              [void][W]::PostMessage($hwnd, 0x0100, [IntPtr]$vk, [IntPtr]::Zero)  # WM_KEYDOWN
+              Start-Sleep -Milliseconds 300
+          }
+
+          $p = Start-Process -FilePath windows/target/release/OpenCleaner.exe -PassThru
+          Start-Sleep -Seconds 8
+          Alive $p 'within 8 seconds of starting'
+          $hwnd = [W]::FindWindow('OpenCleanerWindow', $null)
+          if ($hwnd -eq [IntPtr]::Zero -or -not [W]::IsWindowVisible($hwnd)) { Shot '00-no-window'; throw 'OpenCleaner shows no window' }
+          $p.Refresh()
+          Write-Host "Main window $($p.MainWindowHandle): '$([W]::Title($hwnd))'"
+          [void][W]::SetForegroundWindow($hwnd)
+          Start-Sleep -Seconds 1
+          Shot '01-dashboard'
+
+          # sidebar order after the dashboard (pages.rs SECTIONS); the first Tab focuses Dashboard
+          $pages = 'System Junk', 'Installers', 'Project Junk', 'Uninstaller', 'Startup Items', 'Space Lens', 'Large & Old Files', 'Duplicates', 'History', 'Settings'
+          Key $hwnd 0x09
+          $n = 2
+          foreach ($page in $pages) {
+              Key $hwnd 0x09   # Tab: next sidebar entry
+              Key $hwnd 0x0D   # Enter: open it
+              Start-Sleep -Seconds 2
+              Alive $p "on $page"
+              $title = [W]::Title($hwnd)
+              Write-Host "Page: '$title'"
+              if ($title -ne "OpenCleaner - $page") { Write-Host "::warning::expected page '$page', the window says '$title'" }
+              $file = '{0:d2}-{1}' -f $n, ($page -replace '[^A-Za-z]+', '-').ToLower()
+              Shot $file
+              $n++
+              if ($page -eq 'System Junk') {
+                  Key $hwnd 0x74   # F5: scan (nothing is removed without a click and a confirmation)
+                  Start-Sleep -Seconds 20
+                  Alive $p 'while scanning System Junk'
+                  Shot ('{0:d2}-system-junk-scanned' -f $n)
+                  $n++
+              }
+          }
+          Alive $p 'at the end'
+          Stop-Process -Id $p.Id
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: OpenCleaner-windows-screenshots
+          path: ${{ runner.temp }}/screenshots
+          if-no-files-found: ignore
       # shipped as the bare exe: one file, nothing to unpack
       - uses: actions/upload-artifact@v7
         with:
