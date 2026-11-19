@@ -236,6 +236,15 @@ struct Buffers {
     prev_bmp: HBITMAP,
     page: Option<pages::Module>,
     fade: Option<std::time::Instant>,
+    /// the new page is in `back` since the fade began: fade frames only blend, no redraw
+    fresh: bool,
+}
+
+/// A page change is still fading in.
+fn fading() -> bool {
+    BUFFERS.with(|cell| {
+        cell.try_borrow().ok().and_then(|b| b.as_ref().and_then(|b| b.fade)).is_some_and(|t| t.elapsed().as_secs_f32() < FADE_SECS)
+    })
 }
 
 const FADE_SECS: f32 = 0.22;
@@ -268,6 +277,7 @@ fn paint(hwnd: HWND) {
                 prev_bmp: null_mut(),
                 page: None,
                 fade: None,
+                fresh: false,
             });
             if b.size != (w, h) {
                 for (dc, bmp) in [(b.back, &mut b.back_bmp), (b.bg, &mut b.bg_bmp), (b.prev, &mut b.prev_bmp)] {
@@ -297,33 +307,41 @@ fn paint(hwnd: HWND) {
                 if b.page.is_some() && gfx::motion() {
                     BitBlt(b.prev, 0, 0, w, h, b.back, 0, 0, SRCCOPY);
                     b.fade = Some(std::time::Instant::now());
-                    with(|st| st.animate(FADE_SECS));
+                    b.fresh = false;
+                    anim_timer(hwnd, true);
                 }
                 b.page = page;
             }
+            let t = b.fade.map_or(1.0, |start| start.elapsed().as_secs_f32() / FADE_SECS);
+            if t >= 1.0 {
+                b.fade = None;
+            }
             let (dw, dh) = (d.right - d.left, d.bottom - d.top);
-            BitBlt(b.back, d.left, d.top, dw, dh, b.bg, d.left, d.top, SRCCOPY);
-            let drawn = with(|st| {
-                let mut c = Canvas::new(b.back, s, Some(d));
-                st.draw(&mut c, lw, lh);
-                (c, std::mem::take(&mut st.fonts))
-            });
-            if let Some((c, mut fonts)) = drawn {
-                c.finish(&mut fonts);
-                with(|st| st.fonts = fonts);
+            // Draw the page, except while fading once it is drawn: those frames only blend two
+            // finished pictures (a full redraw per frame came out at a few uneven steps, which
+            // read as flicker). Nor when the state is busy (a dialog's message loop): the last
+            // picture stays instead of a blank backdrop.
+            let busy = with(|_| ()).is_none();
+            if !busy && !(b.fade.is_some() && b.fresh) {
+                BitBlt(b.back, d.left, d.top, dw, dh, b.bg, d.left, d.top, SRCCOPY);
+                let drawn = with(|st| {
+                    let mut c = Canvas::new(b.back, s, Some(d));
+                    st.draw(&mut c, lw, lh);
+                    (c, std::mem::take(&mut st.fonts))
+                });
+                if let Some((c, mut fonts)) = drawn {
+                    c.finish(&mut fonts);
+                    with(|st| st.fonts = fonts);
+                }
+                // a full picture of the new page now in `back`
+                b.fresh |= d.left <= 0 && d.top <= 0 && d.right >= w && d.bottom >= h;
             }
             BitBlt(hdc, d.left, d.top, dw, dh, b.back, d.left, d.top, SRCCOPY);
-            if let Some(start) = b.fade {
-                let t = start.elapsed().as_secs_f32() / FADE_SECS;
-                if t < 1.0 {
-                    // ease-out: the new page shows at once and the old one clears quickly (an ease-in-out
-                    // held the old page for the first frames, which read as a flicker)
-                    let alpha = (255.0 * (1.0 - gfx::ease_out(t))) as u8;
-                    let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: alpha, AlphaFormat: 0 };
-                    AlphaBlend(hdc, d.left, d.top, dw, dh, b.prev, d.left, d.top, dw, dh, blend);
-                } else {
-                    b.fade = None;
-                }
+            if b.fade.is_some() {
+                // ease-out: the new page shows at once and the old one clears quickly
+                let alpha = (255.0 * (1.0 - gfx::ease_out(t))) as u8;
+                let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: alpha, AlphaFormat: 0 };
+                AlphaBlend(hdc, d.left, d.top, dw, dh, b.prev, d.left, d.top, dw, dh, blend);
             }
         });
         EndPaint(hwnd, &ps);
@@ -434,7 +452,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_TIMER if wparam == TIMER_ANIM => {
-            if with(|st| st.animating()) != Some(true) {
+            // one more tick after the end: the last frame is drawn in full
+            if with(|st| st.animating()) != Some(true) && !fading() {
                 anim_timer(hwnd, false);
             }
             invalidate(hwnd);

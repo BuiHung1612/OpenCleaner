@@ -133,12 +133,18 @@ const PROJECT_FOLDERS: &[&str] = &["Documents", "Desktop"];
 pub fn projects(ctx: &Context, extra_roots: &[PathBuf], cancel: &AtomicBool) -> Vec<Pick> {
     let mut seen = HashSet::new();
     let mut roots = Vec::new();
-    for r in PROJECT_ROOTS
-        .iter()
-        .map(|r| ctx.home.join(r))
-        .chain(PROJECT_FOLDERS.iter().map(|f| ctx.user_folder(f)))
-        .chain(extra_roots.iter().cloned())
-    {
+    // Windows: the whole profile, OneDrive included (projects end up anywhere in it; AppData
+    // is skipped below). Elsewhere the usual project folders.
+    let usual: Vec<PathBuf> = if cfg!(windows) {
+        vec![ctx.home.clone()]
+    } else {
+        PROJECT_ROOTS
+            .iter()
+            .map(|r| ctx.home.join(r))
+            .chain(PROJECT_FOLDERS.iter().map(|f| ctx.user_folder(f)))
+            .collect()
+    };
+    for r in usual.into_iter().chain(extra_roots.iter().cloned()) {
         if let Ok(e) = fs::stat(&r, Detail::Basic)
             && e.kind == Kind::Dir
             && seen.insert((e.dev, e.ino))
@@ -240,7 +246,12 @@ impl Visitor for ArtifactFinder {
             return None;
         }
         // not into version control internals, other hidden folders, app bundles, or too deep
-        if depth >= 6 || name.starts_with('.') || name.ends_with(".app") || name == "Library" {
+        if depth >= 6
+            || name.starts_with('.')
+            || name.ends_with(".app")
+            || name == "Library"
+            || name == "AppData"
+        {
             return None;
         }
         Some(tag)

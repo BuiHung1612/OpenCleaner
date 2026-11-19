@@ -2096,7 +2096,7 @@ impl State {
         c.text(R::new(row.x + 200.0, row.y, row.w - 200.0, row.h), &self.version.clone(), 14.0, false, dim(), Align::Right);
         c.para(
             R::new(panel.x + 20.0, panel.y + 164.0, panel.w - 40.0, 44.0),
-            "Asks GitHub for the latest release when OpenCleaner starts. Nothing is downloaded or installed by itself: you choose whether to open the download page.",
+            "Asks GitHub for the latest release when OpenCleaner starts. A newer version is installed only if you say yes: it is downloaded, checked against the release's SHA-256, swapped in and OpenCleaner restarts.",
             12.0,
             dim(),
         );

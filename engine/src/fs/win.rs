@@ -15,13 +15,38 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+    FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS, FILE_ATTRIBUTE_RECALL_ON_OPEN,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_BOTH_DIR_INFO, FileAttributeTagInfo, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
     FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
     GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING,
 };
 
 const BUF_LEN: usize = 64 * 1024;
+
+const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+const IO_REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;
+
+/// Only links (symlinks, junctions, volume mount points) lead somewhere else and are never
+/// followed. Other reparse points are ordinary files and folders to the user: OneDrive
+/// marks Desktop, Documents and every synced file that way, deduplication and compression
+/// too. Counting those as links hid whole OneDrive folders from every search.
+fn kind_of(attrs: u32, tag: u32) -> Kind {
+    let link = attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        && (tag == IO_REPARSE_TAG_SYMLINK || tag == IO_REPARSE_TAG_MOUNT_POINT);
+    if link {
+        Kind::Symlink
+    } else if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        Kind::Dir
+    } else {
+        Kind::File
+    }
+}
+
+/// Contents only in the cloud: opening it would download it.
+fn online_only(attrs: u32) -> bool {
+    attrs & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE) != 0
+}
 
 struct Handle(HANDLE);
 impl Drop for Handle {
@@ -126,16 +151,11 @@ pub fn read_dir(dir: &Path, cancel: &AtomicBool, visit: &mut dyn FnMut(&Entry)) 
 
 fn entry_of(rec: &FILE_ID_BOTH_DIR_INFO, name: OsString, volume: u64) -> Entry {
     let attrs = rec.FileAttributes;
-    // symlinks, junctions and volume mount points are all reparse points: never followed
-    let kind = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        Kind::Symlink
-    } else if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        Kind::Dir
-    } else {
-        Kind::File
-    };
+    // for a reparse point, the listing puts its tag where the EA size would be
+    let kind = kind_of(attrs, rec.EaSize);
     Entry {
         kind,
+        online_only: online_only(attrs),
         dev: volume,
         ino: rec.FileId as u64,
         alloc: rec.AllocationSize.max(0) as u64,
@@ -172,19 +192,28 @@ pub fn stat(path: &Path) -> io::Result<Entry> {
         return Err(io::Error::last_os_error());
     }
     let attrs = info.dwFileAttributes;
-    let kind = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        Kind::Symlink
-    } else if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        Kind::Dir
-    } else {
-        Kind::File
-    };
+    let mut tag: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        && unsafe {
+            GetFileInformationByHandleEx(
+                h.0,
+                FileAttributeTagInfo,
+                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+            )
+        } == 0
+    {
+        // tag unknown: treated as a link, never followed
+        tag.ReparseTag = IO_REPARSE_TAG_SYMLINK;
+    }
+    let kind = kind_of(attrs, tag.ReparseTag);
     let len = (info.nFileSizeHigh as u64) << 32 | info.nFileSizeLow as u64;
     let ft = |f: windows_sys::Win32::Foundation::FILETIME| {
         (f.dwHighDateTime as u64) << 32 | f.dwLowDateTime as u64
     };
     Ok(Entry {
         kind,
+        online_only: online_only(attrs),
         dev: info.dwVolumeSerialNumber as u64,
         ino: (info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64,
         nlink: info.nNumberOfLinks,

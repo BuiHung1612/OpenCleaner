@@ -176,7 +176,8 @@ pub fn large_old(ctx: &Context, min_mib: u64, days: i64, cancel: &AtomicBool) ->
     let (min, idle_min) = (min_mib.saturating_mul(MIB), days.max(0).saturating_mul(DAY));
     let keep = |dir: &Path, e: &Entry| {
         let idle = now - e.mtime.max(e.atime);
-        (e.len >= min && idle >= idle_min)
+        // a cloud-only file takes no room here: removing it would only delete the cloud copy
+        (e.len >= min && idle >= idle_min && !e.online_only)
             || (dir == desktop
                 && is_screenshot(&e.name.to_string_lossy())
                 && now - e.mtime >= 30 * DAY)
@@ -209,7 +210,7 @@ pub fn large_old(ctx: &Context, min_mib: u64, days: i64, cancel: &AtomicBool) ->
 pub fn duplicates(ctx: &Context, min_mib: u64, cancel: &AtomicBool) -> Vec<Pick> {
     let min = min_mib.max(1).saturating_mul(MIB);
     // an iCloud file not on this Mac would be downloaded to hash it: left out
-    let keep = |dir: &Path, e: &Entry| e.len >= min && !dataless(&dir.join(&e.name));
+    let keep = |dir: &Path, e: &Entry| e.len >= min && !e.online_only && !dataless(&dir.join(&e.name));
     // same size first (free), then the same first 64 KiB, then the whole content
     let mut by_len: HashMap<u64, Vec<Found>> = HashMap::new();
     let mut inodes = HashSet::new();

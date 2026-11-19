@@ -33,6 +33,13 @@ fn issue_url(version: &str, os: &str, log: &str, limit: usize) -> String {
     }
 }
 
+/// The hash from `certutil -hashfile <file> SHA256` output (second line; older versions
+/// put spaces between the bytes), lowercase.
+fn certutil_hash(out: &str) -> Option<String> {
+    let hex: String = out.lines().nth(1)?.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
+    (hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())).then_some(hex)
+}
+
 #[cfg(windows)]
 mod win {
     use crate::ui::wide;
@@ -87,9 +94,39 @@ mod win {
                 open(&super::issue_url(version, &os, &log, 7000));
             }
         }
+        // what the last update replaced (a running exe can be renamed, not deleted)
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = std::fs::remove_file(exe.with_extension("old.exe"));
+        }
         if crate::ui::reg_dword(crate::ui::SETTINGS_KEY, super::CHECK_VALUE) != Some(0) {
             check(false);
         }
+    }
+
+    /// Downloads the new exe next to this one, checks it against the SHA-256 GitHub lists
+    /// for the release asset, swaps it in (the running exe is renamed aside) and starts it.
+    /// Returns only on failure, with what went wrong; this exe is then left as it was.
+    fn install(url: &str, digest: &str) -> Result<(), String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let new = exe.with_extension("new.exe");
+        let old = exe.with_extension("old.exe");
+        let new_s = new.to_string_lossy().into_owned();
+        quiet("curl.exe", &["-fsSL", "-m", "300", "-H", "User-Agent: OpenCleaner", "-o", &new_s, url])
+            .ok_or("The download failed. Check your internet connection, or that this folder can be written to.")?;
+        let hash = quiet("certutil", &["-hashfile", &new_s, "SHA256"]).and_then(|o| super::certutil_hash(&o));
+        if hash.as_deref() != Some(digest.trim_start_matches("sha256:").to_ascii_lowercase().as_str()) {
+            let _ = std::fs::remove_file(&new);
+            return Err("The download did not match the release (SHA-256 differs), so it was not installed.".into());
+        }
+        let _ = std::fs::remove_file(&old);
+        std::fs::rename(&exe, &old).map_err(|e| format!("Could not replace OpenCleaner: {e}"))?;
+        if let Err(e) = std::fs::rename(&new, &exe) {
+            let _ = std::fs::rename(&old, &exe);
+            return Err(format!("Could not replace OpenCleaner: {e}"));
+        }
+        Command::new(&exe).spawn().map_err(|e| format!("Installed, but could not start it: {e}"))?;
+        // the new version is running: this one ends here (asked first, so nothing is mid-way)
+        std::process::exit(0);
     }
 
     /// Asks GitHub for the latest release. `manual` (Settings > Check Now) also says when
@@ -99,11 +136,28 @@ mod win {
         // curl.exe ships with Windows 10 1803 and later; offline or older systems just stay quiet
         let api = format!("https://api.github.com/repos/{}/releases/latest", super::REPO);
         let reply = quiet("curl.exe", &["-fsSL", "-m", "15", "-H", "User-Agent: OpenCleaner", &api]);
-        let tag = reply.and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok()).and_then(|v| v["tag_name"].as_str().map(str::to_owned));
+        let release = reply.and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok());
+        let tag = release.as_ref().and_then(|v| v["tag_name"].as_str().map(str::to_owned));
+        let page = format!("https://github.com/{}/releases/latest", super::REPO);
         match tag {
             Some(tag) if super::is_newer(&tag, version) => {
-                if ask(&format!("A newer version is available: OpenCleaner {}. You have {version}.\n\nOpen the download page?", tag.trim_start_matches('v'))) {
-                    open(&format!("https://github.com/{}/releases/latest", super::REPO));
+                let new = tag.trim_start_matches('v');
+                let asset = release.as_ref().and_then(|r| r["assets"].as_array()?.iter().find(|a| a["name"] == "OpenCleaner.exe").cloned());
+                let found = asset.as_ref().and_then(|a| Some((a["browser_download_url"].as_str()?.to_owned(), a["digest"].as_str()?.to_owned())));
+                match found {
+                    Some((url, digest)) => {
+                        if ask(&format!("OpenCleaner {new} is available. You have {version}.\n\nInstall it now? OpenCleaner restarts when it is done."))
+                            && let Err(e) = install(&url, &digest)
+                            && ask(&format!("{e}\n\nOpen the download page to install it yourself?"))
+                        {
+                            open(&page);
+                        }
+                    }
+                    None => {
+                        if ask(&format!("OpenCleaner {new} is available. You have {version}.\n\nOpen the download page?")) {
+                            open(&page);
+                        }
+                    }
                 }
             }
             Some(_) if manual => tell(&format!("OpenCleaner {version} is the latest version.")),
@@ -134,6 +188,16 @@ mod tests {
         assert!(is_newer("1.0.10", "1.0.9\n"));
         assert!(!is_newer("1.0", "1.0.0"));
         assert!(!is_newer("0.9.9", "1.0.0"));
+    }
+
+    #[test]
+    fn certutil_output() {
+        let h = "8f7f66daaafe883874fe0f1273dcf70bd2a518fa865a14e493dfb6e66e759559";
+        let out = format!("SHA256 hash of C:\\x.exe:\r\n{h}\r\nCertUtil: -hashfile command completed successfully.\r\n");
+        assert_eq!(certutil_hash(&out).as_deref(), Some(h));
+        let spaced = format!("SHA256 hash of file x:\n{}\nCertUtil: ok\n", h.as_bytes().chunks(2).map(|c| std::str::from_utf8(c).unwrap().to_uppercase()).collect::<Vec<_>>().join(" "));
+        assert_eq!(certutil_hash(&spaced).as_deref(), Some(h));
+        assert_eq!(certutil_hash("CertUtil: error\n"), None);
     }
 
     #[test]

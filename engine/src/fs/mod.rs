@@ -86,6 +86,9 @@ pub struct Entry {
     pub mount_point: bool,
     /// The entry is listed but its attributes could not be read.
     pub error: Option<i32>,
+    /// A cloud file whose contents are not on this computer (OneDrive "online-only"):
+    /// removing it frees nothing here, reading it would download it.
+    pub online_only: bool,
 }
 
 impl Entry {
@@ -104,6 +107,7 @@ impl Entry {
             atime: 0,
             mount_point: false,
             error: None,
+            online_only: false,
         }
     }
 
