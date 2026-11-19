@@ -402,13 +402,13 @@ struct JunkPage: View {
             }
         } center: {
             switch model.phase {
-            case .idle: BigButton(title: String(localized: "Scan")) { model.scan() }
+            case .idle: BigButton(title: String(localized: "Scan"), returnKey: true) { model.scan() }
             case .scanning, .cleaning: BigButton(title: "", busy: true) {}
             case .review:
                 BigButton(title: String(localized: "Clean")) { confirming = true }
                     .disabled(model.selectedBytes == 0)
                     .opacity(model.selectedBytes == 0 ? 0.5 : 1)
-            case .done: BigButton(title: String(localized: "Scan")) { model.scan() }
+            case .done: BigButton(title: String(localized: "Scan"), returnKey: true) { model.scan() }
             }
         } trailing: {
             if model.phase == .scanning {

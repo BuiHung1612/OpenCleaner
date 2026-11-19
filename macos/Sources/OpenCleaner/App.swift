@@ -421,6 +421,9 @@ struct Art: View {
 struct BigButton: View {
     let title: String
     var busy = false
+    /// Return presses it. Only for safe steps (Scan, Review): a stray Return (typing in the
+    /// search field) must never start a removal, even one that still asks first.
+    var returnKey = false
     var action: () -> Void
 
     var body: some View {
@@ -440,7 +443,7 @@ struct BigButton: View {
         .glassEffect(.clear.tint(.white.opacity(0.18)).interactive(), in: .circle)
         .overlay(Circle().strokeBorder(.white.opacity(0.45), lineWidth: 2).padding(-6))
         .disabled(busy)
-        .keyboardShortcut(busy ? nil : .defaultAction)
+        .keyboardShortcut(busy || !returnKey ? nil : .defaultAction)
         .accessibilityLabel(busy ? String(localized: "Working…") : title)
     }
 }

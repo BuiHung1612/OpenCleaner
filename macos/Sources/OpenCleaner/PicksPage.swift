@@ -204,14 +204,17 @@ struct PicksList: View {
                     // current list: a new list (rescan, Start Over, after removing) can arrive
                     // while SwiftUI still holds rows built from the old one
                     let rows = group.indexes.filter(model.items.indices.contains)
+                        .map { (index: $0, key: model.items[$0].path.string ?? "\($0)") }
                     VStack(alignment: .leading, spacing: 2) {
                         if !group.name.isEmpty {
-                            Text(verbatim: PickText.group(group.name, first: rows.first.map { model.items[$0] }))
+                            Text(verbatim: PickText.group(group.name, first: rows.first.map { model.items[$0.index] }))
                                 .font(.app(13, weight: .semibold)).foregroundStyle(.dim)
                                 .lineLimit(1).truncationMode(.head).padding(.leading, 12)
                                 .accessibilityAddTraits(.isHeader)
                         }
-                        ForEach(rows, id: \.self) { i in row(i).id(model.items[i].path.string ?? "\(i)") }
+                        // the key is computed here, with the list it came from: the row body may
+                        // run again after the list changed, and only reads through the guarded row()
+                        ForEach(rows, id: \.key) { r in row(r.index) }
                     }
                 }
                 if shown.isEmpty {
@@ -390,7 +393,7 @@ struct PicksPage: View {
             }
         } center: {
             switch model.phase {
-            case .idle, .done: BigButton(title: String(localized: "Scan")) { model.find(request) }
+            case .idle, .done: BigButton(title: String(localized: "Scan"), returnKey: true) { model.find(request) }
             case .finding, .acting: BigButton(title: "", busy: true) {}
             case .review:
                 BigButton(title: actionTitle) { confirming = true }
@@ -583,7 +586,7 @@ struct UninstallerPage: View {
         } center: {
             switch picks.phase {
             case .idle:
-                if !model.chosen.isEmpty { BigButton(title: String(localized: "Review")) { model.review() } }
+                if !model.chosen.isEmpty { BigButton(title: String(localized: "Review"), returnKey: true) { model.review() } }
             case .finding, .acting: BigButton(title: "", busy: true) {}
             case .review:
                 BigButton(title: String(localized: "Uninstall")) { confirming = true }
