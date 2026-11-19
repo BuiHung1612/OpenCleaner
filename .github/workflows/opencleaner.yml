@@ -1,9 +1,17 @@
 name: OpenCleaner
 
 on:
+  # main and release tags only: other branches are built through their pull request
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+
+# a newer push to the same branch or PR replaces the run in progress
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -30,9 +38,11 @@ jobs:
         run: |
           cargo clippy --all-targets -- -D warnings
           cargo test --no-fail-fast
-      # speed vs du on a 200k-file tree; fails only past 2x engine/bench/baseline.json
+      # speed vs du on a 200k-file tree. Warning only until the baseline is measured on
+      # CI runners (engine/bench/baseline.json was set on a busy laptop)
       - name: Benchmark
         if: runner.os == 'macOS'
+        continue-on-error: true
         working-directory: engine
         run: |
           cargo build --release --bin oce
