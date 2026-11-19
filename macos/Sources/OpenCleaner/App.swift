@@ -7,6 +7,8 @@ import SwiftUI
 
 @main
 struct OpenCleanerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @AppStorage(Automation.menuBarKey) private var menuBar = true
     init() {
         // needed when launched as a bare executable (`swift run`); a no-op inside the .app
         NSApplication.shared.setActivationPolicy(.regular)
@@ -30,6 +32,9 @@ struct OpenCleanerApp: App {
         Settings {
             SettingsView()
         }
+
+        MenuBarExtra(isInserted: $menuBar) { MenuBarView() } label: { MenuBarLabel() }
+            .menuBarExtraStyle(.window)
     }
 }
 
@@ -132,6 +137,7 @@ struct MainView: View {
         .animation(.easeInOut(duration: 0.35), value: module)
         .task { version = Engine.version }
         .task { Updater.startAutomaticChecks() }
+        .onReceive(Automation.shared.$openModule.compactMap { $0 }) { module = $0; Automation.shared.openModule = nil }
     }
 
     /// A floating glass panel, not a system sidebar, so the module gradient shows through it.

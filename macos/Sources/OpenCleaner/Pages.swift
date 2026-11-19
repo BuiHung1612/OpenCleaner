@@ -218,6 +218,7 @@ struct SettingsView: View {
                 Text("Off: the dashboard reads once when the app opens or comes to the front. Use the refresh button for a new reading.")
                     .font(.system(size: 12)).foregroundStyle(.dim)
             }
+            AutomationSettings()
             Section(String(localized: "Engine")) {
                 Toggle(String(localized: "Faster scans"), isOn: $fastScans)
                     .onChange(of: fastScans) { Engine.setFast(fastScans) }

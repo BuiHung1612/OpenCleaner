@@ -237,3 +237,32 @@
 "Size" = "Dung lượng";
 "Name" = "Tên";
 "Only the first level can be ticked; deeper folders are for looking." = "Chỉ chọn được mục ở cấp đầu tiên; các thư mục sâu hơn chỉ để xem.";
+
+/* Tự động hoá: dọn theo lịch, thanh menu, cảnh báo ổ đầy, theo dõi Thùng rác / Tải về */
+"%@ %@" = "%@ %@";
+"%@ free. Click to clean System Junk." = "Còn trống %@. Bấm để dọn Rác hệ thống.";
+"%lld GB" = "%lld GB";
+"Automation" = "Tự động hoá";
+"Below" = "Dưới";
+"Cancel" = "Huỷ";
+"Clean System Junk now" = "Dọn Rác hệ thống ngay";
+"Clean automatically" = "Tự động dọn";
+"Cleaning failed" = "Dọn không thành công";
+"Cleaning…" = "Đang dọn…";
+"Click to review it." = "Bấm để xem lại.";
+"Downloads holds %@" = "Thư mục Tải về đang chiếm %@";
+"Freed %@" = "Đã giải phóng %@";
+"How often" = "Tần suất";
+"Larger than" = "Lớn hơn";
+"Monthly" = "Hằng tháng";
+"Nothing to clean" = "Không có gì để dọn";
+"Only the items selected by default. The Trash is not emptied." = "Chỉ các mục được chọn sẵn. Thùng rác không bị dọn.";
+"Open OpenCleaner" = "Mở OpenCleaner";
+"Quit OpenCleaner" = "Thoát OpenCleaner";
+"Runs System Junk while OpenCleaner or its menu bar item is open, removing only the items selected by default. The Trash is never emptied." = "Chạy Rác hệ thống khi OpenCleaner hoặc biểu tượng trên thanh menu đang mở, chỉ xoá các mục được chọn sẵn. Thùng rác không bao giờ bị dọn.";
+"Show in menu bar" = "Hiện trên thanh menu";
+"The Trash holds %@" = "Thùng rác đang chiếm %@";
+"Warn when the startup disk is almost full" = "Cảnh báo khi ổ khởi động sắp đầy";
+"Watch the Trash and Downloads" = "Theo dõi Thùng rác và Tải về";
+"Weekly" = "Hằng tuần";
+"Your startup disk is almost full" = "Ổ khởi động sắp đầy";
