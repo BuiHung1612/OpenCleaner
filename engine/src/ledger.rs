@@ -40,6 +40,14 @@ pub enum Line {
         result: String,
         reason: Option<String>,
     },
+    /// A startup item turned off, with what it takes to turn it back on: the plist or
+    /// shortcut's original path (it went to the Trash), or a Run value's name and command.
+    Startup {
+        session: u64,
+        path: PathBuf,
+        label: String,
+        program: String,
+    },
 }
 
 /// Appends lines; history is best effort and never stops a cleanup.

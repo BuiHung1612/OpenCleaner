@@ -61,6 +61,21 @@
       ]
     },
     {
+      "id": "startup",
+      "group": "Speed",
+      "title": "Startup Items",
+      "subtitle": "See what starts when you log in, turn off what you do not need, and which apps hold privacy permissions.",
+      "points": [
+        "Turned-off items go to the Trash",
+        "System items are shown, never changed"
+      ],
+      "icon": "power",
+      "colors": [
+        "#1F7A8C",
+        "#1B2A4A"
+      ]
+    },
+    {
       "id": "slim",
       "group": "Applications",
       "title": "Slim Apps",

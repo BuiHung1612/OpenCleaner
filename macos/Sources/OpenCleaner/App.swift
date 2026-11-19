@@ -194,6 +194,7 @@ struct MainView: View {
                 case "slim": PicksPage(tool: tool, request: ["op": "slim"], kind: .slim, model: slim)
                 case "optimize": OptimizePage(tool: tool)
                 case "touchid": TouchIDPage(tool: tool)
+                case "startup": StartupPage(tool: tool)
                 default: Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
                 }
             }

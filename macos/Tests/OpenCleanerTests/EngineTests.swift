@@ -7,6 +7,13 @@ import Testing
     #expect(Engine.call(["op": "nope"]).ok.bool == false)
 }
 
+@Test func engineListsStartupItemsAndAnswersPermissions() {
+    #expect(Engine.call(["op": "startup_items"]).ok.bool)
+    // with or without Full Disk Access, an answer, never a crash
+    #expect(Engine.call(["op": "permissions"]).ok.bool)
+    #expect(Engine.call(["op": "disable_startup", "path": "/etc/hosts"]).ok.bool == false)
+}
+
 @Test func engineJobStreamsEventsUntilDone() async throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("oc-engine-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
