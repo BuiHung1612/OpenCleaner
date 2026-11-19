@@ -18,6 +18,14 @@ pub trait Visitor: Sync {
     fn entry(&self, dir: &Path, tag: u32, entry: &Entry) -> Option<u32>;
     /// A directory (or an entry in it, under the directory tagged `tag`) could not be read.
     fn error(&self, path: &Path, tag: u32, err: io::Error);
+    /// Before `dir` is read: a visitor that already knows it (from a cache) accounts for
+    /// it here, adds the subdirectories to walk to `subdirs` and returns true; `dir` is
+    /// then not read.
+    fn known(&self, _dir: &Path, _tag: u32, _subdirs: &mut Vec<(PathBuf, u32)>) -> bool {
+        false
+    }
+    /// `dir` is finished: read (or failed to read), or known. Not called once cancelled.
+    fn done(&self, _dir: &Path, _tag: u32) {}
 }
 
 /// Fast mode: scans take every core at normal priority. Off (the default), they leave a
@@ -115,7 +123,7 @@ fn worker(
         };
 
         subdirs.clear();
-        if !cancel.load(Ordering::Relaxed) {
+        if !cancel.load(Ordering::Relaxed) && !visitor.known(&dir, tag, &mut subdirs) {
             let result = super::read_dir(&dir, detail, &mut |e: &Entry| {
                 if let Some(code) = e.error {
                     visitor.error(&dir.join(&e.name), tag, io::Error::from_raw_os_error(code));
@@ -130,6 +138,9 @@ fn worker(
             if let Err(err) = result {
                 visitor.error(&dir, tag, err);
             }
+        }
+        if !cancel.load(Ordering::Relaxed) {
+            visitor.done(&dir, tag);
         }
 
         let mut q = state.lock().unwrap();

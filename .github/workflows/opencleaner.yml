@@ -30,6 +30,13 @@ jobs:
         run: |
           cargo clippy --all-targets -- -D warnings
           cargo test --no-fail-fast
+      # speed vs du on a 200k-file tree; fails only past 2x engine/bench/baseline.json
+      - name: Benchmark
+        if: runner.os == 'macOS'
+        working-directory: engine
+        run: |
+          cargo build --release --bin oce
+          python3 bench/bench.py target/release/oce "$RUNNER_TEMP/oc-bench"
 
   # the Windows app: native UI (Win32 + GDI+) on the same engine
   windows-app:
