@@ -1,6 +1,12 @@
 //! System Junk: scan the rules into a plan the user reviews, then remove what they kept
 //! selected. Removal happens only here (`execute`), item by item, each one re-checked
 //! right before it goes and written to the history.
+//!
+//! A re-scan shows the last scan's sizes at once: each item's freed bytes are kept in
+//! `junk-sizes-v1.json` (keyed by path and file id, trusted `CACHED_MAX_AGE`) and progress
+//! events use them, flagged `"cached": true` with their `measured_at`, while the exact
+//! measurement runs. The plan itself, and so what `execute` removes and reports as freed,
+//! always comes from that exact measurement.
 
 use crate::context::Context;
 use crate::fs::Kind;
@@ -9,7 +15,7 @@ use crate::ledger::{self, Line};
 use crate::procs::Running;
 use crate::rules::{self, Rule, RuleSet, Target, is_within, matches_any};
 use crate::size;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -59,6 +65,10 @@ pub struct PlanSummary {
     pub items: u64,
     pub bytes: u64,
     pub cancelled: bool,
+    /// Some sizes are the previous scan's (a progress event of a re-scan); the plan never is.
+    pub cached: bool,
+    /// When the sizes were measured, seconds since the epoch (the oldest cached one).
+    pub measured_at: i64,
 }
 
 struct Plan {
@@ -161,12 +171,40 @@ pub fn scan_with(
         );
     }
     let paths: Vec<PathBuf> = items.iter().map(|i| i.path.clone()).collect();
+    // the last scan's sizes, shown until the exact ones are in (never stored in the plan)
+    let (measured_at, known) = load_sizes(&ctx.data_dir);
+    let cached: Vec<Option<u64>> = items
+        .iter()
+        .map(|i| {
+            known
+                .get(&i.path)
+                .filter(|k| k.0 == i.id.dev && k.1 == i.id.ino)
+                .map(|k| k.2)
+        })
+        .collect();
+    let any_cached = cached.iter().any(Option::is_some);
     let mut emit_sizes = |sizes: &[u64]| {
+        let shown: Vec<u64> = sizes
+            .iter()
+            .zip(&cached)
+            .map(|(live, old)| old.unwrap_or(*live))
+            .collect();
         let mut partial = summaries.clone();
-        tally(&mut partial, &items, sizes);
-        progress(&summarize(0, set, partial, true, cancel));
+        tally(&mut partial, &items, &shown);
+        let mut s = summarize(0, set, partial, true, cancel);
+        if any_cached {
+            s.cached = true;
+            s.measured_at = measured_at;
+        }
+        progress(&s);
     };
+    if any_cached {
+        emit_sizes(&vec![0; items.len()]);
+    }
     let sizes = size::freed_many(&paths, cancel, &mut emit_sizes);
+    if !cancel.load(Ordering::Relaxed) {
+        store_sizes(&ctx.data_dir, &items, &sizes);
+    }
     for (item, b) in items.iter_mut().zip(&sizes) {
         item.bytes = *b;
     }
@@ -213,6 +251,52 @@ pub fn scan_with(
         plans.remove(0);
     }
     summary
+}
+
+/// How long a scan's sizes are shown on the next one (they are replaced within seconds).
+const CACHED_MAX_AGE: i64 = 86_400;
+const SIZES_FILE: &str = "junk-sizes-v1.json";
+
+#[derive(Default, Serialize, Deserialize)]
+struct Measured {
+    at: i64,
+    /// (path, dev, ino, freed bytes)
+    items: Vec<(PathBuf, u64, u64, u64)>,
+}
+
+/// The last scan's sizes, by path: (dev, ino, bytes). Empty when missing or too old.
+fn load_sizes(dir: &Path) -> (i64, HashMap<PathBuf, (u64, u64, u64)>) {
+    let m: Measured = std::fs::read(dir.join(SIZES_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if crate::dircache::now() - m.at >= CACHED_MAX_AGE {
+        return (0, HashMap::new());
+    }
+    let map = m
+        .items
+        .into_iter()
+        .map(|(p, d, i, b)| (p, (d, i, b)))
+        .collect();
+    (m.at, map)
+}
+
+fn store_sizes(dir: &Path, items: &[Item], sizes: &[u64]) {
+    let m = Measured {
+        at: crate::dircache::now(),
+        items: items
+            .iter()
+            .zip(sizes)
+            .map(|(i, b)| (i.path.clone(), i.id.dev, i.id.ino, *b))
+            .collect(),
+    };
+    let Ok(bytes) = serde_json::to_vec(&m) else {
+        return;
+    };
+    let tmp = dir.join(format!(".junk-sizes-{}.tmp", std::process::id()));
+    if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, dir.join(SIZES_FILE));
+    }
 }
 
 fn sizes_of(items: &[Item]) -> Vec<u64> {
@@ -265,6 +349,8 @@ fn summarize(
         items,
         bytes,
         cancelled: cancel.load(Ordering::Relaxed),
+        cached: false,
+        measured_at: crate::dircache::now(),
     }
 }
 

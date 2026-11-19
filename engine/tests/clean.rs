@@ -479,6 +479,66 @@ fn browser_history_goes_with_its_sidecar_files_and_cookies_stay() {
     assert!(h.p(&format!("{profile}/Bookmarks")).exists());
 }
 
+fn scan_events(h: &Home, set: &RuleSet) -> (Vec<PlanSummary>, PlanSummary) {
+    let mut events = Vec::new();
+    let plan = clean::scan(
+        &h.ctx,
+        set,
+        &Running::default(),
+        &AtomicBool::new(false),
+        &mut |p| events.push(p.clone()),
+    );
+    (events, plan)
+}
+
+#[test]
+fn a_rescan_shows_the_last_sizes_flagged_as_cached_then_the_exact_plan() {
+    let h = Home::new();
+    let set = rules(CACHE_RULE);
+    write(&h.p("Library/Caches/app.one/data.bin"), 100_000);
+    let (events, first) = scan_events(&h, &set);
+    assert!(events.iter().all(|e| !e.cached), "nothing cached yet");
+    assert!(!first.cached);
+
+    // the cache grows in place: same folder, more bytes
+    write(&h.p("Library/Caches/app.one/data.bin"), 900_000);
+    let (events, plan) = scan_events(&h, &set);
+    let shown = events.first().expect("the cached sizes are shown at once");
+    assert!(shown.cached && shown.measured_at > 0);
+    assert_eq!(
+        shown.bytes, first.bytes,
+        "the previous scan's size, flagged as such"
+    );
+    assert!(!plan.cached, "the plan is always measured");
+    assert!(
+        plan.bytes >= 900_000,
+        "the exact size replaces the cached one"
+    );
+}
+
+#[test]
+fn execute_reports_measured_bytes_never_cached_ones() {
+    let h = Home::new();
+    let set = rules(CACHE_RULE);
+    write(&h.p("Library/Caches/app.one/data.bin"), 100_000);
+    scan_events(&h, &set);
+    // a cache claiming far more than is there
+    let file = h.ctx.data_dir.join("junk-sizes-v1.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    v["items"][0][3] = serde_json::json!(1u64 << 40);
+    std::fs::write(&file, v.to_string()).unwrap();
+
+    let (events, plan) = scan_events(&h, &set);
+    assert!(events.iter().any(|e| e.cached && e.bytes == 1 << 40));
+    assert!(plan.bytes < 1 << 30);
+    let out = run(&h, &plan, &["c"]);
+    assert_eq!(out.removed, 1);
+    assert_eq!(
+        out.bytes, plan.bytes,
+        "freed bytes come from the exact measurement"
+    );
+}
+
 #[allow(dead_code)]
 fn exists(p: &Path) -> bool {
     p.exists()

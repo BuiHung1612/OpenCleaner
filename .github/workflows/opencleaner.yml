@@ -38,11 +38,12 @@ jobs:
         run: |
           cargo clippy --all-targets -- -D warnings
           cargo test --no-fail-fast
-      # speed vs du on a 200k-file tree. Warning only until the baseline is measured on
-      # CI runners (engine/bench/baseline.json was set on a busy laptop)
+      # speed vs du on a 200k-file tree; fails past 2x engine/bench/baseline.json. The
+      # baseline is the median of 14 macOS runner results (Nov 2026: size 0.35-0.83,
+      # space 0.43-0.92); space_repeat (0.02-0.09, ~50 ms, mostly process start) is held
+      # at 0.1 so noise cannot fail it while a cache that stops working (~0.6) still does
       - name: Benchmark
         if: runner.os == 'macOS'
-        continue-on-error: true
         working-directory: engine
         run: |
           cargo build --release --bin oce
