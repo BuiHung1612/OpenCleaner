@@ -13,6 +13,8 @@ final class JunkModel: ObservableObject {
     /// items unticked inside a selected rule (paths)
     @Published var excluded: Set<String> = []
     @Published var expanded: Set<String> = []
+    /// items opened in turn, with some of their children ticked
+    @Published var parts = Parts()
     @Published private(set) var outcome = JSON(nil)
     @Published private(set) var cleanProgress = JSON(nil)
     @Published private(set) var error: String?
@@ -23,8 +25,10 @@ final class JunkModel: ObservableObject {
     var selectedBytes: Double {
         rules.filter { selected.contains($0.id.string ?? "") && $0.status.string == "ready" }
             .map { rule in
-                (rule.bytes.double ?? 0) - Self.items(rule)
-                    .filter { excluded.contains($0.path) }.map(\.bytes).reduce(0, +)
+                let items = Self.items(rule)
+                guard !items.isEmpty else { return rule.bytes.double ?? 0 }
+                return items.filter { !excluded.contains($0.path) }
+                    .map { parts.bytes($0.path, whole: $0.bytes) }.reduce(0, +)
             }
             .reduce(0, +)
     }
@@ -41,16 +45,35 @@ final class JunkModel: ObservableObject {
     func toggleRule(_ rule: JSON) {
         guard let id = rule.id.string else { return }
         let paths = Set(Self.items(rule).map(\.path))
-        if selected.contains(id) && paths.isDisjoint(with: excluded) {
+        if selected.contains(id) && paths.isDisjoint(with: excluded) && !paths.contains(where: parts.isPartial) {
             selected.remove(id)
         } else {
             selected.insert(id)
         }
         excluded.subtract(paths)
+        paths.forEach { parts.whole($0) }
+    }
+
+    func isOn(_ path: String, in rule: JSON) -> Bool {
+        selected.contains(rule.id.string ?? "") && !excluded.contains(path)
+    }
+
+    func toggleChild(_ child: String, of path: String, in rule: JSON) {
+        if !isOn(path, in: rule) {
+            toggleItem(path, in: rule)
+            parts.only(child, in: path)
+        } else if !parts.toggle(child, in: path) {
+            toggleItem(path, in: rule)
+        }
+    }
+
+    func toggleOpen(_ path: String) {
+        parts.toggleOpen(path) { [weak self] kids in self?.parts.children[path] = kids }
     }
 
     func toggleItem(_ path: String, in rule: JSON) {
         guard let id = rule.id.string else { return }
+        defer { parts.whole(path) }
         if !selected.contains(id) {
             // ticking one item of an unticked rule: that item only
             selected.insert(id)
@@ -73,6 +96,7 @@ final class JunkModel: ObservableObject {
         error = nil
         excluded = []
         expanded = []
+        parts = Parts()
         job = Task {
             var final = JSON(nil)
             for await event in Engine.run(["op": "scan", "list": true]) {
@@ -100,7 +124,13 @@ final class JunkModel: ObservableObject {
         cleanProgress = JSON(nil)
         job = Task {
             var final = JSON(nil)
-            for await event in Engine.run(["op": "clean", "plan": Int(planID), "rules": Array(selected), "skip": Array(excluded)]) {
+            let chosen = Set(rules.filter { selected.contains($0.id.string ?? "") }.flatMap { Self.items($0).map(\.path) })
+                .subtracting(excluded)
+            let request: [String: Any] = [
+                "op": "clean", "plan": Int(planID), "rules": Array(selected), "skip": Array(excluded),
+                "parts": parts.request { chosen.contains($0) },
+            ]
+            for await event in Engine.run(request) {
                 switch event.event.string {
                 case "progress": cleanProgress = event
                 case "cleaned": final = event
@@ -127,6 +157,7 @@ final class JunkModel: ObservableObject {
         selected = []
         excluded = []
         expanded = []
+        parts = Parts()
         error = nil
     }
 }
@@ -219,7 +250,7 @@ struct JunkPage: View {
         let ready = rule.status.string == "ready" && model.phase == .review
         let on = model.selected.contains(id)
         let items = JunkModel.items(rule)
-        let partial = on && items.contains { model.excluded.contains($0.path) }
+        let partial = on && items.contains { model.excluded.contains($0.path) || model.parts.isPartial($0.path) }
         let open = model.expanded.contains(id)
         return VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: 12) {
@@ -268,21 +299,34 @@ struct JunkPage: View {
     }
 
     private func itemRow(_ item: (path: String, bytes: Double), in rule: JSON) -> some View {
-        let on = model.selected.contains(rule.id.string ?? "") && !model.excluded.contains(item.path)
+        let on = model.isOn(item.path, in: rule)
+        let partial = on && model.parts.isPartial(item.path)
+        let open = model.parts.open.contains(item.path)
         let url = URL(fileURLWithPath: item.path)
-        return HStack(spacing: 10) {
-            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 14))
-            Text(verbatim: url.deletingLastPathComponent().lastPathComponent + "/" + url.lastPathComponent)
-                .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
-                .help(item.path)
-            Spacer()
-            Text(verbatim: bytes(item.bytes)).font(.system(size: 12)).monospacedDigit().foregroundStyle(.dim)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture { model.toggleItem(item.path, in: rule) }
-        .contextMenu {
-            Button(String(localized: "Show in Finder")) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: partial ? "minus.circle.fill" : on ? "checkmark.circle.fill" : "circle").font(.system(size: 14))
+                Text(verbatim: url.deletingLastPathComponent().lastPathComponent + "/" + url.lastPathComponent)
+                    .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                    .help(item.path)
+                Spacer()
+                Text(verbatim: bytes(model.parts.bytes(item.path, whole: item.bytes))).font(.system(size: 12)).monospacedDigit().foregroundStyle(.dim)
+                if Parts.canOpen(item.path) {
+                    OpenButton(open: open) { model.toggleOpen(item.path) }
+                } else {
+                    Color.clear.frame(width: 22, height: 1)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .onTapGesture { model.toggleItem(item.path, in: rule) }
+            .contextMenu {
+                Button(String(localized: "Show in Finder")) { reveal(item.path) }
+            }
+            if open {
+                PartRows(parent: item.path, parts: model.parts, parentOn: on) { model.toggleChild($0, of: item.path, in: rule) }
+                    .padding(.leading, 24)
+            }
         }
     }
 

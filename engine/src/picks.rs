@@ -9,6 +9,7 @@ use crate::ledger::{self, Line};
 use crate::procs::Running;
 use crate::trash;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -46,6 +47,10 @@ pub struct Pick {
     /// Refuse while one of these apps runs (bundle ids / exe names).
     #[serde(skip)]
     pub running: Vec<String>,
+    /// A ticked child of this listed folder: the purpose checks (a build folder, an
+    /// installer…) apply to the folder, the child only has to sit directly in it.
+    #[serde(skip)]
+    pub within: Option<PathBuf>,
 }
 
 impl Pick {
@@ -65,6 +70,7 @@ impl Pick {
             action,
             purpose: Some(purpose),
             running: Vec::new(),
+            within: None,
         }
     }
 }
@@ -122,7 +128,8 @@ pub struct Outcome {
     pub skipped: u64,
     pub failed: u64,
     pub first_failure: Option<String>,
-    /// Per item, in request order: "removed", "skipped: why" or "failed: why".
+    /// Per item acted on (a ticked part counts as one), in request order: "removed",
+    /// "skipped: why" or "failed: why".
     pub results: Vec<String>,
     pub cancelled: bool,
     /// The item being worked on now (progress events only).
@@ -130,11 +137,13 @@ pub struct Outcome {
     pub current: Option<PathBuf>,
 }
 
-/// Acts on the items at `indexes` of list `plan`, each re-checked right before.
+/// Acts on the items at `indexes` of list `plan`, each re-checked right before. An index
+/// in `parts` acts only on those children of its folder (the user opened it and ticked some).
 pub fn execute(
     ctx: &Context,
     plan: u64,
     indexes: &[usize],
+    parts: &HashMap<usize, Vec<PathBuf>>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&Outcome, u64),
 ) -> Result<Outcome, String> {
@@ -152,23 +161,56 @@ pub fn execute(
     let mut out = Outcome::default();
     // the first item is reported at once: a big folder can take a while
     let mut last = Instant::now() - Duration::from_secs(1);
-    let total = indexes.len() as u64;
+    // what to act on: whole picks, or the ticked children of a pick (refused up front
+    // when they are not its children any more)
+    let mut work: Vec<(Pick, Option<String>)> = Vec::new();
     for &i in indexes {
-        if cancel.load(Ordering::Relaxed) {
-            out.cancelled = true;
-            break;
-        }
         let Some(pick) = picks.get(i) else {
             out.results.push("skipped: unknown item".into());
             out.skipped += 1;
             continue;
         };
+        let Some(children) = parts.get(&i) else {
+            work.push((pick.clone(), None));
+            continue;
+        };
+        for child in children {
+            let mut part = pick.clone();
+            part.path = child.clone();
+            part.within = Some(pick.path.clone());
+            part.name = child
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let checked = pick
+                .id
+                .ok_or_else(|| "not checked".to_string())
+                .and_then(|id| guard::part_of(&pick.path, &id, child));
+            match checked {
+                Ok(id) => {
+                    part.id = Some(id);
+                    part.bytes = guard::freed_now(child);
+                    work.push((part, None));
+                }
+                Err(why) => work.push((part, Some(why))),
+            }
+        }
+    }
+    let total = work.len() as u64;
+    for (pick, refused) in &work {
+        if cancel.load(Ordering::Relaxed) {
+            out.cancelled = true;
+            break;
+        }
         if last.elapsed() >= Duration::from_millis(150) {
             out.current = Some(pick.path.clone());
             progress(&out, total);
             last = Instant::now();
         }
-        let result = act(pick, &running, ctx);
+        let result = match refused {
+            Some(why) => Err(Failure::Skipped(why.clone())),
+            None => act(pick, &running, ctx),
+        };
         let (word, reason) = match &result {
             Ok(()) => {
                 out.removed += 1;
@@ -224,8 +266,13 @@ fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<(), Failure> {
     if let Some(app) = running.any(&pick.running) {
         return Err(Failure::Skipped(format!("{app} is running")));
     }
-    guard::check_for(&pick.path, &pick.root, ctx, purpose)
-        .map_err(|why| Failure::Skipped(why.into()))?;
+    guard::check_for(
+        pick.within.as_ref().unwrap_or(&pick.path),
+        &pick.root,
+        ctx,
+        purpose,
+    )
+    .map_err(|why| Failure::Skipped(why.into()))?;
     if !guard::still_same(&pick.path, &id) {
         return Err(Failure::Skipped("changed since it was listed".into()));
     }

@@ -10,7 +10,7 @@ use crate::procs::Running;
 use crate::rules::{self, Rule, RuleSet, Target, is_within, matches_any};
 use crate::size;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -348,7 +348,8 @@ pub struct Outcome {
     pub current: Option<PathBuf>,
 }
 
-/// Removes the items of `rule_ids` from plan `plan_id`, except those in `skip`. Each item is checked again first:
+/// Removes the items of `rule_ids` from plan `plan_id`, except those in `skip`; an item in
+/// `parts` loses only those of its children (the user opened it and ticked some). Each item is checked again first:
 /// its app is not running now, the guards still accept the path, and it is still the
 /// same file system object that was measured.
 pub fn execute(
@@ -356,6 +357,7 @@ pub fn execute(
     plan_id: u64,
     rule_ids: &[String],
     skip: &[PathBuf],
+    parts: &HashMap<PathBuf, Vec<PathBuf>>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&Outcome, u64),
 ) -> Result<Outcome, String> {
@@ -368,10 +370,28 @@ pub fn execute(
         (plan.rules.clone(), plan.items.clone())
     };
     let running = Running::snapshot();
-    let selected: Vec<&Item> = items
+    let mut selected: Vec<(Item, Option<String>)> = Vec::new();
+    for item in items
         .iter()
         .filter(|i| rule_ids.contains(&rules[i.rule].id) && !skip.contains(&i.path))
-        .collect();
+    {
+        let Some(children) = parts.get(&item.path) else {
+            selected.push((item.clone(), None));
+            continue;
+        };
+        for child in children {
+            let mut part = item.clone();
+            part.path = child.clone();
+            match guard::part_of(&item.path, &item.id, child) {
+                Ok(id) => {
+                    part.id = id;
+                    part.bytes = guard::freed_now(child);
+                    selected.push((part, None));
+                }
+                Err(why) => selected.push((part, Some(why))),
+            }
+        }
+    }
     let total = selected.len() as u64;
 
     let mut ledger = ledger::Writer::open(ctx);
@@ -379,7 +399,7 @@ pub fn execute(
     let mut out = Outcome::default();
     // the first item is reported at once: a big folder can take a while
     let mut last = Instant::now() - Duration::from_secs(1);
-    for item in selected {
+    for (item, refused) in &selected {
         if cancel.load(Ordering::Relaxed) {
             out.cancelled = true;
             break;
@@ -395,7 +415,9 @@ pub fn execute(
             progress(&out, total);
             last = Instant::now();
         }
-        let refusal = if let Some(app) = running.any(&rule.running) {
+        let refusal = if let Some(why) = refused {
+            Some(why.clone())
+        } else if let Some(app) = running.any(&rule.running) {
             Some(format!("{app} is running"))
         } else if rule.item_is_bundle_id && running.contains(&name) {
             Some(format!("{name} is running"))

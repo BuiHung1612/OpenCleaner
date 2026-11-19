@@ -229,6 +229,27 @@ pub fn identity(path: &Path) -> Option<Identity> {
     })
 }
 
+/// A child the user ticked inside a listed folder: it must sit directly in that folder,
+/// and the folder must still be the one that was listed. Returns the child's identity.
+pub fn part_of(parent: &Path, parent_id: &Identity, part: &Path) -> Result<Identity, String> {
+    if part.parent() != Some(parent) {
+        return Err("not inside the listed folder".into());
+    }
+    if !still_same(parent, parent_id) {
+        return Err("changed since it was listed".into());
+    }
+    identity(part).ok_or_else(|| "no longer there".into())
+}
+
+/// What removing `path` frees, measured now (for parts, which were not measured before).
+pub fn freed_now(path: &Path) -> u64 {
+    let opts = crate::size::Options {
+        mode: crate::size::Mode::Freed,
+        ..Default::default()
+    };
+    crate::size::measure(path, &opts).map_or(0, |r| r.bytes)
+}
+
 /// The path still names the object that was measured (not replaced, not a new link).
 pub fn still_same(path: &Path, was: &Identity) -> bool {
     identity(path).is_some_and(|now| now == *was)

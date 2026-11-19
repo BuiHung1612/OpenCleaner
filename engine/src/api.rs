@@ -47,6 +47,9 @@ enum Request {
         rules: Vec<String>,
         #[serde(default)]
         skip: Vec<std::path::PathBuf>,
+        /// for an item path, only these of its children
+        #[serde(default)]
+        parts: std::collections::HashMap<PathBuf, Vec<PathBuf>>,
     },
     /// Installed apps at once (`apps`), then their sizes as they are measured (`sizes`).
     Apps,
@@ -71,9 +74,12 @@ enum Request {
         roots: Vec<PathBuf>,
     },
     /// Act on the picked `items` (indexes) of a pick list: `progress`, then `removed`.
+    /// `parts`: for an index, only these children of its folder.
     Remove {
         plan: u64,
         items: Vec<usize>,
+        #[serde(default)]
+        parts: std::collections::HashMap<usize, Vec<PathBuf>>,
     },
     /// Universal apps that Slim Apps can cut down to their arm64 code (`picks`).
     Slim,
@@ -291,14 +297,14 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             let found = finders::projects(ctx(), &roots, cancel);
             emit_value("picks", &picks::store("projects", found, ctx()), emit);
         }
-        Request::Remove { plan, items } => {
+        Request::Remove { plan, items, parts } => {
             let mut progress = |o: &picks::Outcome, total: u64| {
                 let mut v = serde_json::to_value(o).unwrap_or(Value::Null);
                 v["event"] = json!("progress");
                 v["total"] = json!(total);
                 emit(v);
             };
-            match picks::execute(ctx(), plan, &items, cancel, &mut progress) {
+            match picks::execute(ctx(), plan, &items, &parts, cancel, &mut progress) {
                 Ok(outcome) => emit_value("removed", &outcome, emit),
                 Err(e) => emit(json!({"event": "removed", "error": e})),
             }
@@ -313,14 +319,19 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             let plan = clean::scan_with(ctx(), rule_set(), &running, list, cancel, &mut progress);
             emit_value("plan", &plan, emit);
         }
-        Request::Clean { plan, rules, skip } => {
+        Request::Clean {
+            plan,
+            rules,
+            skip,
+            parts,
+        } => {
             let mut progress = |o: &clean::Outcome, total: u64| {
                 let mut v = serde_json::to_value(o).unwrap_or(Value::Null);
                 v["event"] = json!("progress");
                 v["total"] = json!(total);
                 emit(v);
             };
-            match clean::execute(ctx(), plan, &rules, &skip, cancel, &mut progress) {
+            match clean::execute(ctx(), plan, &rules, &skip, &parts, cancel, &mut progress) {
                 Ok(outcome) => emit_value("cleaned", &outcome, emit),
                 Err(e) => emit(json!({"event": "cleaned", "error": e})),
             }

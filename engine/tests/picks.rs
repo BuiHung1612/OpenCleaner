@@ -289,6 +289,7 @@ fn project_junk_needs_its_project_file_and_skips_tracked_and_marks_active() {
         &ctx,
         list.plan,
         &[idx],
+        &HashMap::new(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -361,6 +362,7 @@ fn a_pick_changed_after_listing_is_left_alone() {
         &ctx,
         list.plan,
         &[idx],
+        &HashMap::new(),
         &AtomicBool::new(false),
         &mut |_, _| {},
     )
@@ -406,4 +408,45 @@ fn app_sizes_are_remembered_until_the_app_changes() {
     let updated = apps::sizes(&ctx, &paths, &AtomicBool::new(false), &mut |_| {});
     assert!(updated[0] >= 1_100_000, "{updated:?}");
     assert_eq!(updated[1], first[1]);
+}
+
+#[test]
+fn only_the_ticked_children_of_a_pick_go_and_strangers_are_refused() {
+    let (_t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    write(&h("Projects/web/package.json"), 10);
+    write(&h("Projects/web/node_modules/a/index.js"), 50_000);
+    write(&h("Projects/web/node_modules/b/index.js"), 10_000);
+    let list = picks::store(
+        "projects",
+        finders::projects(&ctx, &[], &AtomicBool::new(false)),
+        &ctx,
+    );
+    let idx = list
+        .items
+        .iter()
+        .position(|p| p.path.ends_with("node_modules"))
+        .unwrap();
+    // a ticked child, and a path that is not a child of the pick at all
+    let parts = HashMap::from([(
+        idx,
+        vec![
+            h("Projects/web/node_modules/a"),
+            h("Projects/web/package.json"),
+        ],
+    )]);
+    let out = picks::execute(
+        &ctx,
+        list.plan,
+        &[idx],
+        &parts,
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .unwrap();
+    assert_eq!((out.removed, out.skipped), (1, 1), "{:?}", out.results);
+    assert!(out.bytes >= 50_000);
+    assert!(!h("Projects/web/node_modules/a").exists());
+    assert!(h("Projects/web/node_modules/b/index.js").exists());
+    assert!(h("Projects/web/package.json").exists());
 }

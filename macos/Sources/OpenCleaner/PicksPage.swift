@@ -10,6 +10,7 @@ final class PicksModel: ObservableObject {
     @Published private(set) var phase = Phase.idle
     @Published private(set) var list = JSON(nil)
     @Published var selected: Set<Int> = []
+    @Published var parts = Parts()
     @Published private(set) var outcome = JSON(nil)
     @Published private(set) var progress = JSON(nil)
     @Published private(set) var error: String?
@@ -17,7 +18,29 @@ final class PicksModel: ObservableObject {
 
     var items: [JSON] { list.items.array }
     var selectedBytes: Double {
-        selected.compactMap { items.indices.contains($0) ? items[$0].bytes.double : nil }.reduce(0, +)
+        selected.filter(items.indices.contains).map { parts.bytes(path($0), whole: items[$0].bytes.double ?? 0) }
+            .reduce(0, +)
+    }
+
+    func path(_ i: Int) -> String { items.indices.contains(i) ? items[i].path.string ?? "" : "" }
+
+    func toggle(_ i: Int) {
+        if selected.contains(i) { selected.remove(i) } else { selected.insert(i) }
+        parts.whole(path(i))
+    }
+
+    func toggle(child: String, of i: Int) {
+        if !selected.contains(i) {
+            selected.insert(i)
+            parts.only(child, in: path(i))
+        } else if !parts.toggle(child, in: path(i)) {
+            selected.remove(i)
+        }
+    }
+
+    func toggleOpen(_ i: Int) {
+        let p = path(i)
+        parts.toggleOpen(p) { [weak self] kids in self?.parts.children[p] = kids }
     }
     /// Items in list order, grouped by what they belong to (an app, a project…).
     var groups: [(name: String, indexes: [Int])] {
@@ -35,6 +58,7 @@ final class PicksModel: ObservableObject {
         job?.cancel()
         phase = .finding
         list = JSON(nil)
+        parts = Parts()
         error = nil
         job = Task {
             var found = JSON(nil)
@@ -62,7 +86,14 @@ final class PicksModel: ObservableObject {
         progress = JSON(nil)
         job = Task {
             var final = JSON(nil)
-            for await event in Engine.run(["op": "remove", "plan": Int(plan), "items": selected.sorted()]) {
+            // folders opened with only some children ticked: those children only
+            let byPath = Dictionary(selected.map { (path($0), $0) }, uniquingKeysWith: { a, _ in a })
+            let chosen = parts.request { byPath[$0] != nil }
+            let request: [String: Any] = [
+                "op": "remove", "plan": Int(plan), "items": selected.sorted(),
+                "parts": Dictionary(uniqueKeysWithValues: chosen.compactMap { key, kids in byPath[key].map { ("\($0)", kids) } }),
+            ]
+            for await event in Engine.run(request) {
                 switch event.event.string {
                 case "progress": progress = event
                 case "removed": final = event
@@ -87,6 +118,7 @@ final class PicksModel: ObservableObject {
         list = JSON(nil)
         outcome = JSON(nil)
         selected = []
+        parts = Parts()
         error = nil
     }
 }
@@ -120,22 +152,34 @@ struct PicksList: View {
 
     private func row(_ i: Int) -> some View {
         let item = model.items[i]
+        let path = item.path.string ?? ""
         let on = model.selected.contains(i)
-        return HStack(spacing: 12) {
-            Image(systemName: on ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
-            Image(nsImage: fileIcon(item.path.string ?? "")).resizable().frame(width: 28, height: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: item.name.string ?? "?").font(.system(size: 14, weight: .medium)).lineLimit(1)
-                Text(verbatim: tr(item.detail.string ?? "")).font(.system(size: 12)).foregroundStyle(.dim).lineLimit(1)
+        let partial = on && model.parts.isPartial(path)
+        let open = model.parts.open.contains(path)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: partial ? "minus.circle.fill" : on ? "checkmark.circle.fill" : "circle").font(.system(size: 17))
+                Image(nsImage: fileIcon(path)).resizable().frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: item.name.string ?? "?").font(.system(size: 14, weight: .medium)).lineLimit(1)
+                    Text(verbatim: tr(item.detail.string ?? "")).font(.system(size: 12)).foregroundStyle(.dim).lineLimit(1)
+                }
+                Spacer()
+                Text(verbatim: bytes(model.parts.bytes(path, whole: item.bytes.double ?? 0))).font(.system(size: 14)).monospacedDigit()
+                if model.phase == .review && Parts.canOpen(path) {
+                    OpenButton(open: open) { model.toggleOpen(i) }
+                }
             }
-            Spacer()
-            Text(verbatim: bytes(item.bytes.double ?? 0)).font(.system(size: 14)).monospacedDigit()
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .onTapGesture { if model.phase == .review { model.toggle(i) } }
+            .contextMenu { Button(String(localized: "Show in Finder")) { reveal(path) } }
+            if open && model.phase == .review {
+                PartRows(parent: path, parts: model.parts, parentOn: on) { model.toggle(child: $0, of: i) }
+                    .padding(.leading, 40).padding(.bottom, 6)
+            }
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(on ? 0.12 : 0)))
-        .contentShape(Rectangle())
-        .onTapGesture { if on { model.selected.remove(i) } else { model.selected.insert(i) } }
-        .contextMenu { Button(String(localized: "Show in Finder")) { reveal(item.path.string) } }
     }
 }
 
