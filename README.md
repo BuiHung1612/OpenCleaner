@@ -78,23 +78,22 @@ Caches are deleted; apps, installers and slimmed originals go to the Trash (put 
 
 **Adding a cleaning target:** add a `[[rule]]` to `engine/rules/macos.toml` (or `windows.toml`) with `id`, `group`, `title`, `paths` (patterns with `~`, `%VAR%`, `*`), and as needed `target = "self"`, `include`/`exclude` name patterns, `min_age_days`, `running` (owning apps), `item_is_bundle_id`, `default = false` for things worth a look first, and a `note`. More specific rules go before general ones. Add the title and note to `vi.lproj`. `cargo test` checks every shipped rule.
 
-### Rust engine vs mo
+### Speed
 
-Measured before mo was removed, with `bench/compare.sh` (read-only; at commit `ebbed48`) on an Apple M2 Mac mini, 8 cores, load average about 5, best of 2 runs:
+Measured on an Apple M2 Mac mini (16 GB, macOS 27.2, about 450 GB used, busy with other work: load average 3–5), the engine on its own (`oce run '<request>'`), reading only:
 
-| Task | mo (legacy) | Rust engine | Speed-up | Peak RAM mo → Rust |
-|---|---:|---:|---:|---:|
-| System Junk preview | 77.8 s | 8.1 s | 9.6× | 159 → 19 MiB |
-| Space Lens: startup disk | 35.5 s | 17.2 s | 2.1× | 83 → 22 MiB |
-| Space Lens: ~/Library | 11.9 s | 4.2 s | 2.8× | 31 → 19 MiB |
-| Space Lens: /Applications | 3.6 s | 1.4 s | 2.6× | 23 → 11 MiB |
-| App list with sizes | 1.9 s | 1.2 s | 1.5× | 14 → 12 MiB |
-| Dashboard reading | 0.85 s | 0.27 s | 3.1× | 23 → 7 MiB |
-| Installers | 0.62 s | 0.01 s | 62× | 6 → 6 MiB |
+| Task | First run | Again | Peak RAM |
+|---|---:|---:|---:|
+| System Junk scan | 7.3 s | 0.1 s (last sizes shown at once, measured again in 4.4 s) | 17 MiB |
+| Space Lens: ~/Library | 5.1 s | 0.37 s | 97 MiB |
+| Space Lens: /Applications | 2.1 s | | 90 MiB |
+| Space Lens: startup disk | 20.6 s | 10.5 s | 450 MiB |
+| App list with sizes | 1.5 s | 0.06 s | 11 MiB |
+| Project Junk search | 4.4 s | | 10 MiB |
+| Installers | 0.08 s | | 6 MiB |
+| Dashboard reading | 0.4 s | | 7 MiB |
 
-Since then: System Junk preview **3.2 s** (private sizes are looked up only for files whose flags say they can differ; same results), and the Uninstaller's app sizes are remembered until an app changes (**0.02 s** on a repeat).
-
-What each finds is not identical: System Junk rules differ (mo also cleans some system areas with sudo; the Rust rules add developer caches and skip apps that are open), and mo's Space Lens overview counts nested folders twice. The Dashboard figure is a fresh process (it samples CPU for 250 ms); in the app later readings take milliseconds. Directory walks are bound by the kernel, so they gain least.
+"Again" reuses what has not changed: the last System Junk sizes (only for display; what is removed and the bytes freed come from the new measurement), Space Lens's per-folder sizes (trusted for an hour), the app sizes (until an app changes). Directory walks are bound by the kernel.
 
 ## Translations
 

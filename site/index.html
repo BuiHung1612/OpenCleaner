@@ -224,23 +224,25 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: s
     <p class="lead"><span class="en">The engine is OpenCleaner's own, written in Rust and linked into the app: no helper processes, one code base for macOS and Windows.</span><span class="vi">Engine do OpenCleaner tự viết bằng Rust và liên kết thẳng vào ứng dụng: không có tiến trình phụ, một mã nguồn cho cả macOS và Windows.</span></p>
     <div class="two">
       <div class="card">
-        <h3><span class="en">Compared with the old engine</span><span class="vi">So với engine cũ</span></h3>
+        <h3><span class="en">Measured on this Mac</span><span class="vi">Đo trên máy thật</span></h3>
         <div class="table-scroll">
         <table>
-          <thead><tr><th><span class="en">Task</span><span class="vi">Tác vụ</span></th><th><span class="en">Old</span><span class="vi">Cũ</span></th><th>Rust</th><th><span class="en">Peak RAM</span><span class="vi">RAM tối đa</span></th></tr></thead>
+          <thead><tr><th><span class="en">Task</span><span class="vi">Tác vụ</span></th><th><span class="en">First run</span><span class="vi">Lần đầu</span></th><th><span class="en">Again</span><span class="vi">Lần sau</span></th><th><span class="en">Peak RAM</span><span class="vi">RAM tối đa</span></th></tr></thead>
           <tbody>
-            <tr><td><span class="en">System Junk preview</span><span class="vi">Xem trước Rác hệ thống</span></td><td>77.8 s</td><td><b>8.1 s</b></td><td>159 → 19 MiB</td></tr>
-            <tr><td><span class="en">Space Lens: startup disk</span><span class="vi">Space Lens: ổ khởi động</span></td><td>35.5 s</td><td><b>17.2 s</b></td><td>83 → 22 MiB</td></tr>
-            <tr><td>Space Lens: ~/Library</td><td>11.9 s</td><td><b>4.2 s</b></td><td>31 → 19 MiB</td></tr>
-            <tr><td><span class="en">App list with sizes</span><span class="vi">Danh sách ứng dụng kèm dung lượng</span></td><td>1.9 s</td><td><b>1.2 s</b></td><td>14 → 12 MiB</td></tr>
-            <tr><td><span class="en">Dashboard reading</span><span class="vi">Đọc số liệu Tổng quan</span></td><td>0.85 s</td><td><b>0.27 s</b></td><td>23 → 7 MiB</td></tr>
-            <tr><td><span class="en">Installers</span><span class="vi">Tệp cài đặt</span></td><td>0.62 s</td><td><b>0.01 s</b></td><td>6 → 6 MiB</td></tr>
+            <tr><td><span class="en">System Junk scan</span><span class="vi">Quét Rác hệ thống</span></td><td><b>7.3 s</b></td><td>0.1 s</td><td>17 MiB</td></tr>
+            <tr><td><span class="en">Space Lens: ~/Library</span><span class="vi">Space Lens: ~/Library</span></td><td><b>5.1 s</b></td><td>0.37 s</td><td>97 MiB</td></tr>
+            <tr><td><span class="en">Space Lens: /Applications</span><span class="vi">Space Lens: /Applications</span></td><td><b>2.1 s</b></td><td>—</td><td>90 MiB</td></tr>
+            <tr><td><span class="en">Space Lens: startup disk</span><span class="vi">Space Lens: ổ khởi động</span></td><td><b>20.6 s</b></td><td>10.5 s</td><td>450 MiB</td></tr>
+            <tr><td><span class="en">App list with sizes</span><span class="vi">Danh sách ứng dụng kèm dung lượng</span></td><td><b>1.5 s</b></td><td>0.06 s</td><td>11 MiB</td></tr>
+            <tr><td><span class="en">Project Junk search</span><span class="vi">Tìm Rác dự án</span></td><td><b>4.4 s</b></td><td>—</td><td>10 MiB</td></tr>
+            <tr><td><span class="en">Installers</span><span class="vi">Tệp cài đặt</span></td><td><b>0.08 s</b></td><td>—</td><td>6 MiB</td></tr>
+            <tr><td><span class="en">Dashboard reading</span><span class="vi">Đọc số liệu Tổng quan</span></td><td><b>0.4 s</b></td><td>—</td><td>7 MiB</td></tr>
           </tbody>
         </table>
         </div>
         <p class="note">
-          <span class="en">Measured on an Apple M2 Mac mini (8 cores, busy: load average about 5), best of 2 runs, against <a href="https://github.com/tw93/mole">mo</a>, which earlier versions bundled. Since then the System Junk preview takes 3.2 s. The two engines do not find exactly the same things; details in the <a href="https://github.com/BuiHung1612/OpenCleaner#rust-engine-vs-mo">README</a>.</span>
-          <span class="vi">Đo trên Apple M2 Mac mini (8 nhân, đang bận: load average khoảng 5), lấy kết quả tốt nhất trong 2 lần, so với <a href="https://github.com/tw93/mole">mo</a>, engine mà các bản trước đi kèm. Sau đó, xem trước Rác hệ thống còn 3,2 s. Hai engine không tìm ra hoàn toàn giống nhau; chi tiết trong <a href="https://github.com/BuiHung1612/OpenCleaner#rust-engine-vs-mo">README</a>.</span>
+          <span class="en">Apple M2 Mac mini, 16 GB, macOS 27.2, about 450 GB used, busy with other work (load average 3–5). Each task is the engine on its own (<code>oce run</code>), reading only. "Again": System Junk shows the last sizes at once while it measures again; Space Lens and the app list reuse what has not changed.</span>
+          <span class="vi">Apple M2 Mac mini, 16 GB, macOS 27.2, đã dùng khoảng 450 GB, máy đang bận việc khác (load average 3–5). Mỗi tác vụ là engine chạy riêng (<code>oce run</code>), chỉ đọc. "Lần sau": Rác hệ thống hiện ngay số đo lần trước trong lúc đo lại; Space Lens và danh sách ứng dụng dùng lại phần không thay đổi.</span>
         </p>
       </div>
       <div class="card">
