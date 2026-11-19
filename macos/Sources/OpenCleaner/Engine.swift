@@ -18,6 +18,12 @@ enum Engine {
 
     static var version: String? { call(["op": "version"]).version.string }
 
+    /// `call` off the main thread, for views: some requests read the disk or spawn tools.
+    static func ask(_ request: [String: Any]) async -> JSON {
+        nonisolated(unsafe) let request = request
+        return await Task.detached(priority: .userInitiated) { call(request) }.value
+    }
+
     /// Settings key: scans take every core at normal priority instead of making room.
     static let fastKey = "fastScans"
     static func setFast(_ fast: Bool) { _ = call(["op": "priority", "fast": fast]) }

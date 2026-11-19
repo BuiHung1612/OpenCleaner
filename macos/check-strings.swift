@@ -56,6 +56,50 @@ for case let file as URL in files where file.pathExtension == "swift" {
     }
 }
 
+// Text the app shows through `tr()`, so the scan above never sees it: the engine's rule,
+// group and maintenance titles and notes, the kinds of pick it reports, and the sidebar
+// manifest (shared/tools.json).
+func captures(_ pattern: String, in file: String) -> [String] {
+    guard let text = try? String(contentsOf: root.appendingPathComponent(file), encoding: .utf8) else {
+        print("warning: cannot read \(file)")
+        return []
+    }
+    let re = try! NSRegularExpression(pattern: pattern, options: .anchorsMatchLines)
+    return re.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+        Range($0.range(at: 1), in: text).map { unescape(String(text[$0])) }
+    }
+}
+
+/// `\"`, `\\` and Rust's `\u{201c}` as the characters they stand for.
+func unescape(_ s: String) -> String {
+    var out = "", i = s.startIndex
+    while i < s.endIndex {
+        let c = s[i]
+        i = s.index(after: i)
+        guard c == "\\", i < s.endIndex else { out.append(c); continue }
+        if s[i] == "u", let open = s[i...].firstIndex(of: "{"), let close = s[open...].firstIndex(of: "}"),
+           let code = UInt32(s[s.index(after: open)..<close], radix: 16), let scalar = Unicode.Scalar(code) {
+            out.unicodeScalars.append(scalar)
+            i = s.index(after: close)
+        } else {
+            out.append(s[i])
+            i = s.index(after: i)
+        }
+    }
+    return out
+}
+
+let engineText = captures(#"^(?:title|note) = "(.*)"$"#, in: "../engine/rules/macos.toml")
+    + captures(#"^\s*(?:title|note): "(.*)",$"#, in: "../engine/src/maintenance.rs")
+    + captures(#"^\s*\("~/[^"]*", "([^"]+)"\),$"#, in: "../engine/src/apps.rs")
+    + captures(#"=>\s*(?:\{\s*)?Some\("([^"]+)"\)"#, in: "../engine/src/finders.rs")
+used.formUnion(engineText)
+let manifest = (try? JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("../shared/tools.json")))) as? [String: Any]
+for tool in manifest?["tools"] as? [[String: Any]] ?? [] {
+    for key in ["title", "subtitle", "group"] { if let s = tool[key] as? String { used.insert(s) } }
+    used.formUnion(tool["points"] as? [String] ?? [])
+}
+
 let placeholder = try! NSRegularExpression(pattern: #"%(\d+\$)?[-+ 0#]*\d*(\.\d+)?(ll|l|h)?[@dDuUxXfeEgGcsS]"#)
 func normalized(_ key: String) -> String {
     placeholder.stringByReplacingMatches(in: key, range: NSRange(key.startIndex..., in: key), withTemplate: "%@")

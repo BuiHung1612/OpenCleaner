@@ -3,7 +3,7 @@ import SwiftUI
 
 struct DashboardPage: View {
     /// owned by the window, so coming back to the dashboard shows the last reading at once
-    @ObservedObject var stream: StatusStream
+    let stream: StatusStream
     @AppStorage("autoRefresh") private var autoRefresh = false
     @AppStorage("refreshInterval") private var refreshInterval = 5
     @AppStorage("refreshOnFocus") private var refreshOnFocus = false
@@ -12,43 +12,37 @@ struct DashboardPage: View {
         let s = stream.snapshot
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                HStack(spacing: 28) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            Text(String(localized: "Dashboard")).font(.system(size: 34, weight: .bold)).lineLimit(1).fixedSize()
-                            Button { stream.refresh() } label: {
-                                Image(systemName: "arrow.clockwise").symbolEffect(.rotate, isActive: stream.loading)
-                            }
-                            .buttonStyle(.pill)
-                            .disabled(stream.loading)
-                            .help(String(localized: "Refresh"))
-                        }
-                        let hw = s.hardware
-                        Text(verbatim: [hw.model, hw.cpu_model, hw.total_ram, hw.os_version].compactMap(\.string).filter { !$0.isEmpty }.joined(separator: " · "))
-                            .font(.system(size: 13)).foregroundStyle(.dim)
-                        if let up = s.uptime.string { Text("Up for \(up)").font(.system(size: 13)).foregroundStyle(.dim) }
-                        if let t = stream.updatedAt {
-                            Text("Updated \(t.formatted(date: .omitted, time: .standard))").font(.system(size: 12)).foregroundStyle(.dim)
-                        }
+                let hw = s.hardware
+                PageHeader(art: "dashboard", symbol: Module.dashboard.icon, title: String(localized: "Dashboard"),
+                           status: [hw.model, hw.cpu_model, hw.total_ram, hw.os_version].compactMap(\.string).filter { !$0.isEmpty }.joined(separator: " · ")) {
+                    Button { stream.refresh() } label: {
+                        Label(String(localized: "Refresh"), systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+                            .symbolEffect(.rotate, isActive: stream.loading)
                     }
-                    .layoutPriority(1)
-                    Spacer()
-                    Art(id: "dashboard", symbol: "square.grid.2x2", size: 170)
+                    .buttonStyle(.pill)
+                    .disabled(stream.loading)
+                    .help(String(localized: "Refresh"))
                 }
-                .padding(.top, 40)
+                HStack(spacing: 16) {
+                    if let up = s.uptime.string { Text("Up for \(up)") }
+                    if let t = stream.updatedAt { Text("Updated \(t.formatted(date: .omitted, time: .standard))") }
+                }
+                .font(.system(size: 13)).foregroundStyle(.dim)
+                .padding(.top, -10)
 
-                if let error = stream.error { Label(error, systemImage: "exclamationmark.triangle") }
+                if let error = stream.error { ErrorBanner(message: error) { stream.refresh() } }
 
                 GlassEffectContainer(spacing: 16) {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], spacing: 16) {
                         Tile(replay: stream.replay, title: String(localized: "CPU"), icon: "cpu", value: percent(s.cpu.usage.double), fraction: (s.cpu.usage.double ?? 0) / 100,
-                             detail: s.cpu.load1.double.map { String(localized: "Load \(String(format: "%.1f", $0))") })
+                             detail: Self.load(s.cpu))
+                            .help(s.cpu.load1.double.map { String(localized: "Load average \(String(format: "%.1f", $0)) on \(Int(s.cpu.cores.double ?? 0)) cores") } ?? "")
                         Tile(replay: stream.replay, title: String(localized: "Memory"), icon: "memorychip", value: percent(s.memory.used_percent.double), fraction: (s.memory.used_percent.double ?? 0) / 100,
                              detail: "\(bytes(s.memory.used.double)) / \(bytes(s.memory.total.double))")
                         let disk = s.disks.array.first { $0.mount.string == "/" }
                         Tile(replay: stream.replay, title: String(localized: "Disk"), icon: "internaldrive", value: percent(disk?.used_percent.double), fraction: (disk?.used_percent.double ?? 0) / 100,
                              detail: String(localized: "\(bytes(disk.flatMap { d in d.total.double.flatMap { t in d.used.double.map { t - $0 } } })) free"))
-                        Tile(title: String(localized: "Trash"), icon: "trash", value: bytes(s.trash_size.double), fraction: nil, detail: nil)
+                        trashTile(s.trash_size.double)
                     }
                 }
 
@@ -66,7 +60,7 @@ struct DashboardPage: View {
                 .padding(20)
                 .glassPanel()
             }
-            .padding(.horizontal, 32).padding(.bottom, 32)
+            .padding(.horizontal, Layout.side).padding(.bottom, 32)
         }
         // glass tiles live inside this scroll view; a dark scheme here would darken them
         .scrollIndicators(.never)
@@ -92,26 +86,55 @@ struct DashboardPage: View {
         stream.stop()
         if autoRefresh { stream.start(every: refreshInterval) }
     }
+
+    /// Load average in words: more runnable work than cores means the Mac is busy.
+    static func load(_ cpu: JSON) -> String? {
+        guard let load = cpu.load1.double else { return nil }
+        let cores = max(cpu.cores.double ?? 1, 1)
+        return load > cores ? String(localized: "Busy: more work than cores") : String(localized: "Load is normal")
+    }
+
+    /// Unknown size: macOS hides the Trash from apps without Full Disk Access.
+    private func trashTile(_ size: Double?) -> some View {
+        let value = switch size {
+        case nil: String(localized: "Not measured")
+        case 0: String(localized: "Empty")
+        case let n: bytes(n)
+        }
+        return Tile(title: String(localized: "Trash"), icon: "trash", value: value, fraction: nil,
+                    detail: size == nil ? String(localized: "Needs Full Disk Access") : nil) {
+            Button(String(localized: "Open Trash"), action: openTrash).buttonStyle(.link).font(.system(size: 13))
+        }
+    }
 }
 
-struct Tile: View {
+struct Tile<Accessory: View>: View {
     var replay = 0
     let title: String
     let icon: String
     let value: String
     let fraction: Double?
     let detail: String?
+    @ViewBuilder var accessory: Accessory
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(title, systemImage: icon).font(.system(size: 13, weight: .medium)).foregroundStyle(.dim)
-            Text(verbatim: value).font(.system(size: 28, weight: .bold)).monospacedDigit()
+            Text(verbatim: value).font(.system(size: 28, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
             if let fraction { UsageBar(fraction: fraction).id(replay) }
             if let detail { Text(verbatim: detail).font(.system(size: 13)).foregroundStyle(.dim) }
+            accessory
         }
         .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
         .padding(18)
         .glassPanel()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension Tile where Accessory == EmptyView {
+    init(replay: Int = 0, title: String, icon: String, value: String, fraction: Double?, detail: String?) {
+        self.init(replay: replay, title: title, icon: icon, value: value, fraction: fraction, detail: detail) { EmptyView() }
     }
 }
 
@@ -137,24 +160,21 @@ struct HistoryPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 20) {
-                Art(id: "history", symbol: "clock.arrow.circlepath", size: 84)
-                Text(String(localized: "History")).font(.system(size: 28, weight: .bold))
-            }
-            .padding(.top, 36)
+            PageHeader(art: "history", symbol: Module.history.icon, title: String(localized: "History"))
             ScrollView {
                 VStack(spacing: 4) {
                     ForEach(Array((sessions ?? []).enumerated()), id: \.offset) { _, s in
                         HStack {
+                            Image(systemName: Self.icon(s.command.string ?? "")).frame(width: 22).foregroundStyle(.dim)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(verbatim: Self.title(s.command.string ?? "?")).font(.system(size: 14, weight: .semibold))
                                 Text(verbatim: Self.when(s)).font(.system(size: 12)).foregroundStyle(.dim)
                             }
                             Spacer()
-                            Text("\(s.items.string ?? "0") items · \(bytes(s.bytes.double))").monospacedDigit()
+                            Text("\(Int(s.items.double ?? 0)) items · \(bytes(s.bytes.double))").monospacedDigit()
                             // what this session moved to the Trash and is still there
                             if !s.trashed.array.isEmpty {
-                                Button(String(localized: "Put Back")) { putBack(s.trashed.array) }
+                                Button(String(localized: "Put Back")) { Task { await putBack(s.trashed.array) } }
                                     .buttonStyle(.pill)
                                     .help(String(localized: "Move \(s.trashed.array.count) items from the Trash back where they were"))
                             }
@@ -162,33 +182,53 @@ struct HistoryPage: View {
                         .padding(.horizontal, 14).padding(.vertical, 10)
                     }
                     if sessions == nil {
-                        if let error { Text(error) } else { ProgressView().brightScroller().padding(40) }
+                        ProgressView().brightScroller().padding(40)
+                    } else if let error {
+                        ErrorBanner(message: error) { Task { await load() } }
+                    } else if sessions?.isEmpty == true {
+                        EmptyState(symbol: "clock", title: String(localized: "Nothing cleaned yet"),
+                                   message: String(localized: "Every cleanup and removal is listed here, with a way to put back what went to the Trash."))
                     }
                 }
                 .padding(8)
             }
             .brightScroller()
             .glassPanel()
-            if let putBackNote { Text(verbatim: putBackNote).font(.system(size: 12)).foregroundStyle(Color(hex: "#FFD54F")) }
+            if let putBackNote { Text(verbatim: putBackNote).font(.system(size: 12)).foregroundStyle(Color.warn) }
             if let log {
-                Text("Every deleted file is listed in \((log as NSString).abbreviatingWithTildeInPath)")
-                    .font(.system(size: 12)).foregroundStyle(.dim)
+                HStack {
+                    Text("Every deleted file is listed in \((log as NSString).abbreviatingWithTildeInPath)")
+                        .font(.system(size: 12)).foregroundStyle(.dim)
+                    Button(String(localized: "Show in Finder")) { reveal(log) }.buttonStyle(.link).font(.system(size: 12))
+                }
             }
         }
-        .padding(.horizontal, 32).padding(.bottom, 28)
-        .task { load() }
+        .padding(.horizontal, Layout.side).padding(.bottom, Layout.bottom)
+        .task { await load() }
     }
 
-    private func putBack(_ items: [JSON]) {
+    /// The sidebar icon of the tool that made a session.
+    static func icon(_ command: String) -> String {
+        switch command {
+        case "uninstall": Module.uninstaller.icon
+        case "space_lens": Module.spaceLens.icon
+        case "projects": Module.tool("purge").icon
+        case "installers": Module.tool("installer").icon
+        default: Module.tool(command).icon
+        }
+    }
+
+    private func putBack(_ items: [JSON]) async {
         let request = items.map { ["from": $0.from.string ?? "", "to": $0.to.string ?? ""] }
-        let reply = Engine.call(["op": "put_back", "items": request])
+        let reply = await Engine.ask(["op": "put_back", "items": request])
         let failed = reply.ok.bool ? reply.results.strings.filter { $0 != "ok" } : [reply.error.string ?? "?"]
         putBackNote = failed.isEmpty ? nil : String(localized: "\(failed.count) items were not put back: \(failed[0])")
-        load()
+        await load()
     }
 
-    private func load() {
-        let history = Engine.call(["op": "history"])
+    private func load() async {
+        let history = await Engine.ask(["op": "history"])
+        error = nil
         if history.ok.bool {
             sessions = history.sessions.array
             log = history.logs.deletions.string
@@ -212,6 +252,7 @@ struct SettingsView: View {
     @AppStorage("refreshOnFocus") private var refreshOnFocus = false
     @State private var languageChanged = false
     @State private var exclusions: [String] = []
+    @State private var engineVersion: String?
     @AppStorage("largeMiB") private var largeMiB = 500
     @AppStorage("idleDays") private var idleDays = 180
 
@@ -236,17 +277,17 @@ struct SettingsView: View {
             }
             Section(String(localized: "Dashboard")) {
                 Text("By default the dashboard reads once, the first time you open it. Press the refresh button for new numbers, so they may be minutes old.")
-                    .font(.system(size: 12)).foregroundStyle(.dim)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
                 Toggle(String(localized: "Refresh when the app comes to the front"), isOn: $refreshOnFocus)
                 Text("On: numbers are fresh whenever you come back to the app. Cost: every switch back takes a short CPU sample and redraws the dashboard (at most once per 10 seconds), which uses a little battery.")
-                    .font(.system(size: 12)).foregroundStyle(.dim)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
                 Toggle(String(localized: "Refresh automatically"), isOn: $autoRefresh)
                 Picker(String(localized: "Every"), selection: $refreshInterval) {
                     ForEach([3, 5, 10, 30], id: \.self) { Text("\($0) seconds").tag($0) }
                 }
                 .disabled(!autoRefresh)
                 Text("On: live numbers while the dashboard is on screen (paused when hidden). Cost: the app keeps working in the background the whole time, which uses CPU and battery and adds a little load to what it measures.")
-                    .font(.system(size: 12)).foregroundStyle(.dim)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             AutomationSettings()
             Section(String(localized: "Excluded folders")) {
@@ -259,7 +300,7 @@ struct SettingsView: View {
                 }
                 Button(String(localized: "Add Folder…"), action: addExclusion)
                 Text("OpenCleaner never scans or removes anything inside these folders.")
-                    .font(.system(size: 12)).foregroundStyle(.dim)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Section(String(localized: "Large & Old Files")) {
                 Picker(String(localized: "At least"), selection: $largeMiB) {
@@ -273,15 +314,18 @@ struct SettingsView: View {
                 Toggle(String(localized: "Faster scans"), isOn: $fastScans)
                     .onChange(of: fastScans) { Engine.setFast(fastScans) }
                 Text("Off (recommended): scans and removals give way to your other apps, so the Mac stays smooth. On: they take every CPU core to finish sooner, and other apps may lag or freeze until they are done.")
-                    .font(.system(size: 12)).foregroundStyle(.dim)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
                 LabeledContent(String(localized: "OpenCleaner engine")) {
-                    Text(verbatim: Engine.version ?? "—").font(.system(size: 11, design: .monospaced))
+                    Text(verbatim: engineVersion ?? "—").font(.system(size: 11, design: .monospaced))
                 }
             }
         }
         .formStyle(.grouped)
         .frame(width: 520)
-        .task { exclusions = Engine.call(["op": "exclusions"]).paths.strings }
+        .task {
+            exclusions = await Engine.ask(["op": "exclusions"]).paths.strings
+            engineVersion = await Engine.ask(["op": "version"]).version.string
+        }
     }
 
     private func addExclusion() {
@@ -295,8 +339,10 @@ struct SettingsView: View {
     }
 
     private func saveExclusions(_ paths: [String]) {
-        let reply = Engine.call(["op": "set_exclusions", "paths": paths])
-        if reply.ok.bool { exclusions = reply.paths.strings }
+        Task {
+            let reply = await Engine.ask(["op": "set_exclusions", "paths": paths])
+            if reply.ok.bool { exclusions = reply.paths.strings }
+        }
     }
 
     private func relaunch() {
@@ -310,15 +356,15 @@ struct SettingsView: View {
 
 /// System status. One-shot reads (launch, focus, reload button) bump `replay` so the dashboard
 /// plays its intro animation; the optional `--watch` stream updates values quietly.
-@MainActor
-final class StatusStream: ObservableObject {
-    @Published var snapshot = JSON(nil)
-    @Published var error: String?
-    @Published private(set) var replay = 0
-    @Published private(set) var loading = false
-    @Published private(set) var updatedAt: Date?
-    private var ticker: Task<Void, Never>?
-    private var lastRead = Date.distantPast
+@MainActor @Observable
+final class StatusStream {
+    var snapshot = JSON(nil)
+    var error: String?
+    private(set) var replay = 0
+    private(set) var loading = false
+    private(set) var updatedAt: Date?
+    @ObservationIgnored private var ticker: Task<Void, Never>?
+    @ObservationIgnored private var lastRead = Date.distantPast
 
     /// One engine reading, off the main thread (the first one samples CPU for 250 ms).
     private static func read() async -> JSON {

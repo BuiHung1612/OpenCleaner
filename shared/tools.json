@@ -11,7 +11,7 @@
       ],
       "icon": "sparkles",
       "colors": [
-        "#0B7A75",
+        "#0A6A66",
         "#14366B"
       ]
     },
@@ -24,9 +24,9 @@
         "Lists every installer with its size",
         "You pick what goes"
       ],
-      "icon": "opticaldisc",
+      "icon": "arrow.down.app",
       "colors": [
-        "#B4572E",
+        "#9D4C28",
         "#5B1F4A"
       ]
     },
@@ -39,9 +39,9 @@
         "Skips projects touched in the last 7 days",
         "Protects Git-tracked files"
       ],
-      "icon": "shippingbox",
+      "icon": "hammer",
       "colors": [
-        "#3E7B27",
+        "#366B22",
         "#123D3A"
       ]
     },
@@ -54,9 +54,9 @@
         "Rebuilds stale system databases",
         "Only applies safe, reversible fixes"
       ],
-      "icon": "gauge.with.dots.needle.67percent",
+      "icon": "bolt.horizontal.circle",
       "colors": [
-        "#C0392B",
+        "#A73225",
         "#4A1942"
       ]
     },
@@ -71,7 +71,7 @@
       ],
       "icon": "power",
       "colors": [
-        "#1F7A8C",
+        "#1B6A7A",
         "#1B2A4A"
       ]
     },
@@ -101,7 +101,7 @@
       ],
       "icon": "doc.badge.clock",
       "colors": [
-        "#B8860B",
+        "#936B09",
         "#5A2A12"
       ]
     },
@@ -116,7 +116,7 @@
       ],
       "icon": "doc.on.doc",
       "colors": [
-        "#2E8B57",
+        "#28794C",
         "#1A2F5A"
       ]
     },

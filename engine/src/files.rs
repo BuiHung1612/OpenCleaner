@@ -185,9 +185,12 @@ pub fn large_old(ctx: &Context, min_mib: u64, days: i64, cancel: &AtomicBool) ->
             let idle_days = (now - e.mtime.max(e.atime)) / DAY;
             let mut p = pick(path, root, &e, ctx);
             if shot {
+                p.kind = "screenshot".into();
+                p.age_days = Some((now - e.mtime) / DAY);
                 p.detail = format!("Screenshot · {} days old", (now - e.mtime) / DAY);
                 p.preselect = true;
             } else {
+                p.idle_days = Some(idle_days);
                 p.detail = format!("Not opened for {idle_days} days");
             }
             p
@@ -313,6 +316,11 @@ fn set_picks(mut set: Vec<Found>, ctx: &Context) -> Vec<Pick> {
             let mut p = pick(path, root, &e, ctx);
             let place = p.group.clone();
             p.group = format!("{name} · {count} copies");
+            p.copies = Some(count);
+            p.place = place.clone();
+            if i == 0 {
+                p.flags.push("kept");
+            }
             p.detail = if i == 0 {
                 format!("{place} · oldest, kept")
             } else {

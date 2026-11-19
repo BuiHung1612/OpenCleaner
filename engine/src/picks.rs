@@ -35,6 +35,22 @@ pub struct Pick {
     pub group: String,
     /// Short explanation ("Preferences", "older than 30 days"…).
     pub detail: String,
+    /// The parts of `detail`, so an app can word it in its own language (all optional):
+    /// what it is ("PKG", "screenshot", "npm packages"…), its age or time unopened in days,
+    /// where it sits, how many copies its set has, and why it is not preselected.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_days: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_days: Option<i64>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub place: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copies: Option<usize>,
+    /// "active" (touched this week), "git_unknown", "kept" (the copy that stays)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<&'static str>,
     pub bytes: u64,
     pub preselect: bool,
     pub action: Action,
@@ -65,6 +81,12 @@ impl Pick {
             root,
             group: String::new(),
             detail: String::new(),
+            kind: String::new(),
+            age_days: None,
+            idle_days: None,
+            place: String::new(),
+            copies: None,
+            flags: Vec::new(),
             bytes: 0,
             preselect: false,
             action,

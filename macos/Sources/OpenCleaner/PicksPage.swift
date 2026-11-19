@@ -3,20 +3,28 @@ import SwiftUI
 /// A pick list from the engine (installers, project build folders, an app and its
 /// leftovers): find → pick → act. Nothing is touched until `act`, and the engine checks
 /// every item again right before.
-@MainActor
-final class PicksModel: ObservableObject {
+@MainActor @Observable
+final class PicksModel {
     enum Phase { case idle, finding, review, acting, done }
 
-    @Published private(set) var phase = Phase.idle
-    @Published private(set) var list = JSON(nil)
-    @Published var selected: Set<Int> = []
-    @Published var parts = Parts()
-    @Published private(set) var outcome = JSON(nil)
-    @Published private(set) var progress = JSON(nil)
-    @Published private(set) var error: String?
-    private var job: Task<Void, Never>?
+    private(set) var phase = Phase.idle
+    private(set) var list = JSON(nil) {
+        // parsed once here, not on every read: rows, filters and sums index into them
+        didSet {
+            items = list.items.array
+            groups = Self.grouped(items)
+        }
+    }
+    private(set) var items: [JSON] = []
+    /// Items in list order, grouped by what they belong to (an app, a project…).
+    private(set) var groups: [(name: String, indexes: [Int])] = []
+    var selected: Set<Int> = []
+    var parts = Parts()
+    private(set) var outcome = JSON(nil)
+    private(set) var progress = JSON(nil)
+    private(set) var error: String?
+    @ObservationIgnored private var job: Task<Void, Never>?
 
-    var items: [JSON] { list.items.array }
     var selectedBytes: Double {
         selected.filter(items.indices.contains).map { parts.bytes(path($0), whole: items[$0].bytes.double ?? 0) }
             .reduce(0, +)
@@ -41,8 +49,8 @@ final class PicksModel: ObservableObject {
     func toggleOpen(_ p: String) {
         parts.toggleOpen(p) { [weak self] kids in self?.parts.children[p] = kids }
     }
-    /// Items in list order, grouped by what they belong to (an app, a project…).
-    var groups: [(name: String, indexes: [Int])] {
+
+    static func grouped(_ items: [JSON]) -> [(name: String, indexes: [Int])] {
         var order: [String] = []
         var byGroup: [String: [Int]] = [:]
         for (i, item) in items.enumerated() {
@@ -68,8 +76,11 @@ final class PicksModel: ObservableObject {
                 default: break
                 }
             }
-            guard !Task.isCancelled, found.raw != nil else {
-                if phase == .finding { phase = .idle }
+            // stopped, or replaced by a newer search
+            guard !Task.isCancelled else { return }
+            guard found.raw != nil else {
+                if error == nil { error = String(localized: "The search did not finish.") }
+                phase = .idle
                 return
             }
             list = found
@@ -92,9 +103,12 @@ final class PicksModel: ObservableObject {
                 "op": "remove", "plan": Int(plan), "items": selected.sorted(),
                 "parts": Dictionary(uniqueKeysWithValues: chosen.compactMap { key, kids in byPath[key].map { ("\($0)", kids) } }),
             ]
+            var shown = Date.distantPast
             for await event in Engine.run(request) {
                 switch event.event.string {
-                case "progress": progress = event
+                case "progress" where Date().timeIntervalSince(shown) >= JunkModel.progressInterval:
+                    progress = event
+                    shown = Date()
                 case "removed": final = event
                 default: break
                 }
@@ -122,15 +136,47 @@ final class PicksModel: ObservableObject {
     }
 }
 
+/// What a pick is, in the user's language. The engine sends the parts (`kind`, `age_days`,
+/// `idle_days`, `place`, `flags`); `detail` is its English sentence, used when there are none.
+enum PickText {
+    static func detail(_ item: JSON) -> String {
+        let flags = Set(item.flags.strings)
+        if let days = item.idle_days.double {
+            return String(localized: "Not opened for \(Int(days)) days")
+        }
+        if let days = item.age_days.double, let kind = item.kind.string {
+            return kind == "screenshot"
+                ? String(localized: "Screenshot · \(Int(days)) days old")
+                : String(localized: "\(kind) · \(Int(days)) days old")
+        }
+        if let place = item.place.string {
+            return flags.contains("kept") ? String(localized: "\(place) · oldest, kept") : place
+        }
+        if let kind = item.kind.string {
+            var text = tr(kind)
+            if flags.contains("git_unknown") { text += " · " + String(localized: "git status unknown") }
+            if flags.contains("active") { text += " · " + String(localized: "active this week") }
+            return text
+        }
+        return tr(item.detail.string ?? "")
+    }
+
+    /// A group's header: a duplicate set ("a.zip · 2 copies" from the engine) says how many copies it has.
+    static func group(_ name: String, first: JSON?) -> String {
+        guard let copies = first?.copies.double, let cut = name.range(of: " · ", options: .backwards) else { return name }
+        return String(localized: "\(String(name[..<cut.lowerBound])) · \(Int(copies)) copies")
+    }
+}
+
 /// The checkbox list of a pick list, grouped.
 struct PicksList: View {
-    @ObservedObject var model: PicksModel
+    let model: PicksModel
     @State private var filter = ListFilter()
 
     var body: some View {
         VStack(spacing: 10) {
             if model.phase == .review {
-                if let error = model.error { Text(verbatim: error).foregroundStyle(Color(hex: "#FFD54F")).frame(maxWidth: .infinity, alignment: .leading) }
+                if let error = model.error { ErrorBanner(message: error) }
                 if !model.items.isEmpty { FilterBar(filter: $filter) }
             }
             list
@@ -139,29 +185,38 @@ struct PicksList: View {
 
     /// Groups keep the engine's order; the filter picks and orders the rows inside each.
     private var shown: [(name: String, indexes: [Int])] {
-        model.groups.compactMap { group in
-            let item = { (i: Int) in model.items[i] }
+        let items = model.items
+        return model.groups.compactMap { group in
             let rows = filter.sorted(
-                group.indexes.filter { filter.matches(item($0).name.string ?? "", item($0).path.string ?? "") },
-                name: { item($0).name.string ?? "" }, size: { item($0).bytes.double ?? 0 })
+                group.indexes.filter { filter.matches(items[$0].name.string ?? "", items[$0].path.string ?? "") },
+                name: { items[$0].name.string ?? "" }, size: { items[$0].bytes.double ?? 0 })
             return rows.isEmpty ? nil : (group.name, rows)
         }
     }
 
     private var list: some View {
-        ScrollView {
+        let shown = shown
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
                 ForEach(shown, id: \.name) { group in
                     VStack(alignment: .leading, spacing: 2) {
                         if !group.name.isEmpty {
-                            Text(verbatim: group.name).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
+                            Text(verbatim: PickText.group(group.name, first: group.indexes.first.map { model.items[$0] }))
+                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
                                 .lineLimit(1).truncationMode(.head).padding(.leading, 12)
+                                .accessibilityAddTraits(.isHeader)
                         }
                         ForEach(group.indexes, id: \.self) { i in row(i) }
                     }
                 }
                 if shown.isEmpty {
-                    Text("Nothing found.").foregroundStyle(.dim).padding(20)
+                    if filter.query.isEmpty {
+                        EmptyState(symbol: "checkmark.circle", title: String(localized: "Nothing found."),
+                                   message: String(localized: "There is nothing here to remove."))
+                    } else {
+                        EmptyState(symbol: "magnifyingglass", title: String(localized: "No matches"),
+                                   message: String(localized: "Nothing found matches “\(filter.query)”."))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -184,7 +239,7 @@ struct PicksList: View {
                 Image(nsImage: fileIcon(path)).resizable().frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: item.name.string ?? "?").font(.system(size: 14, weight: .medium)).lineLimit(1)
-                    Text(verbatim: tr(item.detail.string ?? "")).font(.system(size: 12)).foregroundStyle(.dim).lineLimit(1)
+                    Text(verbatim: PickText.detail(item)).font(.system(size: 12)).foregroundStyle(.dim).lineLimit(1)
                 }
                 Spacer()
                 Text(verbatim: bytes(model.parts.bytes(path, whole: item.bytes.double ?? 0))).font(.system(size: 14)).monospacedDigit()
@@ -193,8 +248,7 @@ struct PicksList: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .contentShape(Rectangle())
-            .onTapGesture { if model.phase == .review { model.toggle(i) } }
+            .checkRow(on) { if model.phase == .review { model.toggle(i) } }
             .peekable(path)
             .contextMenu { FileMenu(path: path) }
             if open && model.phase == .review {
@@ -210,20 +264,25 @@ struct PicksList: View {
 struct PicksOutcome: View {
     let outcome: JSON
     let error: String?
+    /// what was removed went to the Trash (and can be put back)
+    var trashed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let error { Text(verbatim: error).foregroundStyle(Color(hex: "#FFD54F")) }
-            Text("\(Int(outcome.removed.double ?? 0)) items removed, \(bytes(outcome.bytes.double ?? 0)) freed")
+            if let error { Text(verbatim: error).foregroundStyle(Color.warn) }
+            let removed = Int(outcome.removed.double ?? 0)
+            Text(trashed ? String(localized: "\(removed) items moved to the Trash, \(bytes(outcome.bytes.double ?? 0)) freed")
+                         : String(localized: "\(removed) items removed, \(bytes(outcome.bytes.double ?? 0)) freed"))
             if (outcome.skipped.double ?? 0) > 0 {
                 Text("\(Int(outcome.skipped.double ?? 0)) items left alone: in use or changed since the scan").foregroundStyle(.dim)
             }
             if (outcome.failed.double ?? 0) > 0 {
-                Text("\(Int(outcome.failed.double ?? 0)) items could not be removed").foregroundStyle(Color(hex: "#FFD54F"))
+                Text("\(Int(outcome.failed.double ?? 0)) items could not be removed").foregroundStyle(Color.warn)
                 if let first = outcome.first_failure.string {
                     Text(verbatim: first).font(.system(size: 12)).foregroundStyle(.dim).lineLimit(2)
                 }
             }
+            if trashed && removed > 0 { TrashNote().padding(.top, 6) }
         }
         .font(.system(size: 15, weight: .medium))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -247,40 +306,36 @@ struct PicksPage: View {
     let tool: Tool
     let request: [String: Any]
     let kind: PicksKind
-    @ObservedObject var model: PicksModel
+    let model: PicksModel
     @State private var confirming = false
 
     var body: some View {
         VStack(spacing: 0) {
             if model.phase == .idle {
                 Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
+                if let error = model.error { ErrorBanner(message: error) { model.find(request) } }
             } else {
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 16) {
-                        Art(id: model.phase == .done ? "done" : tool.id, symbol: model.phase == .done ? "checkmark.seal" : tool.icon, size: 72)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(tool.title).font(.system(size: 24, weight: .bold))
-                            Text(status).foregroundStyle(.dim)
-                        }
-                        Spacer()
-                    }
-                    .padding(.top, 36)
+                    PageHeader(art: model.phase == .done ? "done" : tool.id, symbol: model.phase == .done ? "checkmark.seal" : tool.icon,
+                               title: tool.title, status: status)
                     switch model.phase {
-                    case .finding: Spacer()
-                    case .done: PicksOutcome(outcome: model.outcome, error: model.error); Spacer()
+                    case .finding: LoadingState(text: String(localized: "Looking…"))
+                    case .done: PicksOutcome(outcome: model.outcome, error: model.error, trashed: kind != .delete); Spacer()
                     case .acting: RemovalProgress(progress: model.progress); PicksList(model: model)
                     default: PicksList(model: model)
                     }
                 }
             }
-            bar.padding(.bottom, 28)
+            bar
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, Layout.side)
         .confirmationDialog(confirmText, isPresented: $confirming) {
             Button(actionTitle, role: .destructive) { model.act() }
         } message: {
             if allCopies > 0 {
                 Text("Every copy of \(allCopies) files is ticked: no copy would be left outside the Trash.")
+            } else if kind == .delete {
+                Text("Deleted folders skip the Trash.")
             }
         }
     }
@@ -327,13 +382,13 @@ struct PicksPage: View {
             case .idle, .done: BigButton(title: String(localized: "Scan")) { model.find(request) }
             case .finding, .acting: BigButton(title: "", busy: true) {}
             case .review:
-                BigButton(title: kind == .trash ? String(localized: "Remove") : actionTitle) { confirming = true }
+                BigButton(title: actionTitle) { confirming = true }
                     .disabled(model.selected.isEmpty)
                     .opacity(model.selected.isEmpty ? 0.5 : 1)
             }
         } trailing: {
             if model.phase == .finding {
-                Button(String(localized: "Stop")) { model.stop() }.buttonStyle(.pill)
+                Button(String(localized: "Stop")) { model.stop() }.buttonStyle(.pill).keyboardShortcut(.cancelAction)
             } else if model.phase == .review {
                 Text(verbatim: bytes(model.selectedBytes)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
             }
@@ -343,14 +398,16 @@ struct PicksPage: View {
 
 /// Uninstaller on the engine: the app list at once (sizes fill in), pick apps, review
 /// each app's leftovers, move them to the Trash.
-@MainActor
-final class AppsModel: ObservableObject {
-    @Published private(set) var apps: [JSON]?
-    @Published private(set) var sizes: [Double] = []
-    @Published var chosen: Set<String> = []
-    @Published var query = ""
+@MainActor @Observable
+final class AppsModel {
+    private(set) var apps: [JSON]?
+    private(set) var sizes: [Double] = []
+    /// `sizes` by app path, so sorting and lookups stay O(1) per app
+    private(set) var sizeByPath: [String: Double] = [:]
+    var chosen: Set<String> = []
+    var query = ""
     let picks = PicksModel()
-    private var job: Task<Void, Never>?
+    @ObservationIgnored private var job: Task<Void, Never>?
 
     func load() {
         job?.cancel()
@@ -360,8 +417,10 @@ final class AppsModel: ObservableObject {
                 case "apps":
                     apps = event.apps.array
                     sizes = Array(repeating: 0, count: apps?.count ?? 0)
+                    sizeByPath = [:]
                 case "sizes":
                     sizes = event.sizes.array.compactMap(\.double)
+                    sizeByPath = Dictionary(zip((apps ?? []).map { $0.path.string ?? "" }, sizes), uniquingKeysWith: { a, _ in a })
                 default: break
                 }
             }
@@ -369,8 +428,7 @@ final class AppsModel: ObservableObject {
     }
 
     func size(of app: JSON) -> Double? {
-        guard let apps, let i = apps.firstIndex(where: { $0.path.string == app.path.string }), sizes.indices.contains(i) else { return nil }
-        return sizes[i] > 0 ? sizes[i] : nil
+        sizeByPath[app.path.string ?? ""].flatMap { $0 > 0 ? $0 : nil }
     }
 
     var shown: [JSON] {
@@ -399,38 +457,28 @@ final class AppsModel: ObservableObject {
 }
 
 struct UninstallerPage: View {
-    @ObservedObject var model: AppsModel
-    @ObservedObject var picks: PicksModel
+    @Bindable var model: AppsModel
     @State private var confirming = false
 
-    init(model: AppsModel) {
-        self.model = model
-        self.picks = model.picks
-    }
+    private var picks: PicksModel { model.picks }
 
     var body: some View {
         VStack(spacing: 14) {
-            HStack(spacing: 20) {
-                Art(id: picks.phase == .done ? "done" : "uninstaller", symbol: picks.phase == .done ? "checkmark.seal" : "xmark.app", size: 84)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(String(localized: "Uninstaller")).font(.system(size: 28, weight: .bold))
-                    Text(subtitle).foregroundStyle(.dim)
-                }
-                Spacer()
+            PageHeader(art: picks.phase == .done ? "done" : "uninstaller", symbol: picks.phase == .done ? "checkmark.seal" : Module.uninstaller.icon,
+                       title: String(localized: "Uninstaller"), status: subtitle) {
                 if picks.phase == .idle { search }
             }
-            .padding(.top, 36)
 
             switch picks.phase {
             case .idle: appList
-            case .finding: Spacer()
+            case .finding: LoadingState(text: String(localized: "Looking for what these apps left behind…"))
             case .acting: RemovalProgress(progress: picks.progress); Spacer()
             case .review: PicksList(model: picks)
-            case .done: PicksOutcome(outcome: picks.outcome, error: picks.error); Spacer()
+            case .done: PicksOutcome(outcome: picks.outcome, error: picks.error, trashed: true); Spacer()
             }
-            bar.padding(.bottom, 12)
+            bar
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, Layout.side)
         .task { if model.apps == nil { model.load() } }
         // an app dragged in from Finder goes straight to the review of what it leaves behind
         .contentShape(Rectangle())
@@ -464,11 +512,16 @@ struct UninstallerPage: View {
 
     @ViewBuilder private var appList: some View {
         if model.apps == nil {
-            ProgressView().controlSize(.large).brightScroller().frame(maxWidth: .infinity, maxHeight: .infinity)
+            LoadingState(text: String(localized: "Listing your apps…"))
         } else {
+            let shown = model.shown
             ScrollView {
                 LazyVStack(spacing: 4) {
-                    ForEach(model.shown, id: \.path.string) { app in appRow(app) }
+                    ForEach(shown, id: \.path.string) { app in appRow(app) }
+                    if shown.isEmpty {
+                        EmptyState(symbol: "magnifyingglass", title: String(localized: "No matches"),
+                                   message: String(localized: "No app matches “\(model.query)”."))
+                    }
                 }
                 .padding(8)
             }
@@ -487,15 +540,14 @@ struct UninstallerPage: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: app.name.string ?? "?").font(.system(size: 14, weight: .medium))
                 Text(verbatim: app.running.bool ? String(localized: "Open now: quit it before uninstalling") : (app.bundle_id.string ?? ""))
-                    .font(.system(size: 12)).foregroundStyle(app.running.bool ? Color(hex: "#FFD54F") : .dim)
+                    .font(.system(size: 12)).foregroundStyle(app.running.bool ? Color.warn : .dim)
             }
             Spacer()
             Text(verbatim: model.size(of: app).map { bytes($0) } ?? "…").monospacedDigit()
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(on ? 0.12 : 0)))
-        .contentShape(Rectangle())
-        .onTapGesture { if on { model.chosen.remove(path) } else { model.chosen.insert(path) } }
+        .checkRow(on) { if on { model.chosen.remove(path) } else { model.chosen.insert(path) } }
         .peekable(path)
         .contextMenu { FileMenu(path: path) }
     }
@@ -505,7 +557,7 @@ struct UninstallerPage: View {
             if picks.phase == .review || picks.phase == .done {
                 Button(String(localized: "Start Over")) { model.startOver() }.buttonStyle(.pill)
             } else if picks.phase == .idle, !model.chosen.isEmpty {
-                let total = model.apps?.filter { model.chosen.contains($0.path.string ?? "") }.compactMap { model.size(of: $0) }.reduce(0, +) ?? 0
+                let total = model.chosen.compactMap { model.sizeByPath[$0] }.reduce(0, +)
                 Text(verbatim: bytes(total)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
             }
         } center: {
@@ -520,7 +572,9 @@ struct UninstallerPage: View {
             case .done: EmptyView()
             }
         } trailing: {
-            if picks.phase == .review {
+            if picks.phase == .finding {
+                Button(String(localized: "Stop")) { picks.stop() }.buttonStyle(.pill).keyboardShortcut(.cancelAction)
+            } else if picks.phase == .review {
                 Text(verbatim: bytes(picks.selectedBytes)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
             }
         }
