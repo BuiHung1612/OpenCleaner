@@ -79,6 +79,8 @@ struct OpenButton: View {
         }
         .buttonStyle(.plain)
         .help(String(localized: "Show items"))
+        .accessibilityLabel(String(localized: "Show items"))
+        .accessibilityValue(open ? String(localized: "Open") : "")
     }
 }
 
@@ -131,8 +133,7 @@ struct PartRows: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
-            .contentShape(Rectangle())
-            .onTapGesture { if depth == 0 { toggle(path) } }
+            .checkRow(on) { if depth == 0 { toggle(path) } }
             .peekable(path)
             .contextMenu { FileMenu(path: path) }
             if opened {
@@ -232,22 +233,33 @@ struct ListFilter {
     }
 }
 
-/// The glass search capsule.
+/// The glass search capsule. ⌘F puts the cursor in it (one is on screen at a time).
 struct SearchField: View {
     let prompt: String
     @Binding var text: String
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack {
             Image(systemName: "magnifyingglass").foregroundStyle(.dim)
             ZStack(alignment: .leading) {
-                if text.isEmpty { Text(verbatim: prompt).foregroundStyle(.dim).allowsHitTesting(false) }
+                if text.isEmpty { Text(verbatim: prompt).foregroundStyle(.dim).allowsHitTesting(false).accessibilityHidden(true) }
                 TextField("", text: $text).textFieldStyle(.plain)
+                    .focused($focused)
+                    .accessibilityLabel(prompt)
+                    // Esc in the field clears the search first
+                    .onExitCommand { if text.isEmpty { focused = false } else { text = "" } }
             }
             .font(.system(size: 14))
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
         .glassEffect(.clear.tint(.white.opacity(0.07)), in: .capsule)
+        .background {
+            Button { focused = true } label: { EmptyView() }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
     }
 }
 

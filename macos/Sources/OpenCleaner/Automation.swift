@@ -207,8 +207,11 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Text("\(Image(systemName: "internaldrive")) \(bytes(auto.freeBytes))")
-            .onAppear { auto.openWindow = { openWindow(id: "main") } }
+        // a monochrome template symbol (SF Symbols has no broom) and the free space; menu bar
+        // labels keep only text and images, so both go in one Text
+        Text("\(Image(systemName: "sparkles")) \(auto.freeBytes.map(shortBytes) ?? "—")")
+            .accessibilityLabel(String(localized: "OpenCleaner: \(bytes(auto.freeBytes)) free"))
+        .onAppear { auto.openWindow = { openWindow(id: "main") } }
     }
 }
 
@@ -282,7 +285,7 @@ struct AutomationSettings: View {
             }
             .disabled(!autoClean)
             Text("Runs System Junk while OpenCleaner or its menu bar item is open, removing only the items selected by default. The Trash is never emptied.")
-                .font(.system(size: 12)).foregroundStyle(.dim)
+                .font(.system(size: 12)).foregroundStyle(.secondary)
             Toggle(String(localized: "Show in menu bar"), isOn: $menuBar)
             Toggle(String(localized: "Warn when the startup disk is almost full"), isOn: $lowDisk)
             Picker(String(localized: "Below"), selection: $lowDiskGB) {

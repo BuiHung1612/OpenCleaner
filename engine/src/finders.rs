@@ -84,7 +84,9 @@ fn collect_installers(root: &Path, dir: &Path, depth: u32, group: &str, out: &mu
                         Pick::new(path, root.to_path_buf(), Purpose::Installers, Action::Trash);
                     pick.bytes = e.alloc;
                     pick.group = group.into();
-                    pick.detail = format!("{} · {age} days old", ext.to_ascii_uppercase());
+                    pick.kind = ext.to_ascii_uppercase();
+                    pick.age_days = Some(age as i64);
+                    pick.detail = format!("{} · {age} days old", pick.kind);
                     pick.preselect = age >= 7;
                     out.push(pick);
                 }
@@ -164,18 +166,21 @@ pub fn projects(ctx: &Context, extra_roots: &[PathBuf], cancel: &AtomicBool) -> 
             .map(|p| format!("~/{}", p.display()))
             .unwrap_or_else(|_| project.display().to_string());
         pick.detail = kind.into();
+        pick.kind = kind.into();
         pick.preselect = true;
         match in_git_repo(&project).then(|| tracked(git.as_deref(), &project, &name)) {
             Some(Some(true)) => continue, // holds files under version control: not junk
             Some(None) => {
                 pick.preselect = false;
                 pick.detail.push_str(" · git status unknown");
+                pick.flags.push("git_unknown");
             }
             _ => {}
         }
         if recently_active(&project, &artifact) {
             pick.preselect = false;
             pick.detail.push_str(" · active this week");
+            pick.flags.push("active");
         }
         picks.push(pick);
     }

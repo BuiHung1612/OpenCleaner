@@ -30,23 +30,22 @@ struct Volume: Identifiable {
 }
 
 /// Lives as long as the window, so results and the sidebar badge survive switching modules.
-@MainActor
-final class SpaceLensModel: ObservableObject {
-    @Published var volumes = Volume.all()
-    @Published var volume: Volume?
+@MainActor @Observable
+final class SpaceLensModel {
+    var volumes = Volume.all()
+    var volume: Volume?
     /// folders opened so far; `nil` is the startup disk overview
-    @Published var stack: [String?] = []
-    @Published var selection: Set<String> = []
-    @Published var error: String?
-    @Published private var cache: [String: JSON] = [:]
+    var stack: [String?] = []
+    var selection: Set<String> = []
+    var error: String?
+    /// After a move to the Trash: how many items went.
+    var trashed = 0
+    var trashError: String?
+    private var cache: [String: JSON] = [:]
     /// keys whose `cache` entry came from disk (an earlier launch) and is being re-scanned
-    @Published private var stale: [String: Date] = [:]
+    private var stale: [String: Date] = [:]
     /// keys whose `cache` entry is a scan still in progress (sizes are still growing)
-    @Published private var live: Set<String> = []
-
-    var usedLabel: Text? {
-        volumes.first(where: \.isStartup).map { Text(verbatim: bytes($0.used)) }
-    }
+    private var live: Set<String> = []
 
     var current: JSON? { stack.last.map { cache[$0 ?? ""] } ?? nil }
     /// When the shown results were really taken, if they are an older scan being refreshed.
@@ -74,6 +73,8 @@ final class SpaceLensModel: ObservableObject {
     func open(_ path: String?) {
         stack.append(path)
         selection = []
+        trashed = 0
+        trashError = nil
         load(path)
     }
 
@@ -81,6 +82,8 @@ final class SpaceLensModel: ObservableObject {
         guard !stack.isEmpty else { return }
         stack.removeLast()
         selection = []
+        trashed = 0
+        trashError = nil
         cancelPrefetch()
         if stack.isEmpty { volume = nil } else if let current { prefetchChildren(of: current) }
     }
@@ -93,11 +96,11 @@ final class SpaceLensModel: ObservableObject {
     }
 
     /// One scan per folder at a time; opening a folder that is being prefetched restarts it in the foreground.
-    private var inflight: [String: Task<JSON, Error>] = [:]
+    @ObservationIgnored private var inflight: [String: Task<JSON, Error>] = [:]
     /// keys in `inflight` that run at utility QoS (prefetch)
-    private var backgroundKeys: Set<String> = []
-    private var queue: [String] = []
-    private var draining = false
+    @ObservationIgnored private var backgroundKeys: Set<String> = []
+    @ObservationIgnored private var queue: [String] = []
+    @ObservationIgnored private var draining = false
 
     /// The user moved: drop speculative scans so they stop competing for the disk, and so a
     /// folder they open is scanned at full priority instead of joining a throttled prefetch.
@@ -237,12 +240,14 @@ final class SpaceLensModel: ObservableObject {
     /// Selected items go to the Trash (recoverable), never deleted outright.
     func removeSelected() {
         var failed: [String] = []
+        var moved = 0
         let removable = Set(entries.filter(\.selectable.bool).compactMap(\.path.string))
         for path in selection where removable.contains(path) {
-            if !Self.moveToTrash(path) { failed.append((path as NSString).lastPathComponent) }
+            if Self.moveToTrash(path) { moved += 1 } else { failed.append((path as NSString).lastPathComponent) }
         }
         selection = []
-        error = failed.isEmpty ? nil : String(localized: "Could not move to Trash: \(failed.joined(separator: ", "))")
+        trashed = moved
+        trashError = failed.isEmpty ? nil : String(localized: "Could not move to Trash: \(failed.joined(separator: ", "))")
         cache = [:]
         stale = [:]
         live = []
@@ -251,10 +256,18 @@ final class SpaceLensModel: ObservableObject {
     }
 }
 
+/// The row or bubble under the pointer. Its own object, so hovering redraws the rows and
+/// bubbles that read it, not the whole page.
+@MainActor @Observable
+final class Hover {
+    var path: String?
+}
+
 struct SpaceLensPage: View {
-    @ObservedObject var model: SpaceLensModel
-    @State private var hovered: String?
+    let model: SpaceLensModel
+    @State private var hover = Hover()
     @State private var confirming = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -264,7 +277,7 @@ struct SpaceLensPage: View {
                 results
             }
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, Layout.side)
         // a folder dragged in from Finder opens here
         .contentShape(Rectangle())
         .dropDestination(for: URL.self) { urls, _ in
@@ -302,13 +315,30 @@ struct SpaceLensPage: View {
     private var results: some View {
         VStack(spacing: 14) {
             HStack(spacing: 10) {
-                Button { model.back() } label: { Image(systemName: "chevron.left") }.buttonStyle(.pill)
+                Button { model.back() } label: { Label(String(localized: "Back"), systemImage: "chevron.left").labelStyle(.iconOnly) }
+                    .buttonStyle(.pill)
+                    .help(String(localized: "Back"))
+                    .keyboardShortcut("[", modifiers: .command)
                 Text(breadcrumb).font(.system(size: 15, weight: .semibold)).lineLimit(1).truncationMode(.head)
                 Spacer()
-                Button { model.load(model.stack.last ?? nil, force: true) } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.pill)
+                Button { model.load(model.stack.last ?? nil, force: true) } label: {
+                    Label(String(localized: "Scan Again"), systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+                }
+                .buttonStyle(.pill)
+                .help(String(localized: "Scan Again"))
                 Button(String(localized: "Start Over")) { model.startOver() }.buttonStyle(.pill)
             }
-            .padding(.top, 36)
+            .padding(.top, Layout.top)
+
+            if let failure = model.trashError { ErrorBanner(message: failure) }
+            if model.trashed > 0 {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(model.trashed) items moved to the Trash.").font(.system(size: 13, weight: .medium))
+                    TrashNote()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .glassPanel(radius: 16)
+            }
 
             if let date = model.staleDate, model.current != nil {
                 RefreshBanner(date: date, error: model.error)
@@ -327,7 +357,7 @@ struct SpaceLensPage: View {
                 HStack(spacing: 24) {
                     list.frame(width: 420)
                     VStack(spacing: 10) {
-                        BubbleChart(entries: model.entries, hovered: $hovered) { e in
+                        BubbleChart(entries: model.entries, hover: hover) { e in
                             if e.is_dir.bool, let p = e.path.string { model.open(p) }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -340,27 +370,17 @@ struct SpaceLensPage: View {
                 }
                 .id(currentKey)
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else if let error = model.error {
+                ErrorBanner(message: error) { model.load(model.stack.last ?? nil, force: true) }
+                Spacer()
             } else {
-                VStack(spacing: 12) {
-                    if let error = model.error {
-                        Image(systemName: "exclamationmark.triangle").font(.largeTitle)
-                        Text(error)
-                    } else {
-                        Art(id: "scanning", symbol: "magnifyingglass", size: 180)
-                            .phaseAnimator([false, true]) { art, up in
-                                art.scaleEffect(up ? 1.04 : 0.96).opacity(up ? 1 : 0.8)
-                            } animation: { _ in .easeInOut(duration: 1.2) }
-                        ProgressView().controlSize(.regular).brightScroller()
-                        Text("Mapping your files. Large drives can take about a minute.").font(.system(size: 14)).foregroundStyle(.dim)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingState(text: String(localized: "Mapping your files. Large drives can take about a minute."))
             }
 
             bottomBar
         }
-        .animation(.easeOut(duration: 0.25), value: currentKey)
-        .animation(.easeOut(duration: 0.25), value: model.current == nil)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: currentKey)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: model.current == nil)
     }
 
     private var currentKey: String { model.stack.last.map { $0 ?? "/" } ?? "" }
@@ -373,18 +393,18 @@ struct SpaceLensPage: View {
     private var list: some View {
         ScrollView {
             LazyVStack(spacing: 4) {
-                ForEach(Array(model.entries.enumerated()), id: \.offset) { _, e in
+                // keyed by path: live scan events reorder and resize rows without replacing them
+                ForEach(model.entries, id: \.path.string) { e in
                     EntryRow(
                         entry: e,
                         selected: model.selection.contains(e.path.string ?? ""),
-                        highlighted: hovered == e.path.string,
+                        hover: hover,
                         toggle: {
                             guard e.selectable.bool, let p = e.path.string else { return }
                             if model.selection.contains(p) { model.selection.remove(p) } else { model.selection.insert(p) }
                         },
                         open: { if e.is_dir.bool, let p = e.path.string { model.open(p) } }
                     )
-                    .onHover { hovered = $0 ? e.path.string : nil }
                 }
             }
             .padding(8)
@@ -405,14 +425,13 @@ struct SpaceLensPage: View {
             ActionBar {
                 EmptyView()
             } center: {
-                if !model.selection.isEmpty { BigButton(title: String(localized: "Remove")) { confirming = true } }
+                if !model.selection.isEmpty { BigButton(title: String(localized: "Move to Trash")) { confirming = true } }
             } trailing: {
                 if !model.selection.isEmpty {
                     Text(verbatim: bytes(model.selectedSize)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
                 }
             }
         }
-        .padding(.bottom, 12)
     }
 }
 
@@ -440,6 +459,7 @@ struct VolumeCard: View {
 struct UsageBar: View {
     let fraction: Double
     @State private var shown = 0.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Capsule().fill(.white.opacity(0.15))
@@ -451,7 +471,9 @@ struct UsageBar: View {
                 }
             }
             .frame(height: 6)
-            .onAppear { withAnimation(.easeOut(duration: 0.9)) { shown = fraction } }
+            .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.9)) { shown = fraction } }
+            .accessibilityElement()
+            .accessibilityValue(percent(fraction * 100))
             .onChange(of: fraction) { shown = fraction }
     }
 }
@@ -459,11 +481,13 @@ struct UsageBar: View {
 struct EntryRow: View {
     let entry: JSON
     let selected: Bool
-    let highlighted: Bool
+    let hover: Hover
     let toggle: () -> Void
     let open: () -> Void
 
     var body: some View {
+        let path = entry.path.string ?? ""
+        let name = entry.name.string ?? "?"
         HStack(spacing: 12) {
             // overview rows (Home, Applications…) are summaries: never offered for removal
             Button(action: toggle) {
@@ -472,11 +496,14 @@ struct EntryRow: View {
             .buttonStyle(.plain)
             .opacity(entry.selectable.bool ? 1 : 0)
             .disabled(!entry.selectable.bool)
-            Image(nsImage: fileIcon(entry.path.string ?? "")).resizable().frame(width: 34, height: 34)
+            .accessibilityHidden(!entry.selectable.bool)
+            .accessibilityLabel(String(localized: "Select \(name)"))
+            .accessibilityValue(selected ? String(localized: "Selected") : String(localized: "Not selected"))
+            Image(nsImage: fileIcon(path)).resizable().frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: entry.name.string ?? "?").font(.system(size: 14, weight: .medium)).lineLimit(1)
+                Text(verbatim: name).font(.system(size: 14, weight: .medium)).lineLimit(1)
                 if entry.cleanable.bool {
-                    Text("Safe to clean").font(.system(size: 12)).foregroundStyle(Color(hex: "#7CF2C8"))
+                    Text("Safe to clean").font(.system(size: 12)).foregroundStyle(Color.ok)
                 } else if entry.scan_status.string == "partial" {
                     Text("Partly measured").font(.system(size: 12)).foregroundStyle(.dim)
                 }
@@ -486,11 +513,15 @@ struct EntryRow: View {
             Image(systemName: "chevron.right").foregroundStyle(.dim).opacity(entry.is_dir.bool ? 1 : 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(selected || highlighted ? 0.12 : 0)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(selected || hover.path == path ? 0.12 : 0)))
         .contentShape(Rectangle())
         .onTapGesture(perform: open)
-        .peekable(entry.path.string ?? "")
-        .contextMenu { FileMenu(path: entry.path.string ?? "") }
+        .onHover { inside in
+            if inside { hover.path = path } else if hover.path == path { hover.path = nil }
+        }
+        .accessibilityAction(named: String(localized: "Open"), open)
+        .peekable(path)
+        .contextMenu { FileMenu(path: path) }
     }
 }
 
@@ -522,9 +553,10 @@ struct BubbleItem: Identifiable {
 
 struct BubbleChart: View {
     let entries: [JSON]
-    @Binding var hovered: String?
+    let hover: Hover
     let open: (JSON) -> Void
     @State private var appeared = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Hover re-renders the chart many times a second; the packing only changes with the folder,
     /// so the unit-radius layout is kept and just scaled.
@@ -549,35 +581,52 @@ struct BubbleChart: View {
                     .frame(width: side, height: side)
                     .scaleEffect(appeared ? 1 : 0.92)
                 ForEach(Array(bubbles.enumerated()), id: \.element.index) { rank, b in
-                    bubble(items[b.index], b, rank: rank)
+                    BubbleView(item: items[b.index], r: b.r, rank: rank, appeared: appeared || reduceMotion,
+                               tint: items[b.index].entry == nil ? Color.white : Self.tints[rank % Self.tints.count],
+                               hover: hover, reduceMotion: reduceMotion, open: open)
                         .position(x: g.size.width / 2 + b.center.x, y: g.size.height / 2 + b.center.y)
                 }
             }
             .frame(width: g.size.width, height: g.size.height)
         }
         .onAppear { appeared = true }
+        // the list next to it says the same, row by row
+        .accessibilityHidden(true)
     }
+}
 
-    private func bubble(_ item: BubbleItem, _ b: Bubble, rank: Int) -> some View {
-        let isHovered = hovered == item.id
-        let tint = item.entry == nil ? Color.white : Self.tints[rank % Self.tints.count]
-        return Circle()
+/// One bubble; reads the hover itself, so pointing at it redraws it, not the chart.
+private struct BubbleView: View {
+    let item: BubbleItem
+    let r: CGFloat
+    let rank: Int
+    let appeared: Bool
+    let tint: Color
+    let hover: Hover
+    let reduceMotion: Bool
+    let open: (JSON) -> Void
+
+    var body: some View {
+        let isHovered = hover.path == item.id
+        Circle()
             .fill(RadialGradient(colors: [tint.opacity(isHovered ? 0.55 : 0.38), tint.opacity(isHovered ? 0.3 : 0.16)],
-                                 center: .topLeading, startRadius: 0, endRadius: b.r * 2))
+                                 center: .topLeading, startRadius: 0, endRadius: r * 2))
             .overlay(Circle().strokeBorder(.white.opacity(isHovered ? 0.6 : 0.3), lineWidth: 1))
-            .overlay { label(item, r: b.r) }
-            .frame(width: b.r * 2, height: b.r * 2)
+            .overlay { label }
+            .frame(width: r * 2, height: r * 2)
             .contentShape(.circle)
             .scaleEffect(appeared ? (isHovered ? 1.05 : 1) : 0.2)
             .opacity(appeared ? 1 : 0)
-            .animation(.spring(response: 0.55, dampingFraction: 0.7).delay(Double(rank) * 0.04), value: appeared)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovered)
-            .onHover { hovered = $0 ? item.id : nil }
+            .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.7).delay(Double(rank) * 0.04), value: appeared)
+            .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7), value: isHovered)
+            .onHover { inside in
+                if inside { hover.path = item.id } else if hover.path == item.id { hover.path = nil }
+            }
             .onTapGesture { if let e = item.entry { open(e) } }
             .help(item.name + " · " + bytes(item.size))
     }
 
-    @ViewBuilder private func label(_ item: BubbleItem, r: CGFloat) -> some View {
+    @ViewBuilder private var label: some View {
         let icon = Group {
             if let path = item.entry?.path.string {
                 Image(nsImage: fileIcon(path)).resizable()

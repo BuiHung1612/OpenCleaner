@@ -35,15 +35,7 @@ struct OptimizePage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 16) {
-                Art(id: done ? "done" : tool.id, symbol: done ? "checkmark.seal" : tool.icon, size: 72)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(tool.title).font(.system(size: 24, weight: .bold))
-                    Text(tr(tool.subtitle)).foregroundStyle(.dim)
-                }
-                Spacer()
-            }
-            .padding(.top, 36)
+            PageHeader(art: done ? "done" : tool.id, symbol: done ? "checkmark.seal" : tool.icon, title: tool.title, status: status)
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(tasks, id: \.id.string) { task in row(task) }
@@ -58,21 +50,31 @@ struct OptimizePage: View {
                 if running {
                     BigButton(title: "", busy: true) {}
                 } else {
-                    BigButton(title: String(localized: "Run")) { Task { await run() } }
+                    BigButton(title: String(localized: "Run Selected")) { Task { await run() } }
                         .disabled(selected.isEmpty)
                         .opacity(selected.isEmpty ? 0.5 : 1)
                 }
             } trailing: {
                 EmptyView()
             }
-            .padding(.bottom, 28)
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, Layout.side)
         .task {
-            tasks = Engine.call(["op": "maintenance"]).tasks.array
+            tasks = await Engine.ask(["op": "maintenance"]).tasks.array
             selected = Set(tasks.filter { !$0.admin.bool }.compactMap(\.id.string))
         }
     }
+
+    /// The subtitle until a run, then how it went.
+    private var status: String {
+        guard !results.isEmpty, !running else { return tool.subtitle }
+        let ok = results.values.filter { $0 == Self.okMark }.count
+        return ok == results.count
+            ? String(localized: "All \(ok) tasks done.")
+            : String(localized: "\(ok) of \(results.count) tasks done.")
+    }
+
+    private static let okMark = "✓"
 
     private func row(_ task: JSON) -> some View {
         let id = task.id.string ?? ""
@@ -85,19 +87,24 @@ struct OptimizePage: View {
                     if task.admin.bool {
                         Image(systemName: "lock.fill").font(.system(size: 11)).foregroundStyle(.dim)
                             .help(String(localized: "Asks for your password"))
+                            .accessibilityLabel(String(localized: "Asks for your password"))
                     }
                 }
                 Text(tr(task.note.string ?? "")).font(.system(size: 12)).foregroundStyle(.dim)
             }
             Spacer()
             if let result = results[id] {
-                Text(verbatim: result).font(.system(size: 12)).foregroundStyle(result == "✓" ? Color(hex: "#7CF2C8") : Color(hex: "#FFD54F"))
+                if result == Self.okMark {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.ok)
+                        .accessibilityLabel(String(localized: "Done"))
+                } else {
+                    Text(verbatim: result).font(.system(size: 12)).foregroundStyle(Color.warn)
+                }
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(on ? 0.12 : 0)))
-        .contentShape(Rectangle())
-        .onTapGesture {
+        .checkRow(on) {
             guard !running else { return }
             if on { selected.remove(id) } else { selected.insert(id) }
         }
@@ -136,9 +143,17 @@ struct TouchIDPage: View {
     var body: some View {
         VStack(spacing: 0) {
             Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
-            if let message { Text(verbatim: message).foregroundStyle(Color(hex: "#FFD54F")).padding(.bottom, 8) }
+                .overlay(alignment: .bottom) {
+                    if !statusText.isEmpty {
+                        Label(statusText, systemImage: state.enabled.bool ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 14, weight: .medium))
+                            .padding(.horizontal, 16).padding(.vertical, 8)
+                            .glassPanel(radius: 18)
+                    }
+                }
+            if let message { ErrorBanner(message: message).padding(.top, 8) }
             ActionBar {
-                Text(statusText).foregroundStyle(.dim)
+                EmptyView()
             } center: {
                 if working {
                     BigButton(title: "", busy: true) {}
@@ -150,10 +165,9 @@ struct TouchIDPage: View {
             } trailing: {
                 EmptyView()
             }
-            .padding(.bottom, 28)
         }
-        .padding(.horizontal, 32)
-        .task { refresh() }
+        .padding(.horizontal, Layout.side)
+        .task { await refresh() }
     }
 
     private var statusText: String {
@@ -162,19 +176,19 @@ struct TouchIDPage: View {
         return state.enabled.bool ? String(localized: "On: sudo accepts your fingerprint.") : String(localized: "Off")
     }
 
-    private func refresh() {
-        state = Engine.call(["op": "maintenance"]).touchid
+    private func refresh() async {
+        state = await Engine.ask(["op": "maintenance"]).touchid
     }
 
     private func toggle() async {
         working = true
         message = nil
-        let script = Engine.call(["op": "touchid_script", "enable": !state.enabled.bool]).script.string ?? ""
+        let script = await Engine.ask(["op": "touchid_script", "enable": !state.enabled.bool]).script.string ?? ""
         switch await Privileged.run(script) {
         case .done, .cancelled: break
         case .failed(let m): message = m
         }
-        refresh()
+        await refresh()
         working = false
     }
 }

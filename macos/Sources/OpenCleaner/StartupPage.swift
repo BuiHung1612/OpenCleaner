@@ -17,16 +17,8 @@ struct StartupPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 16) {
-                Art(id: tool.id, symbol: tool.icon, size: 72)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(tool.title).font(.system(size: 24, weight: .bold))
-                    Text(tr(tool.subtitle)).foregroundStyle(.dim)
-                }
-                Spacer()
-            }
-            .padding(.top, 36)
-            if let message { Text(verbatim: message).foregroundStyle(Color(hex: "#FFD54F")) }
+            PageHeader(art: tool.id, symbol: tool.icon, title: tool.title, status: tool.subtitle)
+            if let message { ErrorBanner(message: message) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -48,9 +40,9 @@ struct StartupPage: View {
             }
             .brightScroller()
             .glassPanel()
-            .padding(.bottom, 28)
+            .padding(.bottom, Layout.bottom)
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, Layout.side)
         .task { await refresh() }
         .confirmationDialog(
             String(localized: "Turn off \(asking?.name.string ?? "")?"),
@@ -66,6 +58,7 @@ struct StartupPage: View {
 
     private func heading(_ title: LocalizedStringKey) -> some View {
         Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim).padding(.leading, 12)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func row(_ item: JSON) -> some View {

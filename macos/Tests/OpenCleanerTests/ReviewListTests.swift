@@ -21,3 +21,17 @@ import Testing
     #expect(Volume.holding("/Volumes/X", in: all)?.url.path == "/Volumes/X")
     #expect(Volume.holding("/Users/me", in: all)?.url.path == "/")
 }
+
+@MainActor
+@Test func pickDetailsAreWordedFromTheEngineFields() {
+    let pick = { (s: String) in JSON(data: Data(s.utf8)) }
+    #expect(PickText.detail(pick(#"{"detail":"x","idle_days":200}"#)) == "Not opened for 200 days")
+    #expect(PickText.detail(pick(#"{"detail":"x","kind":"PKG","age_days":3}"#)) == "PKG · 3 days old")
+    #expect(PickText.detail(pick(#"{"detail":"x","kind":"npm packages","flags":["active"]}"#)) == "npm packages · active this week")
+    #expect(PickText.detail(pick(#"{"detail":"x","place":"~/Downloads","flags":["kept"]}"#)) == "~/Downloads · oldest, kept")
+    // older engines: the English sentence as sent
+    #expect(PickText.detail(pick(#"{"detail":"Cache"}"#)) == "Cache")
+    #expect(PickText.group("a.zip · 2 copies", first: pick(#"{"copies":2}"#)) == "a.zip · 2 copies")
+    let groups = PicksModel.grouped([pick(#"{"group":"b"}"#), pick(#"{"group":"a"}"#), pick(#"{"group":"b"}"#)])
+    #expect(groups.map(\.indexes) == [[0, 2], [1]])
+}

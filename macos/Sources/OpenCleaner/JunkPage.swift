@@ -2,23 +2,26 @@ import SwiftUI
 
 /// System Junk on the Rust engine: scan (nothing removed) → review by rule → clean.
 /// Lives as long as the window, like Space Lens, so a scan survives switching pages.
-@MainActor
-final class JunkModel: ObservableObject {
+@MainActor @Observable
+final class JunkModel {
     enum Phase { case idle, scanning, review, cleaning, done }
 
-    @Published private(set) var phase = Phase.idle
-    /// The latest plan summary from the engine (partial while scanning).
-    @Published private(set) var plan = JSON(nil)
-    @Published var selected: Set<String> = []
+    private(set) var phase = Phase.idle
+    /// The latest plan summary from the engine (partial while scanning, at most ~10 a second).
+    private(set) var plan = JSON(nil)
+    var selected: Set<String> = []
     /// items unticked inside a selected rule (paths)
-    @Published var excluded: Set<String> = []
-    @Published var expanded: Set<String> = []
+    var excluded: Set<String> = []
+    var expanded: Set<String> = []
     /// items opened in turn, with some of their children ticked
-    @Published var parts = Parts()
-    @Published private(set) var outcome = JSON(nil)
-    @Published private(set) var cleanProgress = JSON(nil)
-    @Published private(set) var error: String?
-    private var job: Task<Void, Never>?
+    var parts = Parts()
+    private(set) var outcome = JSON(nil)
+    private(set) var cleanProgress = JSON(nil)
+    private(set) var error: String?
+    @ObservationIgnored private var job: Task<Void, Never>?
+
+    /// Progress events can come hundreds of times a second; the page needs ~10.
+    static let progressInterval: TimeInterval = 0.1
 
     var groups: [JSON] { plan.groups.array }
     var rules: [JSON] { groups.flatMap(\.rules.array) }
@@ -99,15 +102,22 @@ final class JunkModel: ObservableObject {
         parts = Parts()
         job = Task {
             var final = JSON(nil)
+            var shown = Date.distantPast
             for await event in Engine.run(["op": "scan", "list": true]) {
                 switch event.event.string {
-                case "progress": plan = event
+                case "progress" where Date().timeIntervalSince(shown) >= Self.progressInterval:
+                    plan = event
+                    shown = Date()
                 case "plan": final = event
+                case "error": error = event.error.string
                 default: break
                 }
             }
-            guard !Task.isCancelled, final.raw != nil else {
-                if phase == .scanning { phase = .idle }
+            // stopped, or replaced by a newer scan: that one owns the page now
+            guard !Task.isCancelled else { return }
+            guard final.raw != nil else {
+                if error == nil { error = String(localized: "The scan did not finish.") }
+                phase = .idle
                 return
             }
             plan = final
@@ -130,9 +140,12 @@ final class JunkModel: ObservableObject {
                 "op": "clean", "plan": Int(planID), "rules": Array(selected), "skip": Array(excluded),
                 "parts": parts.request { chosen.contains($0) },
             ]
+            var shown = Date.distantPast
             for await event in Engine.run(request) {
                 switch event.event.string {
-                case "progress": cleanProgress = event
+                case "progress" where Date().timeIntervalSince(shown) >= Self.progressInterval:
+                    cleanProgress = event
+                    shown = Date()
                 case "cleaned": final = event
                 default: break
                 }
@@ -164,7 +177,7 @@ final class JunkModel: ObservableObject {
 
 struct JunkPage: View {
     let tool: Tool
-    @ObservedObject var model: JunkModel
+    let model: JunkModel
     @State private var confirming = false
     @State private var filter = ListFilter()
 
@@ -173,32 +186,28 @@ struct JunkPage: View {
             switch model.phase {
             case .idle:
                 Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
+                if let error = model.error { ErrorBanner(message: error) { model.scan() } }
             case .scanning, .review:
                 review
             case .cleaning, .done:
                 result
             }
-            bar.padding(.bottom, 28)
+            bar
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, Layout.side)
         .confirmationDialog(
             String(localized: "Remove \(bytes(model.selectedBytes)) of junk? This cannot be undone."),
             isPresented: $confirming
         ) {
             Button(String(localized: "Clean"), role: .destructive) { model.clean() }
+        } message: {
+            Text("Cleaned items skip the Trash.")
         }
     }
 
     private var header: some View {
-        HStack(spacing: 16) {
-            Art(id: model.phase == .done ? "done" : tool.id, symbol: model.phase == .done ? "checkmark.seal" : tool.icon, size: 72)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(tool.title).font(.system(size: 24, weight: .bold))
-                Text(status).foregroundStyle(.dim)
-            }
-            Spacer()
-        }
-        .padding(.top, 36)
+        PageHeader(art: model.phase == .done ? "done" : tool.id, symbol: model.phase == .done ? "checkmark.seal" : tool.icon,
+                   title: tool.title, status: status)
     }
 
     private var status: String {
@@ -229,6 +238,7 @@ struct JunkPage: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(tr(group.title.string ?? "")).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
                                     .padding(.leading, 12)
+                                    .accessibilityAddTraits(.isHeader)
                                 ForEach(rules, id: \.id.string) { rule in ruleRow(rule) }
                                 if group.id.string == "privacy" {
                                     Text("Safari is not listed: macOS protects its history and cookies.")
@@ -243,6 +253,9 @@ struct JunkPage: View {
                             Text("Looking through caches, logs and app data…").foregroundStyle(.dim)
                         }
                         .padding(8)
+                    } else if model.phase == .review, !filter.query.isEmpty, model.groups.allSatisfy({ shownRules($0).isEmpty }) {
+                        EmptyState(symbol: "magnifyingglass", title: String(localized: "No matches"),
+                                   message: String(localized: "Nothing found matches “\(filter.query)”."))
                     }
                 }
                 // fill the panel even before the first rows arrive
@@ -283,7 +296,7 @@ struct JunkPage: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tr(rule.title.string ?? id)).font(.system(size: 14, weight: .medium))
                     if let app = rule.in_use_by.string, rule.status.string == "in_use" {
-                        Text("Skipped while \(app) is open").font(.system(size: 12)).foregroundStyle(Color(hex: "#FFD54F"))
+                        Text("Skipped while \(app) is open").font(.system(size: 12)).foregroundStyle(Color.warn)
                     } else if let note = rule.note.string, !note.isEmpty {
                         Text(tr(note)).font(.system(size: 12)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
                     }
@@ -303,11 +316,11 @@ struct JunkPage: View {
                     }
                     .buttonStyle(.plain)
                     .help(String(localized: "Show items"))
+                    .accessibilityLabel(String(localized: "Show items"))
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
-            .contentShape(Rectangle())
-            .onTapGesture {
+            .checkRow(on && ready) {
                 guard ready else { return }
                 model.toggleRule(rule)
             }
@@ -341,8 +354,7 @@ struct JunkPage: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
-            .contentShape(Rectangle())
-            .onTapGesture { model.toggleItem(item.path, in: rule) }
+            .checkRow(on) { model.toggleItem(item.path, in: rule) }
             .peekable(item.path)
             .contextMenu { FileMenu(path: item.path) }
             if open {
@@ -364,7 +376,7 @@ struct JunkPage: View {
                         Text("\(Int(o.skipped.double ?? 0)) items left alone: in use or changed since the scan").foregroundStyle(.dim)
                     }
                     if (o.failed.double ?? 0) > 0 {
-                        Text("\(Int(o.failed.double ?? 0)) items could not be removed").foregroundStyle(Color(hex: "#FFD54F"))
+                        Text("\(Int(o.failed.double ?? 0)) items could not be removed").foregroundStyle(Color.warn)
                     }
                 }
                 .font(.system(size: 15, weight: .medium))
@@ -395,7 +407,7 @@ struct JunkPage: View {
             }
         } trailing: {
             if model.phase == .scanning {
-                Button(String(localized: "Stop")) { model.stop() }.buttonStyle(.pill)
+                Button(String(localized: "Stop")) { model.stop() }.buttonStyle(.pill).keyboardShortcut(.cancelAction)
             } else if model.phase == .review {
                 Text(verbatim: bytes(model.selectedBytes)).font(.system(size: 17, weight: .semibold)).monospacedDigit()
             }

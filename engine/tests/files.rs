@@ -62,13 +62,12 @@ fn large_old_files_and_old_screenshots_but_nothing_inside_packages() {
         .find(|p| p.name.starts_with("Screenshot"))
         .unwrap();
     assert!(shot.preselect);
-    assert!(
-        !found
-            .iter()
-            .find(|p| p.name == "old.mov")
-            .unwrap()
-            .preselect
-    );
+    // structured detail, for apps that word it themselves
+    assert_eq!(shot.kind, "screenshot");
+    assert!(shot.age_days.unwrap() >= 30);
+    let mov = found.iter().find(|p| p.name == "old.mov").unwrap();
+    assert!(!mov.preselect);
+    assert!(mov.idle_days.unwrap() >= 180);
 }
 
 #[test]
@@ -96,6 +95,12 @@ fn duplicates_are_byte_for_byte_and_keep_the_oldest() {
     );
     let kept = found.iter().find(|p| !p.preselect).unwrap();
     assert!(kept.path.ends_with("a.zip") || kept.path.ends_with("link.zip"));
+    assert_eq!(kept.flags, ["kept"]);
+    assert!(
+        found
+            .iter()
+            .all(|p| p.copies == Some(2) && !p.place.is_empty())
+    );
     assert!(
         found
             .iter()
