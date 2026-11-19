@@ -6,8 +6,8 @@ Publisher: BuiHung1612
 PublisherUrl: https://github.com/BuiHung1612
 PackageName: OpenCleaner
 PackageUrl: https://github.com/BuiHung1612/OpenCleaner
-# TODO before submitting: the real license once chosen (README says "license TBD")
-License: TBD
+License: MIT
+LicenseUrl: https://github.com/BuiHung1612/OpenCleaner/blob/main/LICENSE
 ShortDescription: Free, open-source disk cleaner.
 Tags:
   - cleaner

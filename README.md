@@ -112,4 +112,5 @@ Art ids: `dashboard`, `spaceLens`, `uninstaller`, `history`, `scanning`, `done`,
 
 ## License
 
-The app and its engine: license TBD. The engine's code and rules were written for OpenCleaner without copying mo's code or rule text (some behaviour, such as how freed bytes are counted, was matched to mo on purpose and checked against it), so the license is OpenCleaner's to choose; have it reviewed before relying on that. Nothing GPL-licensed is bundled any more.
+[MIT](LICENSE): use, change, share and sell it as you like; keep the copyright notice.
+The engine's code and rules were written for OpenCleaner (nothing GPL-licensed is bundled), and its Rust dependencies are MIT or Apache-2.0.
