@@ -456,6 +456,7 @@ pub fn execute(
             bytes: freed,
             result: result.into(),
             reason,
+            trashed: None,
         });
     }
     out.current = None;

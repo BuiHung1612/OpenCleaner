@@ -3,7 +3,7 @@
 
 use crate::context::Context;
 use crate::rules::RuleSet;
-use crate::{apps, clean, finders, ledger, maintenance, picks, procs, size, space, status};
+use crate::{apps, clean, finders, guard, ledger, maintenance, picks, procs, size, space, status};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -111,6 +111,22 @@ enum Request {
         #[serde(default = "history_limit")]
         limit: usize,
     },
+    /// Folders the user never wants scanned or removed (`paths`).
+    Exclusions,
+    SetExclusions {
+        paths: Vec<PathBuf>,
+    },
+    /// Moves items OpenCleaner put in the Trash back where they were (`results`, one per
+    /// item: "ok" or why not).
+    PutBack {
+        items: Vec<Moved>,
+    },
+}
+
+#[derive(Deserialize)]
+struct Moved {
+    from: PathBuf,
+    to: PathBuf,
 }
 
 fn history_limit() -> usize {
@@ -207,6 +223,26 @@ pub fn call(request: &str) -> Value {
         Ok(Request::TouchidScript { enable }) => {
             json!({"ok": true, "script": maintenance::touchid_script(enable)})
         }
+        Ok(Request::Exclusions) => json!({"ok": true, "paths": guard::exclusions(ctx())}),
+        Ok(Request::SetExclusions { paths }) => match guard::set_exclusions(ctx(), paths) {
+            Ok(()) => json!({"ok": true, "paths": guard::exclusions(ctx())}),
+            Err(e) => json!({"ok": false, "error": e.to_string()}),
+        },
+        Ok(Request::PutBack { items }) => {
+            let results: Vec<String> = items
+                .iter()
+                .map(|m| {
+                    if !ledger::was_trashed(ctx(), &m.from, &m.to) {
+                        return "not moved to the Trash by OpenCleaner".to_string();
+                    }
+                    match crate::trash::put_back(&m.from, &m.to) {
+                        Ok(()) => "ok".into(),
+                        Err(e) => e.to_string(),
+                    }
+                })
+                .collect();
+            json!({"ok": true, "results": results})
+        }
         Ok(Request::History { limit }) => {
             let mut v = ledger::sessions(ctx(), limit);
             v["ok"] = json!(true);
@@ -263,6 +299,9 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         }
         Request::Rules
         | Request::History { .. }
+        | Request::Exclusions
+        | Request::SetExclusions { .. }
+        | Request::PutBack { .. }
         | Request::Maintenance
         | Request::RunUninstaller { .. }
         | Request::Optimize { .. }
@@ -298,17 +337,49 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             emit_value("picks", &picks::store("slim", found, ctx()), emit);
         }
         Request::TrashPaths { paths } => {
+            let mut ledger = ledger::Writer::open(ctx());
+            let session = ledger::now();
             let mut removed = 0;
             let mut failed = Vec::new();
             for p in &paths {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                match crate::trash::move_to_trash(p) {
-                    Ok(()) => removed += 1,
-                    Err(e) => failed.push(format!("{}: {e}", p.display())),
-                }
+                // Space Lens moves what the user points at, but never from an excluded folder
+                let result = if guard::excluded(p, ctx()) {
+                    Err(std::io::Error::other("excluded in Settings"))
+                } else {
+                    crate::trash::move_to_trash(p)
+                };
+                let (word, reason, trashed) = match result {
+                    Ok(to) => {
+                        removed += 1;
+                        ("removed", None, to)
+                    }
+                    Err(e) => {
+                        failed.push(format!("{}: {e}", p.display()));
+                        ("failed", Some(e.to_string()), None)
+                    }
+                };
+                ledger.write(&ledger::Line::Item {
+                    session,
+                    rule: "space_lens".into(),
+                    path: p.clone(),
+                    bytes: 0,
+                    result: word.into(),
+                    reason,
+                    trashed,
+                });
             }
+            ledger.write(&ledger::Line::Session {
+                id: session,
+                command: "space_lens".into(),
+                started: session,
+                finished: ledger::now(),
+                items: removed,
+                bytes: 0,
+                failed: failed.len() as u64,
+            });
             emit(
                 json!({"event": "removed", "removed": removed, "failed": failed.len(), "failures": failed}),
             );

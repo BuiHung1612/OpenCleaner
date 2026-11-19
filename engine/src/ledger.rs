@@ -39,6 +39,9 @@ pub enum Line {
         bytes: u64,
         result: String,
         reason: Option<String>,
+        /// Where it went in the Trash, for putting it back (absent in older lines).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trashed: Option<PathBuf>,
     },
 }
 
@@ -66,33 +69,55 @@ impl Writer {
     }
 }
 
-/// Sessions newest first, in the shape the History page reads.
+/// Sessions newest first, in the shape the History page reads. `trashed`: what the
+/// session moved to the Trash and is still there, so it can be put back.
 pub fn sessions(ctx: &Context, limit: usize) -> Value {
     let mut out = Vec::new();
-    if let Ok(f) = fs::File::open(path(ctx)) {
-        for line in BufReader::new(f).lines().map_while(Result::ok) {
-            if let Ok(Line::Session {
+    // items come before their session line
+    let mut trashed: Vec<Value> = Vec::new();
+    for line in lines(ctx) {
+        match line {
+            Line::Item {
+                path,
+                trashed: Some(to),
+                ..
+            } if fs::symlink_metadata(&to).is_ok() => {
+                trashed.push(json!({"from": path, "to": to}));
+            }
+            Line::Item { .. } => {}
+            Line::Session {
                 command,
                 started,
                 items,
                 bytes,
                 failed,
                 ..
-            }) = serde_json::from_str(&line)
-            {
-                out.push(json!({
-                    "command": command,
-                    "started_unix": started,
-                    "items": items,
-                    "bytes": bytes,
-                    "failed": failed,
-                }));
-            }
+            } => out.push(json!({
+                "command": command,
+                "started_unix": started,
+                "items": items,
+                "bytes": bytes,
+                "failed": failed,
+                "trashed": std::mem::take(&mut trashed),
+            })),
         }
     }
     out.reverse();
     out.truncate(limit);
     json!({"sessions": out, "logs": {"deletions": path(ctx)}})
+}
+
+fn lines(ctx: &Context) -> impl Iterator<Item = Line> {
+    fs::File::open(path(ctx))
+        .into_iter()
+        .flat_map(|f| BufReader::new(f).lines().map_while(Result::ok))
+        .filter_map(|l| serde_json::from_str(&l).ok())
+}
+
+/// Did OpenCleaner move `from` to `to` in the Trash? Only those are put back.
+pub fn was_trashed(ctx: &Context, from: &Path, to: &Path) -> bool {
+    lines(ctx)
+        .any(|l| matches!(l, Line::Item { path, trashed: Some(t), .. } if path == from && t == to))
 }
 
 pub fn exists(ctx: &Context) -> bool {

@@ -112,6 +112,10 @@ struct MainView: View {
     @StateObject private var installers = PicksModel()
     @StateObject private var projects = PicksModel()
     @StateObject private var slim = PicksModel()
+    @StateObject private var largeOld = PicksModel()
+    @StateObject private var duplicates = PicksModel()
+    @AppStorage("largeMiB") private var largeMiB = 500
+    @AppStorage("idleDays") private var idleDays = 180
 
     var body: some View {
         HStack(spacing: 0) {
@@ -192,6 +196,8 @@ struct MainView: View {
                 case "installer": PicksPage(tool: tool, request: ["op": "installers"], kind: .trash, model: installers)
                 case "purge": PicksPage(tool: tool, request: ["op": "projects"], kind: .delete, model: projects)
                 case "slim": PicksPage(tool: tool, request: ["op": "slim"], kind: .slim, model: slim)
+                case "large_old": PicksPage(tool: tool, request: ["op": "large_old", "min_mib": largeMiB, "days": idleDays], kind: .trash, model: largeOld)
+                case "duplicates": PicksPage(tool: tool, request: ["op": "duplicates"], kind: .trash, model: duplicates)
                 case "optimize": OptimizePage(tool: tool)
                 case "touchid": TouchIDPage(tool: tool)
                 default: Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
