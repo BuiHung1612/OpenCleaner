@@ -2,6 +2,7 @@
 //! `<data dir>/history.jsonl`, so what was removed can always be looked up.
 
 use crate::context::Context;
+use crate::guard::{self, Stamp};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
@@ -42,6 +43,10 @@ pub enum Line {
         /// Where it went in the Trash, for putting it back (absent in older lines).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trashed: Option<PathBuf>,
+        /// The item in the Trash right after it went there: only that object is put back
+        /// (absent in older lines, which are then not put back).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stamp: Option<Stamp>,
     },
     /// A startup item turned off, with what it takes to turn it back on: the plist or
     /// shortcut's original path (it went to the Trash), or a Run value's name and command.
@@ -96,8 +101,9 @@ pub fn sessions(ctx: &Context, limit: usize) -> Value {
             Line::Item {
                 path,
                 trashed: Some(to),
+                stamp: Some(was),
                 ..
-            } if fs::symlink_metadata(&to).is_ok() => {
+            } if guard::stamp(&to) == Some(was) => {
                 trashed.push(json!({"from": path, "to": to}));
             }
             Line::Item { .. } | Line::Startup { .. } => {}
@@ -161,10 +167,30 @@ pub(crate) fn lines(ctx: &Context) -> impl Iterator<Item = Line> {
         .filter_map(|l| serde_json::from_str(&l).ok())
 }
 
-/// Did OpenCleaner move `from` to `to` in the Trash? Only those are put back.
-pub fn was_trashed(ctx: &Context, from: &Path, to: &Path) -> bool {
-    lines(ctx)
-        .any(|l| matches!(l, Line::Item { path, trashed: Some(t), .. } if path == from && t == to))
+/// What OpenCleaner recorded when it moved `from` to `to` in the Trash (the latest such
+/// line). Only those are put back, and only when the record says what the item was.
+pub fn trashed_stamp(ctx: &Context, from: &Path, to: &Path) -> Result<Stamp, &'static str> {
+    let mut found = None;
+    for l in lines(ctx) {
+        if let Line::Item {
+            path,
+            trashed: Some(t),
+            stamp,
+            ..
+        } = l
+            && path == from
+            && t == to
+        {
+            found = Some(stamp);
+        }
+    }
+    match found {
+        None => Err("not moved to the Trash by OpenCleaner"),
+        Some(None) => {
+            Err("moved before OpenCleaner recorded what it moved; put it back from the Trash")
+        }
+        Some(Some(s)) => Ok(s),
+    }
 }
 
 pub fn exists(ctx: &Context) -> bool {

@@ -3,7 +3,8 @@
 
 use crate::context::Context;
 use crate::fs::{self, Detail, Kind};
-use crate::rules::{is_clean_path, is_within};
+use crate::rules::{is_clean_path, is_within, is_within_nocase};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -129,8 +130,8 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
     if !is_clean_path(item) {
         return Err("not a plain absolute path");
     }
-    if excluded(item, ctx) {
-        return Err("excluded in Settings");
+    if let Some(why) = exclusion_refusal(item, ctx) {
+        return Err(why);
     }
     let name = item
         .file_name()
@@ -165,11 +166,14 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
                 "Documents" | "Desktop" | "Downloads" | "Pictures" | "Movies" | "Music" | "Videos"
             ),
         };
-        if !open && is_within(rel, Path::new(p)) {
+        if !open && is_within_nocase(rel, Path::new(p)) {
             return Err("personal files");
         }
     }
-    if KEEP_ITSELF.iter().any(|k| rel == Path::new(k)) {
+    if KEEP_ITSELF
+        .iter()
+        .any(|k| is_within_nocase(rel, Path::new(k)) && is_within_nocase(Path::new(k), rel))
+    {
         return Err("a folder that is kept");
     }
     if !is_within(item, root) {
@@ -198,43 +202,142 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
 }
 
 /// The folders the user excluded in Settings, read once per data folder (tests each have
-/// their own) and kept until `set_exclusions` replaces them.
-static EXCLUDED: Mutex<Vec<(PathBuf, Vec<PathBuf>)>> = Mutex::new(Vec::new());
+/// their own) and kept until `set_exclusions` replaces them. `Err`: the file is there but
+/// cannot be read, and then nothing may be removed (an empty list would protect nothing).
+type Loaded = Result<Vec<PathBuf>, Refusal>;
+static EXCLUDED: Mutex<Vec<(PathBuf, Loaded)>> = Mutex::new(Vec::new());
+
+/// Why every removal is refused while the exclusions file is damaged.
+pub const UNREADABLE: Refusal = "exclusions could not be read";
 
 fn exclusions_file(ctx: &Context) -> PathBuf {
     ctx.data_dir.join("exclusions.json")
 }
 
-/// Folders never scanned into or removed from.
-pub fn exclusions(ctx: &Context) -> Vec<PathBuf> {
+/// Folders never scanned into or removed from; `Err` when the saved list cannot be read
+/// (no file at all is an empty list).
+pub fn load_exclusions(ctx: &Context) -> Loaded {
     let mut cache = EXCLUDED.lock().unwrap();
     if let Some((_, list)) = cache.iter().find(|(d, _)| *d == ctx.data_dir) {
         return list.clone();
     }
-    let list: Vec<PathBuf> = std::fs::read(exclusions_file(ctx))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
+    let list = match std::fs::read(exclusions_file(ctx)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(_) => Err(UNREADABLE),
+        Ok(b) => serde_json::from_slice(&b).map_err(|_| UNREADABLE),
+    };
     cache.push((ctx.data_dir.clone(), list.clone()));
     list
 }
 
-/// Saves the list; only plain absolute paths are kept.
+/// Folders never scanned into (empty when the list cannot be read: every removal is
+/// refused then, see `exclusion_refusal`).
+pub fn exclusions(ctx: &Context) -> Vec<PathBuf> {
+    load_exclusions(ctx).unwrap_or_default()
+}
+
+/// Saves the list atomically (a crash leaves the old file or the new one, never half of
+/// one); only plain absolute paths are kept.
 pub fn set_exclusions(ctx: &Context, paths: Vec<PathBuf>) -> std::io::Result<()> {
     let mut list: Vec<PathBuf> = paths.into_iter().filter(|p| is_clean_path(p)).collect();
     list.sort();
     list.dedup();
     std::fs::create_dir_all(&ctx.data_dir)?;
-    std::fs::write(exclusions_file(ctx), serde_json::to_vec_pretty(&list)?)?;
+    let tmp = ctx
+        .data_dir
+        .join(format!(".exclusions-{}.tmp", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&list)?)?;
+    if let Err(e) = std::fs::rename(&tmp, exclusions_file(ctx)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     let mut cache = EXCLUDED.lock().unwrap();
     cache.retain(|(d, _)| *d != ctx.data_dir);
-    cache.push((ctx.data_dir.clone(), list));
+    cache.push((ctx.data_dir.clone(), Ok(list)));
     Ok(())
 }
 
-/// Inside (or is) a folder the user excluded.
+/// Not to be scanned into: inside (or is) a folder the user excluded, or the list cannot
+/// be read. (A folder that only holds one is scanned; removing it is refused.)
 pub fn excluded(item: &Path, ctx: &Context) -> bool {
-    exclusions(ctx).iter().any(|e| is_within(item, e))
+    exclusion_refusal(item, ctx).is_some_and(|why| why != HOLDS)
+}
+
+const HOLDS: Refusal = "holds a folder excluded in Settings";
+
+/// Why the exclusions forbid touching `item`: it is in an excluded folder, it holds one
+/// (removing it would take the excluded folder along), or the list cannot be read.
+///
+/// Names are compared without case where the file system ignores it (macOS, Windows).
+/// Another spelling of the same folder (Unicode form, a link or firmlink such as
+/// /System/Volumes/Data) is caught by identity: walking up from the item meets an excluded
+/// folder's (dev, ino), or walking up from an excluded folder meets the item's. The item's
+/// folders are read without following links, so callers pass a path whose folders are
+/// real (check_for refuses a link in the path; Space Lens resolves the parent first).
+// ponytail: a few stats per item per exclusion; cache the excluded folders' ancestry if
+// scans with many exclusions get slow.
+pub fn exclusion_refusal(item: &Path, ctx: &Context) -> Option<Refusal> {
+    const INSIDE: Refusal = "excluded in Settings";
+    let list = match load_exclusions(ctx) {
+        Ok(l) => l,
+        Err(why) => return Some(why),
+    };
+    if list.is_empty() {
+        return None;
+    }
+    for e in &list {
+        if is_within_nocase(item, e) {
+            return Some(INSIDE);
+        }
+        if is_within_nocase(e, item) {
+            return Some(HOLDS);
+        }
+    }
+    let key = |i: Identity| (i.ino != 0).then_some((i.dev, i.ino));
+    let ids_up = |p: &Path| -> Vec<(u64, u64)> {
+        p.ancestors().filter_map(identity).filter_map(key).collect()
+    };
+    let item_up = ids_up(item);
+    let item_id = identity(item).and_then(key);
+    for e in &list {
+        let Ok(real) = std::fs::canonicalize(e) else {
+            continue; // not there: nothing on disk to protect under another name
+        };
+        if identity(&real)
+            .and_then(key)
+            .is_some_and(|id| item_up.contains(&id))
+        {
+            return Some(INSIDE);
+        }
+        if item_id.is_some_and(|id| ids_up(&real).contains(&id)) {
+            return Some(HOLDS);
+        }
+    }
+    None
+}
+
+/// Space Lens: may the user's pick `path` go to the Trash? Only the exclusions apply (the
+/// user points at it), checked on the path as given and on where it really is (its parent
+/// resolved: links, firmlinks, case). Returns the resolved path, which is what is moved.
+pub fn check_trash_path(path: &Path, ctx: &Context) -> Result<PathBuf, Refusal> {
+    if !is_clean_path(path) {
+        return Err("not a plain absolute path");
+    }
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err("no parent folder");
+    };
+    let real = std::fs::canonicalize(parent)
+        .map_err(|_| "the folder is gone")?
+        .join(name);
+    if std::fs::symlink_metadata(&real).is_err() {
+        return Err("no longer there");
+    }
+    for p in [path, real.as_path()] {
+        if let Some(why) = exclusion_refusal(p, ctx) {
+            return Err(why);
+        }
+    }
+    Ok(real)
 }
 
 #[cfg(target_os = "macos")]
@@ -319,6 +422,27 @@ pub fn freed_now(path: &Path) -> u64 {
         ..Default::default()
     };
     crate::size::measure(path, &opts).map_or(0, |r| r.bytes)
+}
+
+/// An object as it was at one moment: identity plus length and modification time. Kept in
+/// History for what went to the Trash (only that very item is put back) and for the
+/// user's files (a file edited since it was listed is not removed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stamp {
+    pub dev: u64,
+    pub ino: u64,
+    pub len: u64,
+    pub mtime: i64,
+}
+
+pub fn stamp(path: &Path) -> Option<Stamp> {
+    let e = fs::stat(path, Detail::Basic).ok()?;
+    Some(Stamp {
+        dev: e.dev,
+        ino: e.ino,
+        len: e.len,
+        mtime: e.mtime,
+    })
 }
 
 /// The path still names the object that was measured (not replaced, not a new link).

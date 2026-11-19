@@ -455,6 +455,8 @@ private struct CleaningSettings: View {
     @AppStorage("largeMiB") private var largeMiB = 500
     @AppStorage("idleDays") private var idleDays = 180
     @State private var exclusions: [String] = []
+    /// The saved list could not be read: the engine removes nothing until it is saved again.
+    @State private var exclusionsError: String?
 
     var body: some View {
         Form {
@@ -465,6 +467,12 @@ private struct CleaningSettings: View {
                 Note("Off (recommended): scans and removals give way to your other apps, so the Mac stays smooth. On: they take every CPU core to finish sooner, and other apps may lag or freeze until they are done.")
             }
             Section {
+                if let exclusionsError {
+                    Label(exclusionsError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    Text("Nothing is removed until the list is saved again: add or remove a folder.")
+                        .foregroundStyle(.secondary)
+                }
                 if exclusions.isEmpty {
                     Text("No excluded folders").foregroundStyle(.secondary)
                 }
@@ -504,7 +512,11 @@ private struct CleaningSettings: View {
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
         .scrollIndicators(.hidden)  // each tab fits its window
-        .task { exclusions = await Engine.ask(["op": "exclusions"]).paths.strings }
+        .task {
+            let reply = await Engine.ask(["op": "exclusions"])
+            exclusions = reply.paths.strings
+            exclusionsError = reply.ok.bool ? nil : reply.error.string
+        }
     }
 
     private func addExclusion() {
@@ -520,7 +532,10 @@ private struct CleaningSettings: View {
     private func saveExclusions(_ paths: [String]) {
         Task {
             let reply = await Engine.ask(["op": "set_exclusions", "paths": paths])
-            if reply.ok.bool { exclusions = reply.paths.strings }
+            if reply.ok.bool {
+                exclusions = reply.paths.strings
+                exclusionsError = nil
+            }
         }
     }
 }

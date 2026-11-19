@@ -4,7 +4,7 @@
 
 use crate::context::Context;
 use crate::fs::Kind;
-use crate::guard::{self, Identity, Purpose};
+use crate::guard::{self, Identity, Purpose, Stamp};
 use crate::ledger::{self, Line};
 use crate::procs::Running;
 use crate::trash;
@@ -67,6 +67,14 @@ pub struct Pick {
     /// installer…) apply to the folder, the child only has to sit directly in it.
     #[serde(skip)]
     pub within: Option<PathBuf>,
+    /// The user's files: length and mtime too, so a file edited since it was listed (same
+    /// dev/ino) is left alone.
+    #[serde(skip)]
+    pub stamp: Option<Stamp>,
+    /// Duplicates: which set of identical copies it belongs to. A set is acted on only
+    /// while one of its copies stays, unchanged.
+    #[serde(skip)]
+    pub set: Option<usize>,
 }
 
 impl Pick {
@@ -93,6 +101,8 @@ impl Pick {
             purpose: Some(purpose),
             running: Vec::new(),
             within: None,
+            stamp: None,
+            set: None,
         }
     }
 }
@@ -186,12 +196,26 @@ pub fn execute(
     // what to act on: whole picks, or the ticked children of a pick (refused up front
     // when they are not its children any more)
     let mut work: Vec<(Pick, Option<String>)> = Vec::new();
+    // Duplicates: does each set keep a copy that is not picked and still as listed?
+    let picked: std::collections::HashSet<usize> = indexes.iter().copied().collect();
+    let mut keeps: HashMap<usize, bool> = HashMap::new();
     for &i in indexes {
         let Some(pick) = picks.get(i) else {
             out.results.push("skipped: unknown item".into());
             out.skipped += 1;
             continue;
         };
+        if let Some(set) = pick.set
+            && !*keeps.entry(set).or_insert_with(|| {
+                picks
+                    .iter()
+                    .enumerate()
+                    .any(|(j, o)| o.set == Some(set) && !picked.contains(&j) && unchanged(o))
+            })
+        {
+            work.push((pick.clone(), Some("no copy would be left".into())));
+            continue;
+        }
         let Some(children) = parts.get(&i) else {
             work.push((pick.clone(), None));
             continue;
@@ -259,6 +283,7 @@ pub fn execute(
             Some(r) => format!("{word}: {r}"),
             None => word.into(),
         });
+        let trashed = result.ok().and_then(|done| done.trashed);
         ledger.write(&Line::Item {
             session,
             rule: command.clone(),
@@ -266,7 +291,8 @@ pub fn execute(
             bytes: freed,
             result: word.into(),
             reason,
-            trashed: result.ok().and_then(|done| done.trashed),
+            stamp: trashed.as_deref().and_then(guard::stamp),
+            trashed,
         });
     }
     out.current = None;
@@ -309,7 +335,7 @@ fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<Done, Failure> {
         purpose,
     )
     .map_err(|why| Failure::Skipped(why.into()))?;
-    if !guard::still_same(&pick.path, &id) {
+    if !unchanged(pick) {
         return Err(Failure::Skipped("changed since it was listed".into()));
     }
     let done = |trashed| Done {
@@ -325,6 +351,12 @@ fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<Done, Failure> {
         }),
     };
     result.map_err(|e| Failure::Failed(e.to_string()))
+}
+
+/// Still the object that was listed (and, for the user's files, the same length and mtime).
+fn unchanged(pick: &Pick) -> bool {
+    pick.id.is_some_and(|id| guard::still_same(&pick.path, &id))
+        && (pick.stamp.is_none() || guard::stamp(&pick.path) == pick.stamp)
 }
 
 fn remove(path: &Path, kind: Kind) -> std::io::Result<()> {

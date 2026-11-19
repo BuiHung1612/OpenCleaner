@@ -542,6 +542,7 @@ pub fn execute(
             result: result.into(),
             reason,
             trashed: None,
+            stamp: None,
         });
     }
     out.current = None;

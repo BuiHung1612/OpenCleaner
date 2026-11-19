@@ -196,6 +196,73 @@ fn leftovers_match_the_bundle_id_exactly_and_names_only_when_distinctive() {
 }
 
 #[test]
+fn bundle_ids_and_names_are_never_wildcards() {
+    let (_t, ctx) = home();
+    let h = |p: &str| ctx.home.join(p);
+    for p in [
+        "Library/Application Support/com.victim.one/data",
+        "Library/Caches/com.victim.one/x",
+        "Library/Containers/com.victim.c/x",
+        "Library/HTTPStorages/com.victim.one/d",
+        "Library/WebKit/com.victim.one/d",
+        "Library/Preferences/com.victim.one.plist",
+        "Library/Group Containers/ABC.com.victim.one/x",
+        "Library/Caches/VictimApp/x",
+    ] {
+        write(&h(p), 10);
+    }
+    let found = |id: &str, name: &str| -> Vec<PathBuf> {
+        let app = apps::App {
+            name: name.into(),
+            bundle_id: id.into(),
+            path: h("Applications/Evil.app"),
+            ..Default::default()
+        };
+        apps::uninstall_picks(&app, &ctx, &AtomicBool::new(false))
+            .into_iter()
+            .map(|p| p.path)
+            .filter(|p| *p != app.path)
+            .collect()
+    };
+    for id in [
+        "*",
+        "",
+        "a/b",
+        "..",
+        ".",
+        "com.victim.*",
+        "com.victim.on?",
+        "*.one",
+    ] {
+        assert_eq!(found(id, "Evil"), Vec::<PathBuf>::new(), "bundle id {id:?}");
+    }
+    // a `?` in the name matches only itself (Windows names cannot hold a `?`)
+    assert_eq!(
+        found("org.example.none", "Victi?App"),
+        Vec::<PathBuf>::new()
+    );
+    if cfg!(not(windows)) {
+        write(&h("Library/Caches/Victi?App/x"), 10);
+        assert_eq!(
+            found("org.example.none", "Victi?App"),
+            [h("Library/Caches/Victi?App")]
+        );
+    }
+    for name in ["..", "a/b/VictimApp", ""] {
+        assert_eq!(
+            found("org.example.none", name),
+            Vec::<PathBuf>::new(),
+            "name {name:?}"
+        );
+    }
+    // a plain id still finds its own folders, the `*.{id}` group container among them
+    let own = found("com.victim.one", "Evil");
+    assert!(own.contains(&h("Library/Group Containers/ABC.com.victim.one")));
+    assert!(own.contains(&h("Library/HTTPStorages/com.victim.one")));
+    assert!(!own.iter().any(|p| p.ends_with("com.victim.c")));
+}
+
+#[test]
 fn installers_are_listed_by_extension_and_old_ones_preselected() {
     let (_t, ctx) = home();
     let h = |p: &str| ctx.home.join(p);
