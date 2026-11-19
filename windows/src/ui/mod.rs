@@ -34,11 +34,39 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain([0]).collect()
 }
 
+/// Where the app keeps its settings (HKEY_CURRENT_USER).
+pub const SETTINGS_KEY: &str = r"Software\OpenCleaner";
+
+/// A DWORD under HKEY_CURRENT_USER\`key`, if it is set.
+pub fn reg_dword(key: &str, name: &str) -> Option<u32> {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    let (key, name) = (wide(key), wide(name));
+    let mut value = 0u32;
+    let mut size = 4u32;
+    let status = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_DWORD, null_mut(), &mut value as *mut u32 as *mut _, &mut size)
+    };
+    (status == ERROR_SUCCESS).then_some(value)
+}
+
+/// Sets a DWORD under HKEY_CURRENT_USER\`key`, creating the key.
+pub fn set_reg_dword(key: &str, name: &str, value: u32) {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_DWORD, RegSetKeyValueW};
+    let (key, name) = (wide(key), wide(name));
+    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), REG_DWORD, &value as *const u32 as *const _, 4) };
+}
+
+/// Reads the system's app theme (missing before Windows 10 1809: dark, the original look).
+fn read_theme() {
+    gfx::set_light(reg_dword(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme") == Some(1));
+}
+
 pub fn run() {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
     gfx::startup();
+    read_theme();
     let class = wide("OpenCleanerWindow");
     let title = wide("OpenCleaner");
     unsafe {
@@ -87,7 +115,8 @@ pub fn run() {
     }
 }
 
-/// Dark, rounded frame whose title bar takes the page's color (Windows 11; ignored before).
+/// Rounded frame whose title bar takes the page's color, in the system theme (Windows 11;
+/// ignored before).
 pub fn style_frame(hwnd: HWND, caption: u32) {
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
@@ -96,11 +125,11 @@ pub fn style_frame(hwnd: HWND, caption: u32) {
     let set = |attr: u32, value: u32| unsafe {
         DwmSetWindowAttribute(hwnd, attr, &value as *const u32 as *const _, 4);
     };
-    set(DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
+    set(DWMWA_USE_IMMERSIVE_DARK_MODE, u32::from(!gfx::light()));
     set(DWMWA_WINDOW_CORNER_PREFERENCE, 2);
     let bgr = |c: u32| (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16 & 0xFF);
-    set(DWMWA_CAPTION_COLOR, bgr(caption));
-    set(DWMWA_TEXT_COLOR, bgr(gfx::WHITE));
+    set(DWMWA_CAPTION_COLOR, bgr(gfx::backdrop(caption)));
+    set(DWMWA_TEXT_COLOR, bgr(gfx::fg()));
 }
 
 pub fn scale(hwnd: HWND) -> f32 {
@@ -237,6 +266,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 invalidate(hwnd);
             }
             0
+        }
+        WM_KEYDOWN => {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL};
+            let ctrl = unsafe { GetKeyState(VK_CONTROL as i32) } < 0;
+            if let Some(Some(action)) = with(|st| st.key(wparam as u16, ctrl)) {
+                pages::perform(hwnd, action);
+            }
+            invalidate(hwnd);
+            0
+        }
+        WM_SETTINGCHANGE => {
+            // the app theme may have changed (lParam "ImmersiveColorSet"); reading it is cheap
+            read_theme();
+            if let Some(caption) = with(|st| st.caption()) {
+                style_frame(hwnd, caption);
+            }
+            invalidate(hwnd);
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_MOUSEWHEEL => {
             let delta = ((wparam >> 16) & 0xFFFF) as i16 as f32;

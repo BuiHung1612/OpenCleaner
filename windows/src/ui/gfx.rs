@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Graphics::GdiPlus::*;
@@ -48,10 +49,49 @@ pub fn hex(s: &str) -> u32 {
 }
 
 pub const WHITE: u32 = 0xFFFFFF;
+
+/// The system's app theme (Settings > Personalization > Colors). The dark look is the
+/// original one: white text on deep gradients; the light one pales the gradients and
+/// turns the text dark.
+static LIGHT: AtomicBool = AtomicBool::new(false);
+
+pub fn light() -> bool {
+    LIGHT.load(Ordering::Relaxed)
+}
+
+pub fn set_light(on: bool) {
+    LIGHT.store(on, Ordering::Relaxed);
+}
+
+/// Text, icons and the tints of hovered or picked rows.
+pub fn fg() -> u32 {
+    if light() { 0x1B2333 } else { WHITE }
+}
+
 /// Secondary text: white at about 78% on the dark gradients.
-pub const DIM: u32 = 0xD4DAE6;
-pub const AMBER: u32 = 0xFFD54F;
-pub const MINT: u32 = 0x7CF2C8;
+pub fn dim() -> u32 {
+    if light() { 0x4A5468 } else { 0xD4DAE6 }
+}
+
+pub fn amber() -> u32 {
+    if light() { 0xA35A00 } else { 0xFFD54F }
+}
+
+pub fn mint() -> u32 {
+    if light() { 0x0A7F58 } else { 0x7CF2C8 }
+}
+
+/// A page color as the background of the current theme (paled towards white when light).
+pub fn backdrop(rgb: u32) -> u32 {
+    if !light() {
+        return rgb;
+    }
+    let mix = |shift: u32| {
+        let c = (rgb >> shift & 0xFF) as f32;
+        ((c * 0.22 + 255.0 * 0.78) as u32) << shift
+    };
+    mix(16) | mix(8) | mix(0)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -150,7 +190,11 @@ impl Canvas {
 
     /// The one glass surface for every panel (white tint over the gradient).
     pub fn glass(&self, r: R, radius: f32) {
-        self.rounded(r, radius, Some(argb(WHITE, 26)), Some(argb(WHITE, 56)));
+        if light() {
+            self.rounded(r, radius, Some(argb(WHITE, 150)), Some(argb(0, 28)));
+        } else {
+            self.rounded(r, radius, Some(argb(WHITE, 26)), Some(argb(WHITE, 56)));
+        }
     }
 
     pub fn circle(&self, cx: f32, cy: f32, radius: f32, fill: Option<u32>, stroke: Option<(u32, f32)>) {
