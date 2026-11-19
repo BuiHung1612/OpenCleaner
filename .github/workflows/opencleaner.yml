@@ -120,9 +120,16 @@ jobs:
           $p = Start-Process -FilePath windows/target/release/OpenCleaner.exe -PassThru
           Start-Sleep -Seconds 8
           Alive $p 'within 8 seconds of starting'
-          $hwnd = [W]::FindWindow('OpenCleanerWindow', $null)
+          # the process's own main window (FindWindow with a $null title gets "" from PowerShell
+          # and matches nothing)
+          $hwnd = [IntPtr]::Zero
+          foreach ($i in 1..10) {
+              $p.Refresh()
+              $hwnd = $p.MainWindowHandle
+              if ($hwnd -ne [IntPtr]::Zero) { break }
+              Start-Sleep -Seconds 1
+          }
           if ($hwnd -eq [IntPtr]::Zero -or -not [W]::IsWindowVisible($hwnd)) { Shot '00-no-window'; throw 'OpenCleaner shows no window' }
-          $p.Refresh()
           Write-Host "Main window $($p.MainWindowHandle): '$([W]::Title($hwnd))'"
           [void][W]::SetForegroundWindow($hwnd)
           Start-Sleep -Seconds 1
