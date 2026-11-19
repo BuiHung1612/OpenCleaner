@@ -5,6 +5,18 @@ English is the default language; Vietnamese is included.
 
 The engine is OpenCleaner's own, written in Rust (`engine/`) and linked into the app as a static library: no helper processes, one code base for macOS and Windows. It replaced [`mo`](https://github.com/tw93/mole), which earlier versions bundled. OpenCleaner is an independent project, not affiliated with or endorsed by the Mole project or MacPaw.
 
+## Install
+
+**macOS** (one line in Terminal; installs or updates to the latest release):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BuiHung1612/OpenCleaner/main/install.sh | sh
+```
+
+[`install.sh`](install.sh) downloads `OpenCleaner.dmg`, checks the app's signature and copies it to `/Applications` (an older copy goes to the Trash). Or download `OpenCleaner.dmg` from [Releases](https://github.com/BuiHung1612/OpenCleaner/releases) and drag the app onto Applications: the app is not notarized, so the first launch of a browser download needs **System Settings → Privacy & Security → Open Anyway** once. After that the app updates itself.
+
+**Windows:** download `OpenCleaner.exe` from [Releases](https://github.com/BuiHung1612/OpenCleaner/releases) and run it (SmartScreen: More info → Run anyway; the exe is not code-signed).
+
 ## Build (macOS 26+)
 
 ```sh
@@ -96,7 +108,7 @@ Every page works without art: a missing illustration falls back to an SF Symbol 
 - `macos/Resources/AppIcon.icns`: squircle on Apple's 824/1024 grid with a drop shadow; 16–64 px use `design/AppIcon-small.png` if present (a bolder, simpler master), else a white broom drawn by the script on a darker tile;
 - `windows/app.ico`: the same, with a tighter margin, 16–256 px.
 
-Art ids: `dashboard`, `spaceLens`, `uninstaller`, `history`, `scanning`, `done`, `volumeInternal`, `volumeExternal`, and every tool id in `shared/tools.json`. Still missing (SF Symbol fallback): `startup`, `large_old`, `duplicates`.
+Art ids: `dashboard`, `spaceLens`, `uninstaller`, `history`, `scanning`, `done`, `volumeInternal`, `volumeExternal`, and every tool id in `shared/tools.json`. Also `privacy`, `schedule` and `empty`.
 
 ## License
 
