@@ -22,8 +22,7 @@
 //! mtimes have one-second resolution here, so a directory modified in the second it was
 //! read could change again unseen: such "hot" directories are not recorded.
 
-use serde::{Deserialize, Serialize};
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -31,7 +30,7 @@ use std::sync::{Arc, Mutex};
 pub const MAX_AGE: i64 = 3600;
 
 /// One directory as read in a scan (and one line of the cache file).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct Rec {
     pub dev: u64,
     pub ino: u64,
@@ -172,8 +171,10 @@ impl Table {
     }
 
     fn finish(mut self) -> Table {
-        // rows were pushed in file order; the buffers stay where they are
-        self.rows.sort_unstable_by_key(|r| (r.dev, r.ino));
+        // rows were pushed in file order (appended records last); a stable sort keeps that
+        // order among equal keys, and the last one of each key wins
+        self.rows.reverse();
+        self.rows.sort_by_key(|r| (r.dev, r.ino));
         self.rows.dedup_by_key(|r| (r.dev, r.ino));
         self.rows.shrink_to_fit();
         self.names.shrink_to_fit();
@@ -194,7 +195,7 @@ impl Table {
 static CACHE: Mutex<Option<(PathBuf, Arc<Table>)>> = Mutex::new(None);
 
 fn file(dir: &Path) -> PathBuf {
-    dir.join("space-dirs-v3.jsonl")
+    dir.join("space-dirs-v4.bin")
 }
 
 pub fn now() -> i64 {
@@ -203,7 +204,71 @@ pub fn now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// The records kept in `dir`, read one line at a time (kept for the scan that asked).
+// The file: records one after another in a small binary layout (a whole disk is tens of
+// MB; JSON took seconds to read). New records are appended; a later record of the same
+// directory wins; the file is rewritten when appends make up a large part of it.
+
+fn put(out: &mut impl Write, r: &Rec) -> std::io::Result<()> {
+    let nums = [r.dev, r.ino, r.mtime as u64, r.at as u64, r.bytes, r.files];
+    for n in nums {
+        out.write_all(&n.to_le_bytes())?;
+    }
+    for n in [r.names.len(), r.allocs.len(), r.links.len()] {
+        out.write_all(&(n as u32).to_le_bytes())?;
+    }
+    out.write_all(r.names.as_bytes())?;
+    for a in &r.allocs {
+        out.write_all(&a.to_le_bytes())?;
+    }
+    for &(d, i, a) in &r.links {
+        for n in [d, i, a] {
+            out.write_all(&n.to_le_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn u64s(input: &mut impl Read, n: usize) -> std::io::Result<Vec<u64>> {
+    let mut buf = vec![0u8; n * 8];
+    input.read_exact(&mut buf)?;
+    Ok(buf
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| u64::from_le_bytes(*c))
+        .collect())
+}
+
+fn get(input: &mut impl Read) -> std::io::Result<Rec> {
+    let nums = u64s(input, 6)?;
+    let mut lens = [0u8; 12];
+    input.read_exact(&mut lens)?;
+    let len = |i: usize| u32::from_le_bytes(lens[i * 4..i * 4 + 4].try_into().unwrap()) as usize;
+    let mut names = vec![0u8; len(0)];
+    input.read_exact(&mut names)?;
+    let allocs = u64s(input, len(1))?;
+    let links = u64s(input, len(2) * 3)?
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| (c[0], c[1], c[2]))
+        .collect();
+    Ok(Rec {
+        dev: nums[0],
+        ino: nums[1],
+        mtime: nums[2] as i64,
+        at: nums[3] as i64,
+        bytes: nums[4],
+        files: nums[5],
+        names: String::from_utf8(names).map_err(std::io::Error::other)?,
+        allocs,
+        links,
+    })
+}
+
+use std::io::Read;
+
+/// The records kept in `dir` (kept for the scan that asked, then freed by `store`).
 pub fn load(dir: &Path) -> Arc<Table> {
     let mut cache = CACHE.lock().unwrap();
     if let Some((d, table)) = &*cache
@@ -214,10 +279,9 @@ pub fn load(dir: &Path) -> Arc<Table> {
     let now = now();
     let mut table = Table::default();
     if let Ok(f) = std::fs::File::open(file(dir)) {
-        for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
-            if let Ok(r) = serde_json::from_str::<Rec>(&line)
-                && now - r.at < MAX_AGE
-            {
+        let mut input = std::io::BufReader::with_capacity(1 << 20, f);
+        while let Ok(r) = get(&mut input) {
+            if now - r.at < MAX_AGE {
                 table.push(&r);
             }
         }
@@ -227,30 +291,41 @@ pub fn load(dir: &Path) -> Arc<Table> {
     table
 }
 
-/// Writes the records still fresh plus those of a scan (newer ones win), then lets the
-/// table go: the app would otherwise hold it for its lifetime.
-pub fn store(dir: &Path, mut found: Vec<Rec>) {
+/// Saves the records of a scan, then lets the table go: the app would otherwise hold it
+/// for its lifetime. Small scans append; a large share of new records rewrites the file
+/// with only what is still fresh.
+pub fn store(dir: &Path, found: Vec<Rec>) {
     let old = CACHE
         .lock()
         .unwrap()
         .take()
         .filter(|(d, _)| d == dir)
         .map(|(_, t)| t);
-    if found.is_empty() {
+    if found.is_empty() || std::fs::create_dir_all(dir).is_err() {
         return;
     }
-    let now = now();
-    found.sort_unstable_by_key(|r| (r.dev, r.ino));
-    let tmp = dir.join(format!(".space-dirs-{}.tmp", std::process::id()));
-    let written = std::fs::create_dir_all(dir).is_ok()
-        && (|| -> std::io::Result<()> {
+    let kept = old.as_ref().map_or(0, |t| t.rows.len());
+    let path = file(dir);
+    let on_disk = std::fs::metadata(&path).map_or(0, |m| m.len());
+    let appending = found.len() * 4 < kept && on_disk < 256 << 20;
+    let result = if appending {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .and_then(|f| {
+                let mut out = std::io::BufWriter::new(f);
+                found.iter().try_for_each(|r| put(&mut out, r))?;
+                out.flush()
+            })
+    } else {
+        let now = now();
+        let mut found = found;
+        found.sort_unstable_by_key(|r| (r.dev, r.ino));
+        let tmp = dir.join(format!(".space-dirs-{}.tmp", std::process::id()));
+        let written = (|| -> std::io::Result<()> {
             let mut out = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-            let mut line = |r: &Rec| -> std::io::Result<()> {
-                serde_json::to_writer(&mut out, r)?;
-                out.write_all(b"\n")
-            };
             for r in &found {
-                line(r)?;
+                put(&mut out, r)?;
             }
             if let Some(old) = &old {
                 for row in &old.rows {
@@ -258,17 +333,63 @@ pub fn store(dir: &Path, mut found: Vec<Rec>) {
                         .binary_search_by_key(&(row.dev, row.ino), |r| (r.dev, r.ino))
                         .is_ok();
                     if !replaced && now - row.at < MAX_AGE {
-                        line(&old.rec(row))?;
+                        put(&mut out, &old.rec(row))?;
                     }
                 }
             }
             out.flush()
-        })()
-        .is_ok();
-    if written {
-        let _ = std::fs::rename(&tmp, file(dir));
-    }
-    for older in ["space-dirs-v1.json", "space-dirs-v2.json"] {
+        })();
+        written
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+            })
+    };
+    let _ = result;
+    for older in [
+        "space-dirs-v1.json",
+        "space-dirs-v2.json",
+        "space-dirs-v3.jsonl",
+    ] {
         let _ = std::fs::remove_file(dir.join(older));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(ino: u64, bytes: u64) -> Rec {
+        let mut r = Rec {
+            dev: 1,
+            ino,
+            mtime: 5,
+            at: now(),
+            bytes,
+            files: 1,
+            ..Rec::default()
+        };
+        r.add_dir("a", 10);
+        r.add_dir("b c", 20);
+        r.links.push((1, 99, 7));
+        r
+    }
+
+    #[test]
+    fn appended_records_win_and_round_trip() {
+        let dir = std::env::temp_dir().join(format!("oc-dircache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        store(&dir, (1..=100).map(|i| rec(i, i)).collect());
+        load(&dir);
+        store(&dir, vec![rec(7, 7000)]); // few records: appended
+        let t = load(&dir);
+        assert_eq!(t.len(), 100);
+        let v = t.get((1, 7)).unwrap();
+        assert_eq!(v.bytes, 7000);
+        assert_eq!(v.dirs().collect::<Vec<_>>(), vec![("a", 10), ("b c", 20)]);
+        assert_eq!(v.links, &[(1, 99, 7)]);
+        assert_eq!(t.get((1, 8)).unwrap().bytes, 8);
+        store(&dir, Vec::new());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

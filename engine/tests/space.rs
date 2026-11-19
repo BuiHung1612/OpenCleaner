@@ -41,7 +41,7 @@ fn dir_cache_reuses_unchanged_directories() {
     let full = list(&root, None);
     let first = list(&root, Some(&cache));
     assert_eq!(sizes(&first), sizes(&full));
-    assert!(cache.join("space-dirs-v3.jsonl").is_file());
+    assert!(cache.join("space-dirs-v4.bin").is_file());
 
     // grows in place: a/3's mtime does not change, so the cached size stays
     std::fs::OpenOptions::new()
