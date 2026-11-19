@@ -12,6 +12,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
+/// What the parent's listing said about a queued directory, so `known` need not stat it.
+#[derive(Clone, Copy, Debug)]
+pub struct Seen {
+    pub dev: u64,
+    pub ino: u64,
+    /// `None` when the id comes from a cache rather than a listing
+    pub mtime: Option<i64>,
+}
+
+/// A directory to walk: path, tag, and what is already known about it.
+pub type Queued = (PathBuf, u32, Option<Seen>);
+
 pub trait Visitor: Sync {
     /// Called for every entry of `dir` (which carries `tag`). For a directory, returning
     /// a tag walks into it with that tag; `None` skips it.
@@ -20,8 +32,14 @@ pub trait Visitor: Sync {
     fn error(&self, path: &Path, tag: u32, err: io::Error);
     /// Before `dir` is read: a visitor that already knows it (from a cache) accounts for
     /// it here, adds the subdirectories to walk to `subdirs` and returns true; `dir` is
-    /// then not read.
-    fn known(&self, _dir: &Path, _tag: u32, _subdirs: &mut Vec<(PathBuf, u32)>) -> bool {
+    /// then not read. `seen`: its ids as listed in its parent (none for a root).
+    fn known(
+        &self,
+        _dir: &Path,
+        _tag: u32,
+        _seen: Option<Seen>,
+        _subdirs: &mut Vec<Queued>,
+    ) -> bool {
         false
     }
     /// `dir` is finished: read (or failed to read), or known. Not called once cancelled.
@@ -52,7 +70,7 @@ pub fn default_threads() -> usize {
 }
 
 struct Queue {
-    dirs: Vec<(PathBuf, u32)>,
+    dirs: Vec<Queued>,
     /// directories queued or being read
     pending: usize,
 }
@@ -88,7 +106,7 @@ pub fn walk_tagged(
     }
     let pending = roots.len();
     let state = Mutex::new(Queue {
-        dirs: roots,
+        dirs: roots.into_iter().map(|(p, t)| (p, t, None)).collect(),
         pending,
     });
     let ready = Condvar::new();
@@ -109,7 +127,7 @@ fn worker(
     background();
     let mut subdirs = Vec::new();
     loop {
-        let (dir, tag) = {
+        let (dir, tag, seen) = {
             let mut q = state.lock().unwrap();
             loop {
                 if q.pending == 0 {
@@ -123,7 +141,7 @@ fn worker(
         };
 
         subdirs.clear();
-        if !cancel.load(Ordering::Relaxed) && !visitor.known(&dir, tag, &mut subdirs) {
+        if !cancel.load(Ordering::Relaxed) && !visitor.known(&dir, tag, seen, &mut subdirs) {
             let result = super::read_dir_cancellable(&dir, detail, cancel, &mut |e: &Entry| {
                 if let Some(code) = e.error {
                     visitor.error(&dir.join(&e.name), tag, io::Error::from_raw_os_error(code));
@@ -132,7 +150,12 @@ fn worker(
                 if let Some(sub_tag) = visitor.entry(&dir, tag, e)
                     && e.kind == Kind::Dir
                 {
-                    subdirs.push((dir.join(&e.name), sub_tag));
+                    let seen = Seen {
+                        dev: e.dev,
+                        ino: e.ino,
+                        mtime: Some(e.mtime),
+                    };
+                    subdirs.push((dir.join(&e.name), sub_tag, Some(seen)));
                 }
             });
             // a listing stopped by cancel is not an error the user should see
