@@ -15,6 +15,12 @@ curl -fsSL https://raw.githubusercontent.com/BuiHung1612/OpenCleaner/main/instal
 
 [`install.sh`](install.sh) downloads `OpenCleaner.dmg`, checks the app's signature and copies it to `/Applications` (an older copy goes to the Trash). Or download `OpenCleaner.dmg` from [Releases](https://github.com/BuiHung1612/OpenCleaner/releases) and drag the app onto Applications: the app is not notarized, so the first launch of a browser download needs **System Settings → Privacy & Security → Open Anyway** once. After that the app updates itself.
 
+Or with Homebrew:
+
+```sh
+brew tap buihung1612/opencleaner && brew trust buihung1612/opencleaner && brew install --cask opencleaner
+```
+
 **Windows:** download `OpenCleaner.exe` from [Releases](https://github.com/BuiHung1612/OpenCleaner/releases) and run it (SmartScreen: More info → Run anyway; the exe is not code-signed).
 
 ## Build (macOS 26+)
