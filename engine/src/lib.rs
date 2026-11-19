@@ -13,6 +13,8 @@ pub mod ffi;
 pub mod files;
 pub mod finders;
 pub mod fs;
+#[cfg(target_os = "macos")]
+pub mod fsevents;
 pub mod guard;
 pub mod ledger;
 pub mod maintenance;

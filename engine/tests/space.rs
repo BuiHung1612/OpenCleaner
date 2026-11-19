@@ -19,13 +19,15 @@ fn list(dir: &Path, cache: Option<&Path>) -> Listing {
     l
 }
 
-/// The directory cache gives the same sizes as a full walk, sees entries added, and (the
-/// documented trade-off) misses a file growing in place in an unchanged directory.
+/// The directory cache gives the same sizes as a full walk and sees entries added. A file
+/// growing in place in an unchanged directory is seen through FSEvents (macOS) and missed
+/// with the mtime rule alone (the documented trade-off elsewhere).
 #[test]
 fn dir_cache_reuses_unchanged_directories() {
     let t = TempDir::new();
     let root = t.path().join("tree");
     let cache = t.path().join("cache");
+    space::AWAIT_CACHE.store(true, std::sync::atomic::Ordering::Relaxed);
     // 40 files per folder
     for i in 0..200 {
         write(
@@ -41,17 +43,26 @@ fn dir_cache_reuses_unchanged_directories() {
     let full = list(&root, None);
     let first = list(&root, Some(&cache));
     assert_eq!(sizes(&first), sizes(&full));
-    assert!(cache.join("space-dirs-v4.bin").is_file());
+    assert!(cache.join("space-dirs-v5.bin").is_file());
+    // nothing changed: the same sizes (on macOS from records FSEvents vouches for)
+    assert_eq!(sizes(&list(&root, Some(&cache))), sizes(&full));
 
-    // grows in place: a/3's mtime does not change, so the cached size stays
+    // grows in place: a/3's mtime does not change. FSEvents reports it (macOS); with the
+    // mtime rule alone the cached size stays
     std::fs::OpenOptions::new()
         .append(true)
         .open(root.join("a/3/3.bin"))
         .unwrap()
         .write_all(&vec![1u8; 1 << 20])
         .unwrap();
-    assert_eq!(sizes(&list(&root, Some(&cache))), sizes(&full));
-    assert_ne!(sizes(&list(&root, None)), sizes(&full));
+    let grown = sizes(&list(&root, None));
+    assert_ne!(grown, sizes(&full));
+    let cached = sizes(&list(&root, Some(&cache)));
+    if cfg!(target_os = "macos") {
+        assert_eq!(cached, grown);
+    } else {
+        assert_eq!(cached, sizes(&full));
+    }
 
     // an added file changes its directory's mtime: seen
     write(&root.join("b/deep/x/new.bin"), 200_000);

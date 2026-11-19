@@ -1,17 +1,32 @@
 //! Space Lens directory cache: what each directory's own entries added up to when it was
-//! last read, keyed by (volume, file id) and checked against the directory's mtime.
+//! last read, keyed by (volume, file id) and checked against FSEvents or the directory's mtime.
 //!
-//! A re-scan stats a known directory instead of listing it: one call instead of one
-//! bulk listing of all its files, and the subdirectories come from the record.
+//! A re-scan takes a known directory from its record instead of listing it, and its
+//! subdirectories (name, size, file id) come from the record too. Two ways to know that a
+//! record still holds:
 //!
-//! What a directory's mtime does and does not cover:
-//! - entries added, removed or renamed in it change it, so those are always seen;
-//! - a file growing or shrinking in place (a log, a database, a VM disk) does NOT. A
-//!   record is therefore trusted for `MAX_AGE` only: within that window a file that grew
-//!   in place in an otherwise unchanged directory shows its old size.
+//! 1. FSEvents (macOS). A scan notes the event id at its start in every record it writes,
+//!    and each volume's event store UUID in a side file. The next scan replays the history
+//!    of its roots since the oldest such id (`fsevents.rs`) and stats each directory the
+//!    events name. FSEvents reports any change to a directory's entries, a file written in
+//!    place included, as that directory; so a record no later event names is trusted
+//!    *without a stat* (a repeat scan becomes table lookups) for `VOUCHED_AGE`, and one an
+//!    event names is read again whatever its mtime.
+//! 2. Otherwise (Windows; macOS when the history broke: dropped events, wrapped ids, a
+//!    subtree to rescan, a mount, a volume whose event store changed, no stored id), the
+//!    directory is stat-ed and its mtime compared. That covers entries added, removed or
+//!    renamed, but NOT a file growing or shrinking in place (a log, a database, a VM disk):
+//!    such a record is trusted for `MAX_AGE` only, and within that window a file that grew
+//!    in place in an otherwise unchanged directory shows its old size.
+//!
+//! Limits of (1): events name paths, so a directory whose contents changed and which was
+//! then renamed while another directory took its old path, all since the last scan, is
+//! missed until `VOUCHED_AGE`. History the system purged early (it keeps days of it unless
+//! the disk is nearly full) is not detected. The replay runs in the background after the
+//! cache is read (tens to hundreds of ms); until it is in, records go by the mtime rule.
 //!
 //! That is acceptable for Space Lens, whose sizes are informational and which re-reads
-//! everything at least every `MAX_AGE`. It is not used for System Junk or `size`: those
+//! everything at least every `VOUCHED_AGE`. It is not used for System Junk or `size`: those
 //! sizes decide what is offered for removal (`clean.rs` drops items sized 0), and
 //! "what deleting frees" (APFS private size) changes without any mtime changing.
 //!
@@ -22,12 +37,22 @@
 //! mtimes have one-second resolution here, so a directory modified in the second it was
 //! read could change again unseen: such "hot" directories are not recorded.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-/// Seconds a record is trusted (bounds how stale an in-place file growth can be).
+/// Seconds a record is trusted on its mtime alone (bounds how stale an in-place file
+/// growth can be).
 pub const MAX_AGE: i64 = 3600;
+/// Seconds a record FSEvents vouches for is trusted; past that it is read again anyway.
+pub const VOUCHED_AGE: i64 = 24 * 3600;
+/// Seconds a record is kept in the file.
+const KEPT: i64 = if cfg!(target_os = "macos") {
+    VOUCHED_AGE
+} else {
+    MAX_AGE
+};
 
 /// One directory as read in a scan (and one line of the cache file).
 #[derive(Clone, Debug, Default)]
@@ -37,6 +62,8 @@ pub struct Rec {
     pub mtime: i64,
     /// When it was read, seconds since the epoch
     pub at: i64,
+    /// FSEvents id at the start of the scan that read it (0: none)
+    pub ev: u64,
     /// Allocated bytes and number of its non-directory entries; `bytes` leaves out the
     /// hard-linked ones, which are in `links`
     pub bytes: u64,
@@ -44,24 +71,24 @@ pub struct Rec {
     /// Files whose link count is not 1 (or unknown): (dev, ino, allocated)
     pub links: Vec<(u64, u64, u64)>,
     /// Subdirectories, mount points excluded: their names joined by NUL (which no name
-    /// contains) and their allocated sizes in the same order
+    /// contains), and their (allocated, file id) in the same order
     pub names: String,
-    pub allocs: Vec<u64>,
+    pub subs: Vec<(u64, u64)>,
 }
 
 impl Rec {
-    pub fn add_dir(&mut self, name: &str, alloc: u64) {
-        if !self.allocs.is_empty() {
+    pub fn add_dir(&mut self, name: &str, alloc: u64, ino: u64) {
+        if !self.subs.is_empty() {
             self.names.push('\0');
         }
         self.names.push_str(name);
-        self.allocs.push(alloc);
+        self.subs.push((alloc, ino));
     }
 
     /// Gives back the spare capacity of a finished record.
     pub fn shrink(&mut self) {
         self.names.shrink_to_fit();
-        self.allocs.shrink_to_fit();
+        self.subs.shrink_to_fit();
         self.links.shrink_to_fit();
     }
 }
@@ -73,10 +100,11 @@ struct Row {
     ino: u64,
     mtime: i64,
     at: i64,
+    ev: u64,
     bytes: u64,
     files: u64,
     names: (u32, u32),
-    allocs: (u32, u32),
+    subs: (u32, u32),
     links: (u32, u32),
 }
 
@@ -87,8 +115,21 @@ pub struct Table {
     read: usize,
     rows: Vec<Row>,
     names: String,
-    allocs: Vec<u64>,
+    subs: Vec<(u64, u64)>,
     links: Vec<(u64, u64, u64)>,
+    /// Set once the FSEvents history is replayed (`None`: it cannot tell); until then
+    /// the mtime rule decides
+    pub history: OnceLock<Option<History>>,
+}
+
+/// What the FSEvents history says since the records were read.
+#[derive(Default)]
+pub struct History {
+    /// Volumes whose history was replayed without a break: dev -> the first event id its
+    /// current event store vouches from
+    since: HashMap<u64, u64>,
+    /// Directories named by an event in that history: (dev, ino) -> its last event id
+    changed: HashMap<(u64, u64), u64>,
 }
 
 /// A record as the table holds it.
@@ -98,8 +139,9 @@ pub struct View<'a> {
     pub links: &'a [(u64, u64, u64)],
     mtime: i64,
     at: i64,
+    ev: u64,
     names: &'a str,
-    allocs: &'a [u64],
+    subs: &'a [(u64, u64)],
 }
 
 impl View<'_> {
@@ -107,13 +149,13 @@ impl View<'_> {
         self.mtime == mtime && now - self.at < MAX_AGE
     }
 
-    /// (name, allocated) of each subdirectory.
-    pub fn dirs(&self) -> impl Iterator<Item = (&str, u64)> {
-        let names = (!self.allocs.is_empty())
+    /// (name, allocated, file id) of each subdirectory.
+    pub fn dirs(&self) -> impl Iterator<Item = (&str, u64, u64)> {
+        let names = (!self.subs.is_empty())
             .then(|| self.names.split('\0'))
             .into_iter()
             .flatten();
-        names.zip(self.allocs.iter().copied())
+        names.zip(self.subs).map(|(n, &(a, i))| (n, a, i))
     }
 }
 
@@ -125,14 +167,15 @@ impl Table {
             ino: r.ino,
             mtime: r.mtime,
             at: r.at,
+            ev: r.ev,
             bytes: r.bytes,
             files: r.files,
             names: span(self.names.len(), r.names.len()),
-            allocs: span(self.allocs.len(), r.allocs.len()),
+            subs: span(self.subs.len(), r.subs.len()),
             links: span(self.links.len(), r.links.len()),
         });
         self.names.push_str(&r.names);
-        self.allocs.extend_from_slice(&r.allocs);
+        self.subs.extend_from_slice(&r.subs);
         self.links.extend_from_slice(&r.links);
     }
 
@@ -144,8 +187,9 @@ impl Table {
             links: &self.links[range(row.links)],
             mtime: row.mtime,
             at: row.at,
+            ev: row.ev,
             names: &self.names[range(row.names)],
-            allocs: &self.allocs[range(row.allocs)],
+            subs: &self.subs[range(row.subs)],
         }
     }
 
@@ -156,11 +200,12 @@ impl Table {
             ino: row.ino,
             mtime: row.mtime,
             at: row.at,
+            ev: row.ev,
             bytes: row.bytes,
             files: row.files,
             links: v.links.to_vec(),
             names: v.names.to_owned(),
-            allocs: v.allocs.to_vec(),
+            subs: v.subs.to_vec(),
         }
     }
 
@@ -172,6 +217,20 @@ impl Table {
         Some(self.view(&self.rows[i]))
     }
 
+    /// What FSEvents says about record `v` of directory `key` (whose `mtime` may be known):
+    /// `Some(true)` nothing changed in it since it was read, `Some(false)` read it again
+    /// (changed, or too old), `None` no usable history (the mtime rule decides).
+    pub fn vouched(&self, key: (u64, u64), v: &View, mtime: Option<i64>, now: i64) -> Option<bool> {
+        let h = self.history.get()?.as_ref()?;
+        let since = *h.since.get(&key.0)?;
+        if v.ev == 0 || v.ev < since {
+            return None;
+        }
+        let changed =
+            h.changed.get(&key).is_some_and(|&id| id > v.ev) || mtime.is_some_and(|m| m != v.mtime);
+        Some(!changed && now - v.at < VOUCHED_AGE)
+    }
+
     fn finish(mut self) -> Table {
         // rows were pushed in file order (appended records last); a stable sort keeps that
         // order among equal keys, and the last one of each key wins
@@ -180,7 +239,7 @@ impl Table {
         self.rows.dedup_by_key(|r| (r.dev, r.ino));
         self.rows.shrink_to_fit();
         self.names.shrink_to_fit();
-        self.allocs.shrink_to_fit();
+        self.subs.shrink_to_fit();
         self.links.shrink_to_fit();
         self
     }
@@ -195,7 +254,28 @@ impl Table {
 }
 
 fn file(dir: &Path) -> PathBuf {
-    dir.join("space-dirs-v4.bin")
+    dir.join("space-dirs-v5.bin")
+}
+
+/// Per volume: dev, event store UUID, first event id records on it may rely on.
+#[cfg(target_os = "macos")]
+fn volumes_file(dir: &Path) -> PathBuf {
+    dir.join("space-dirs-v5.vol")
+}
+
+#[cfg(target_os = "macos")]
+fn read_volumes(dir: &Path) -> HashMap<u64, (u128, u64)> {
+    let bytes = std::fs::read(volumes_file(dir)).unwrap_or_default();
+    bytes
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .map(|c| {
+            let n = |i: usize| u64::from_le_bytes(c[i..i + 8].try_into().unwrap());
+            let uuid = u128::from_le_bytes(c[8..24].try_into().unwrap());
+            (n(0), (uuid, n(24)))
+        })
+        .collect()
 }
 
 pub fn now() -> i64 {
@@ -209,16 +289,26 @@ pub fn now() -> i64 {
 // directory wins; the file is rewritten when appends make up a large part of it.
 
 fn put(out: &mut impl Write, r: &Rec) -> std::io::Result<()> {
-    let nums = [r.dev, r.ino, r.mtime as u64, r.at as u64, r.bytes, r.files];
+    let nums = [
+        r.dev,
+        r.ino,
+        r.mtime as u64,
+        r.at as u64,
+        r.ev,
+        r.bytes,
+        r.files,
+    ];
     for n in nums {
         out.write_all(&n.to_le_bytes())?;
     }
-    for n in [r.names.len(), r.allocs.len(), r.links.len()] {
+    for n in [r.names.len(), r.subs.len(), r.links.len()] {
         out.write_all(&(n as u32).to_le_bytes())?;
     }
     out.write_all(r.names.as_bytes())?;
-    for a in &r.allocs {
-        out.write_all(&a.to_le_bytes())?;
+    for &(a, i) in &r.subs {
+        for n in [a, i] {
+            out.write_all(&n.to_le_bytes())?;
+        }
     }
     for &(d, i, a) in &r.links {
         for n in [d, i, a] {
@@ -243,12 +333,12 @@ fn u64s(input: &mut impl Read, n: usize) -> std::io::Result<Vec<u64>> {
 /// short by a crash mid-append, or lengths that do not fit in the `left` bytes of the file
 /// (never trusted for an allocation).
 fn get(input: &mut impl Read, left: &mut u64) -> std::io::Result<Rec> {
-    const HEAD: u64 = 6 * 8 + 3 * 4;
+    const HEAD: u64 = 7 * 8 + 3 * 4;
     let bad = || std::io::Error::from(std::io::ErrorKind::InvalidData);
     if *left < HEAD {
         return Err(bad());
     }
-    let nums = u64s(input, 6)?;
+    let nums = u64s(input, 7)?;
     let mut lens = [0u8; 12];
     input.read_exact(&mut lens)?;
     let len = |i: usize| {
@@ -256,13 +346,18 @@ fn get(input: &mut impl Read, left: &mut u64) -> std::io::Result<Rec> {
             lens[i * 4..i * 4 + 4].try_into().unwrap(),
         ))
     };
-    let body = len(0) + 8 * len(1) + 24 * len(2);
+    let body = len(0) + 16 * len(1) + 24 * len(2);
     if body > *left - HEAD {
         return Err(bad());
     }
     let mut names = vec![0u8; len(0) as usize];
     input.read_exact(&mut names)?;
-    let allocs = u64s(input, len(1) as usize)?;
+    let subs: Vec<(u64, u64)> = u64s(input, len(1) as usize * 2)?
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| (c[0], c[1]))
+        .collect();
     let links = u64s(input, len(2) as usize * 3)?
         .as_chunks::<3>()
         .0
@@ -270,12 +365,12 @@ fn get(input: &mut impl Read, left: &mut u64) -> std::io::Result<Rec> {
         .map(|c| (c[0], c[1], c[2]))
         .collect();
     let names = String::from_utf8(names).map_err(|_| bad())?;
-    let count = if allocs.is_empty() {
+    let count = if subs.is_empty() {
         0
     } else {
         names.split('\0').count()
     };
-    if count != allocs.len() {
+    if count != subs.len() {
         return Err(bad());
     }
     *left -= HEAD + body;
@@ -284,26 +379,84 @@ fn get(input: &mut impl Read, left: &mut u64) -> std::io::Result<Rec> {
         ino: nums[1],
         mtime: nums[2] as i64,
         at: nums[3] as i64,
-        bytes: nums[4],
-        files: nums[5],
+        ev: nums[4],
+        bytes: nums[5],
+        files: nums[6],
         names,
-        allocs,
+        subs,
         links,
     })
 }
 
 use std::io::Read;
 
-/// Reads the records kept in `dir` on another thread: a small folder is listed before
-/// a whole-disk cache could be read, so the scan starts at once and uses the cache from
-/// the moment it is there.
-pub fn load_in_background(dir: &Path) -> Arc<OnceLock<Arc<Table>>> {
+/// Reads the records kept in `dir` on another thread, then (macOS) replays the FSEvents
+/// history of `roots`: a small folder is listed before a whole-disk cache could be read,
+/// so the scan starts at once and uses the cache from the moment it is there, with the
+/// mtime rule until the history is in.
+pub fn load_in_background(dir: &Path, roots: Vec<PathBuf>) -> Arc<OnceLock<Arc<Table>>> {
     let slot = Arc::new(OnceLock::new());
     let (dir, fill) = (dir.to_path_buf(), slot.clone());
     std::thread::spawn(move || {
-        let _ = fill.set(Arc::new(read(&dir)));
+        let table = Arc::new(read(&dir));
+        let _ = fill.set(table.clone());
+        #[cfg(target_os = "macos")]
+        let history = table.replay(&dir, &roots);
+        #[cfg(not(target_os = "macos"))]
+        let history = None;
+        drop(roots);
+        let _ = table.history.set(history);
     });
     slot
+}
+
+/// The FSEvents id a scan starting now writes in its records (0: no FSEvents).
+pub fn event_id() -> u64 {
+    #[cfg(target_os = "macos")]
+    return crate::fsevents::current_id();
+    #[cfg(not(target_os = "macos"))]
+    0
+}
+
+#[cfg(target_os = "macos")]
+impl Table {
+    /// The history of `roots` since the oldest record that can rely on it; `None` when
+    /// it broke or no record can.
+    fn replay(&self, dir: &Path, roots: &[PathBuf]) -> Option<History> {
+        let devs: Vec<u64> = roots
+            .iter()
+            .filter_map(|r| crate::fs::stat(r, crate::fs::Detail::Basic).ok())
+            .map(|e| e.dev)
+            .collect();
+        let since: HashMap<u64, u64> = read_volumes(dir)
+            .into_iter()
+            .filter(|(dev, (uuid, _))| {
+                devs.contains(dev) && crate::fsevents::volume_uuid(*dev) == Some(*uuid)
+            })
+            .map(|(dev, (_, since))| (dev, since))
+            .collect();
+        let from = self
+            .rows
+            .iter()
+            .filter(|r| r.ev > 0 && since.get(&r.dev).is_some_and(|&s| r.ev >= s))
+            .map(|r| r.ev)
+            .min()?;
+        let events = crate::fsevents::changes(roots, from, &dir.join("space-dirs-v5.sync"))?;
+        let mut paths: HashMap<PathBuf, u64> = HashMap::new();
+        for (path, id) in events {
+            let last = paths.entry(path).or_default();
+            *last = (*last).max(id);
+        }
+        let mut changed = HashMap::new();
+        for (path, id) in paths {
+            // gone: nothing to drop (its parent changed too)
+            if let Ok(e) = crate::fs::stat(&path, crate::fs::Detail::Basic) {
+                let last: &mut u64 = changed.entry((e.dev, e.ino)).or_default();
+                *last = (*last).max(id);
+            }
+        }
+        Some(History { since, changed })
+    }
 }
 
 /// The records kept in `dir`.
@@ -324,7 +477,7 @@ pub fn read(dir: &Path) -> Table {
                 break;
             };
             table.read += 1;
-            if now - r.at < MAX_AGE {
+            if now - r.at < KEPT {
                 table.push(&r);
             }
         }
@@ -340,6 +493,14 @@ pub fn store(dir: &Path, old: Option<Arc<Table>>, found: Vec<Rec>) {
     if found.is_empty() || std::fs::create_dir_all(dir).is_err() {
         return;
     }
+    // (dev, the scan's event id) of what is saved
+    #[cfg(target_os = "macos")]
+    let found_devs: Vec<(u64, u64)> = {
+        let mut v: Vec<(u64, u64)> = found.iter().map(|r| (r.dev, r.ev)).collect();
+        v.sort_unstable();
+        v.dedup_by_key(|d| d.0);
+        v
+    };
     let path = file(dir);
     let appending = match &old {
         // the background read has not finished (a quick scan): appending now could race
@@ -372,7 +533,7 @@ pub fn store(dir: &Path, old: Option<Arc<Table>>, found: Vec<Rec>) {
                     let replaced = found
                         .binary_search_by_key(&(row.dev, row.ino), |r| (r.dev, r.ino))
                         .is_ok();
-                    if !replaced && now - row.at < MAX_AGE {
+                    if !replaced && now - row.at < KEPT {
                         put(&mut out, &old.rec(row))?;
                     }
                 }
@@ -385,13 +546,44 @@ pub fn store(dir: &Path, old: Option<Arc<Table>>, found: Vec<Rec>) {
                 let _ = std::fs::remove_file(&tmp);
             })
     };
+    #[cfg(target_os = "macos")]
+    if result.is_ok() {
+        store_volumes(dir, &found_devs);
+    }
     let _ = result;
     for older in [
         "space-dirs-v1.json",
         "space-dirs-v2.json",
         "space-dirs-v3.jsonl",
+        "space-dirs-v4.bin",
     ] {
         let _ = std::fs::remove_file(dir.join(older));
+    }
+}
+
+/// Notes each volume's event store UUID. A new one (or a first) vouches from the scan's
+/// event id only: older records on it keep the mtime rule.
+#[cfg(target_os = "macos")]
+fn store_volumes(dir: &Path, found: &[(u64, u64)]) {
+    let mut vols = read_volumes(dir);
+    for &(dev, ev) in found {
+        let Some(uuid) = crate::fsevents::volume_uuid(dev).filter(|_| ev > 0) else {
+            vols.remove(&dev);
+            continue;
+        };
+        if vols.get(&dev).is_none_or(|v| v.0 != uuid) {
+            vols.insert(dev, (uuid, ev));
+        }
+    }
+    let mut bytes = Vec::with_capacity(vols.len() * 32);
+    for (dev, (uuid, since)) in vols {
+        bytes.extend_from_slice(&dev.to_le_bytes());
+        bytes.extend_from_slice(&uuid.to_le_bytes());
+        bytes.extend_from_slice(&since.to_le_bytes());
+    }
+    let tmp = dir.join(format!(".space-dirs-vol-{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, volumes_file(dir));
     }
 }
 
@@ -407,10 +599,11 @@ mod tests {
             at: now(),
             bytes,
             files: 1,
+            ev: 42,
             ..Rec::default()
         };
-        r.add_dir("a", 10);
-        r.add_dir("b c", 20);
+        r.add_dir("a", 10, 1000);
+        r.add_dir("b c", 20, 1001);
         r.links.push((1, 99, 7));
         r
     }
@@ -426,8 +619,12 @@ mod tests {
         assert_eq!(t.len(), 100);
         let v = t.get((1, 7)).unwrap();
         assert_eq!(v.bytes, 7000);
-        assert_eq!(v.dirs().collect::<Vec<_>>(), vec![("a", 10), ("b c", 20)]);
+        assert_eq!(
+            v.dirs().collect::<Vec<_>>(),
+            vec![("a", 10, 1000), ("b c", 20, 1001)]
+        );
         assert_eq!(v.links, &[(1, 99, 7)]);
+        assert_eq!(v.ev, 42);
         assert_eq!(t.get((1, 8)).unwrap().bytes, 8);
 
         // a crash mid-append: a header promising more than the file holds, then garbage
@@ -447,5 +644,48 @@ mod tests {
             "the damaged tail is cut off"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Records read at event 42 on volume 1, then FSEvents history in various states.
+    #[test]
+    fn fsevents_vouch_or_fall_back() {
+        let mut t = Table::default();
+        for ino in [7, 8] {
+            t.push(&rec(ino, 1));
+        }
+        let mut old = rec(9, 1);
+        old.at -= VOUCHED_AGE;
+        t.push(&old);
+        let mut t = t.finish();
+        let now = now();
+        let ask = |t: &Table, ino| t.vouched((1, ino), &t.get((1, ino)).unwrap(), None, now);
+        let with = |t: &mut Table, since: u64, changed: &[((u64, u64), u64)]| {
+            t.history = OnceLock::new();
+            let _ = t.history.set(Some(History {
+                since: HashMap::from([(1, since)]),
+                changed: changed.iter().copied().collect(),
+            }));
+        };
+
+        // history not replayed yet, or broken (dropped, wrapped, rescan, missing id)
+        assert_eq!(ask(&t, 7), None);
+        let _ = t.history.set(None);
+        assert_eq!(ask(&t, 7), None);
+        // the volume's event store changed after the records were written: mtime rule
+        with(&mut t, 50, &[]);
+        assert_eq!(ask(&t, 7), None);
+
+        // 8 changed after it was read, 7 before
+        with(&mut t, 10, &[((1, 8), 43), ((1, 7), 40)]);
+        assert_eq!(ask(&t, 7), Some(true), "no stat needed");
+        assert_eq!(ask(&t, 8), Some(false), "read again whatever its mtime");
+        assert_eq!(ask(&t, 9), Some(false), "past VOUCHED_AGE");
+        let seven = t.get((1, 7)).unwrap();
+        assert_eq!(
+            t.vouched((1, 7), &seven, Some(6), now),
+            Some(false),
+            "listed mtime differs"
+        );
+        assert!(t.get((1, 7)).unwrap().usable(5, now));
     }
 }
