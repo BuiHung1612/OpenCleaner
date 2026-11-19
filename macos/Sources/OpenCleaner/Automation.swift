@@ -277,7 +277,7 @@ struct AutomationSettings: View {
     @AppStorage(Automation.watchGBKey) private var watchGB = 5
 
     var body: some View {
-        Section(String(localized: "Automation")) {
+        Section {
             Toggle(String(localized: "Clean automatically"), isOn: $autoClean)
             Picker(String(localized: "How often"), selection: $period) {
                 Text("Weekly").tag("weekly")
@@ -297,6 +297,11 @@ struct AutomationSettings: View {
                 ForEach([1, 2, 5, 10, 20], id: \.self) { Text("\($0) GB").tag($0) }
             }
             .disabled(!watch)
+        } header: {
+            HStack(spacing: 8) {
+                Art(id: "schedule", symbol: "calendar.badge.clock", size: 30).accessibilityHidden(true)
+                Text("Automation")
+            }
         }
     }
 }

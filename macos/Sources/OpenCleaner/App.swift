@@ -475,7 +475,7 @@ struct EmptyState: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Image(systemName: symbol).font(.system(size: 34, weight: .light)).foregroundStyle(.dim)
+            Art(id: "empty", symbol: symbol, size: 110).accessibilityHidden(true)
             Text(verbatim: title).font(.system(size: 15, weight: .semibold))
             if !message.isEmpty {
                 Text(verbatim: message).font(.system(size: 13)).foregroundStyle(.dim).multilineTextAlignment(.center)

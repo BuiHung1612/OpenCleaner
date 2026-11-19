@@ -134,6 +134,8 @@ impl Module {
             Module::Uninstaller => include_bytes!("../../art/uninstaller.png"),
             Module::SpaceLens => include_bytes!("../../art/spaceLens.png"),
             Module::History => include_bytes!("../../art/history.png"),
+            Module::LargeOld => include_bytes!("../../art/large_old.png"),
+            Module::Duplicates => include_bytes!("../../art/duplicates.png"),
             _ => return None,
         })
     }

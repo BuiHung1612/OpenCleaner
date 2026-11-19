@@ -236,9 +236,14 @@ struct JunkPage: View {
                         let rules = shownRules(group)
                         if !rules.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(tr(group.title.string ?? "")).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
-                                    .padding(.leading, 12)
-                                    .accessibilityAddTraits(.isHeader)
+                                HStack(spacing: 6) {
+                                    if group.id.string == "privacy" {
+                                        Art(id: "privacy", symbol: "hand.raised", size: 26).accessibilityHidden(true)
+                                    }
+                                    Text(tr(group.title.string ?? "")).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
+                                }
+                                .padding(.leading, 12)
+                                .accessibilityAddTraits(.isHeader)
                                 ForEach(rules, id: \.id.string) { rule in ruleRow(rule) }
                                 if group.id.string == "privacy" {
                                     Text("Safari is not listed: macOS protects its history and cookies.")
