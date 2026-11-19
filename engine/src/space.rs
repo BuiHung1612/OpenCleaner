@@ -2,18 +2,25 @@
 //!
 //! One parallel walk sizes every child at once (each queued directory is tagged with the
 //! child it belongs to), so the work spreads over all workers however uneven the
-//! children are, and partial sizes can be shown while it runs.
+//! children are, and partial sizes can be shown while it runs: about every 200 ms a
+//! `progress` listing carries each child's size so far, "scanning" until its whole
+//! subtree is read, then "complete" (or "partial").
+//!
+//! Repeat scans of unchanged directories come from `dircache` (see there for what that
+//! can miss and for how long).
 
+use crate::dircache::{self, Rec};
 use crate::fs::walk::{self, Visitor};
 use crate::fs::{self, Detail, Entry, Kind};
 use crate::size::Links;
 use serde::Serialize;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Serialize)]
@@ -23,7 +30,8 @@ pub struct Item {
     pub size: u64,
     pub files: u64,
     pub is_dir: bool,
-    /// "complete", or "partial" when part of it could not be read (size is a lower bound)
+    /// "complete"; "partial" when part of it could not be read (size is a lower bound);
+    /// "scanning" in a `progress` listing while its size is still growing
     pub scan_status: &'static str,
     /// A real item the user may act on. Overview rows (Home, Applications, System &
     /// other…) are summaries and must never be offered for removal.
@@ -52,8 +60,10 @@ struct Part {
 }
 
 /// Sizes the children of `dir`, calling `progress` with partial results while it runs.
+/// With `cache` (a directory), unchanged directories are taken from `dircache` there.
 pub fn list(
     dir: &Path,
+    cache: Option<&Path>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&Listing),
 ) -> io::Result<Listing> {
@@ -79,6 +89,7 @@ pub fn list(
         parts,
         HashMap::new(),
         links,
+        cache,
         cancel,
         progress,
     ))
@@ -86,7 +97,11 @@ pub fn list(
 
 /// The startup disk at a glance: the big user and system areas, plus what the volume
 /// uses outside them.
-pub fn overview(cancel: &AtomicBool, progress: &mut dyn FnMut(&Listing)) -> io::Result<Listing> {
+pub fn overview(
+    cache: Option<&Path>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&Listing),
+) -> io::Result<Listing> {
     let mut parts = Vec::new();
     let mut skip: HashMap<PathBuf, Vec<OsString>> = HashMap::new();
     for (name, path) in overview_roots() {
@@ -110,7 +125,16 @@ pub fn overview(cancel: &AtomicBool, progress: &mut dyn FnMut(&Listing)) -> io::
                 .push(name.to_os_string());
         }
     }
-    let mut listing = measure(None, true, parts, skip, Links::default(), cancel, progress);
+    let mut listing = measure(
+        None,
+        true,
+        parts,
+        skip,
+        Links::default(),
+        cache,
+        cancel,
+        progress,
+    );
     if let Some(used) = volume_used(Path::new(&root_volume())) {
         let rest = used.saturating_sub(listing.total_size);
         if rest > 0 && !listing.cancelled {
@@ -130,16 +154,25 @@ pub fn overview(cancel: &AtomicBool, progress: &mut dyn FnMut(&Listing)) -> io::
     Ok(listing)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn measure(
     path: Option<PathBuf>,
     overview: bool,
     parts: Vec<Part>,
     skip: HashMap<PathBuf, Vec<OsString>>,
     links: Links,
+    cache: Option<&Path>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&Listing),
 ) -> Listing {
-    let sizer = PartSizer {
+    let mut sizer = PartSizer {
+        left: parts
+            .iter()
+            .map(|p| AtomicU64::new(u64::from(p.walk)))
+            .collect(),
+        cache: cache.map(dircache::load),
+        found: Mutex::new(Vec::new()),
+        now: dircache::now(),
         sizes: parts.iter().map(|p| AtomicU64::new(p.fixed)).collect(),
         files: parts
             .iter()
@@ -171,8 +204,10 @@ fn measure(
                     || (done && cancel.load(Ordering::Relaxed))
                 {
                     "partial"
-                } else {
+                } else if done || sizer.left[i].load(Ordering::Relaxed) == 0 {
                     "complete"
+                } else {
+                    "scanning"
                 },
                 selectable: !overview,
             })
@@ -183,6 +218,8 @@ fn measure(
         let total_files = entries.iter().map(|e| e.files).sum();
         let scan_status = if entries.iter().any(|e| e.scan_status == "partial") {
             "partial"
+        } else if entries.iter().any(|e| e.scan_status == "scanning") {
+            "scanning"
         } else {
             "complete"
         };
@@ -216,7 +253,12 @@ fn measure(
             }
         }
     });
-    snapshot(true)
+    let listing = snapshot(true);
+    if let Some(dir) = cache {
+        sizer.cache = None; // the last reference to the map: store updates it in place
+        dircache::store(dir, sizer.found.into_inner().unwrap());
+    }
+    listing
 }
 
 /// Largest first; equal sizes by name so the order is stable.
@@ -224,7 +266,18 @@ fn sort(items: &mut [Item]) {
     items.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
 }
 
+thread_local! {
+    /// The directory this worker is reading, as it will be cached
+    static READING: RefCell<Option<Rec>> = const { RefCell::new(None) };
+}
+
 struct PartSizer {
+    /// directories of each part queued or being read; 0: the part is fully sized
+    left: Vec<AtomicU64>,
+    cache: Option<Arc<dircache::Map>>,
+    /// directories read in this scan, for the cache
+    found: Mutex<Vec<Rec>>,
+    now: i64,
     sizes: Vec<AtomicU64>,
     files: Vec<AtomicU64>,
     partial: Vec<AtomicBool>,
@@ -234,7 +287,71 @@ struct PartSizer {
     errors: Mutex<Vec<String>>,
 }
 
+impl PartSizer {
+    fn skipped(&self, dir: &Path, name: &std::ffi::OsStr) -> bool {
+        !self.skip.is_empty()
+            && self
+                .skip
+                .get(dir)
+                .is_some_and(|names| names.iter().any(|n| n == name))
+    }
+
+    /// Updates the cache record of the directory being read, if one is kept.
+    fn note(&self, f: impl FnOnce(&mut Option<Rec>)) {
+        if self.cache.is_some() {
+            READING.with_borrow_mut(f);
+        }
+    }
+}
+
 impl Visitor for PartSizer {
+    fn known(&self, dir: &Path, tag: u32, subdirs: &mut Vec<(PathBuf, u32)>) -> bool {
+        let Some(cache) = &self.cache else {
+            return false;
+        };
+        READING.set(None);
+        let Ok(me) = fs::stat(dir, Detail::Basic) else {
+            return false; // reading it reports the error
+        };
+        if me.mount_point {
+            return true; // mounted since it was listed: another volume
+        }
+        if me.kind != Kind::Dir || me.ino == 0 {
+            return false;
+        }
+        let Some(r) = cache
+            .get(&(me.dev, me.ino))
+            .filter(|r| r.usable(me.mtime, self.now))
+        else {
+            READING.set(Some(Rec {
+                dev: me.dev,
+                ino: me.ino,
+                mtime: me.mtime,
+                at: self.now,
+                ..Rec::default()
+            }));
+            return false;
+        };
+        let i = tag as usize;
+        self.files[i].fetch_add(r.files, Ordering::Relaxed);
+        let mut bytes = r.bytes;
+        for &(dev, ino, alloc) in &r.links {
+            if self.links.first_time(dev, ino) {
+                bytes += alloc;
+            }
+        }
+        for (name, alloc) in &r.dirs {
+            if self.skipped(dir, name.as_ref()) {
+                continue;
+            }
+            bytes += alloc;
+            self.left[i].fetch_add(1, Ordering::Relaxed);
+            subdirs.push((dir.join(name), tag));
+        }
+        self.sizes[i].fetch_add(bytes, Ordering::Relaxed);
+        true
+    }
+
     fn entry(&self, dir: &Path, tag: u32, e: &Entry) -> Option<u32> {
         let i = tag as usize;
         match e.kind {
@@ -242,28 +359,40 @@ impl Visitor for PartSizer {
                 if e.mount_point {
                     return None;
                 }
-                if !self.skip.is_empty()
-                    && self
-                        .skip
-                        .get(dir)
-                        .is_some_and(|names| names.contains(&e.name))
-                {
+                self.note(|r| match (r.as_mut(), e.name.to_str()) {
+                    (Some(rec), Some(name)) => rec.dirs.push((name.to_owned(), e.alloc)),
+                    _ => *r = None, // a name the cache file cannot hold
+                });
+                if self.skipped(dir, &e.name) {
                     return None;
                 }
                 self.sizes[i].fetch_add(e.alloc, Ordering::Relaxed);
+                self.left[i].fetch_add(1, Ordering::Relaxed);
                 Some(tag)
             }
             _ => {
                 self.files[i].fetch_add(1, Ordering::Relaxed);
-                if e.nlink == 1 || self.links.first_time(e.dev, e.ino) {
+                let single = e.nlink == 1;
+                if single || self.links.first_time(e.dev, e.ino) {
                     self.sizes[i].fetch_add(e.alloc, Ordering::Relaxed);
                 }
+                self.note(|r| {
+                    if let Some(rec) = r {
+                        rec.files += 1;
+                        if single {
+                            rec.bytes += e.alloc;
+                        } else {
+                            rec.links.push((e.dev, e.ino, e.alloc));
+                        }
+                    }
+                });
                 None
             }
         }
     }
 
     fn error(&self, path: &Path, tag: u32, err: io::Error) {
+        self.note(|r| *r = None);
         if err.kind() == io::ErrorKind::NotFound {
             return;
         }
@@ -271,6 +400,16 @@ impl Visitor for PartSizer {
         let mut errors = self.errors.lock().unwrap();
         if errors.len() < 20 {
             errors.push(format!("{}: {err}", path.display()));
+        }
+    }
+
+    fn done(&self, _dir: &Path, tag: u32) {
+        self.left[tag as usize].fetch_sub(1, Ordering::Relaxed);
+        if let Some(rec) = self.cache.as_ref().and_then(|_| READING.take())
+            // modified in the last seconds: it could change again within the same mtime
+            && rec.mtime + 2 <= self.now
+        {
+            self.found.lock().unwrap().push(rec);
         }
     }
 }

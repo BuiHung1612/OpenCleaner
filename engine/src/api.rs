@@ -371,8 +371,8 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         Request::Space { path } => {
             let mut progress = |l: &space::Listing| emit_listing("progress", l, &mut *emit);
             let result = match &path {
-                Some(p) => space::list(p, cancel, &mut progress),
-                None => space::overview(cancel, &mut progress),
+                Some(p) => space::list(p, Some(&ctx().data_dir), cancel, &mut progress),
+                None => space::overview(Some(&ctx().data_dir), cancel, &mut progress),
             };
             match result {
                 Ok(l) => emit_listing("space", &l, emit),
