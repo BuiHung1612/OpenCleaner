@@ -206,6 +206,7 @@ struct MainView: View {
                 case "duplicates": PicksPage(tool: tool, request: ["op": "duplicates"], kind: .trash, model: duplicates)
                 case "optimize": OptimizePage(tool: tool)
                 case "touchid": TouchIDPage(tool: tool)
+                case "startup": StartupPage(tool: tool)
                 default: Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
                 }
             }

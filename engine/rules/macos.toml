@@ -20,6 +20,10 @@ id = "system"
 title = "User caches & logs"
 
 [[group]]
+id = "privacy"
+title = "Privacy"
+
+[[group]]
 id = "trash"
 title = "Trash"
 
@@ -377,3 +381,152 @@ title = "Empty the Trash"
 paths = ["~/.Trash"]
 default = false
 note = "Everything in the Trash, permanently."
+
+# --- privacy --------------------------------------------------------------------------
+# History and cookies, one choice each, never preselected; skipped while the browser runs
+# (it keeps these files open). Safari is missing on purpose: macOS keeps its data behind
+# Full Disk Access (Library/Safari, Library/Cookies are private in guard.rs).
+
+[[rule]]
+id = "privacy.chrome.history"
+group = "privacy"
+title = "Chrome history"
+paths = [
+  "~/Library/Application Support/Google/Chrome/*/History",
+  "~/Library/Application Support/Google/Chrome/*/History-journal",
+  "~/Library/Application Support/Google/Chrome/*/History-wal",
+]
+target = "self"
+running = ["com.google.Chrome"]
+default = false
+note = "Sites you visited and your download list. Bookmarks, passwords and open tabs stay."
+
+[[rule]]
+id = "privacy.chrome.cookies"
+group = "privacy"
+title = "Chrome cookies"
+paths = [
+  "~/Library/Application Support/Google/Chrome/*/Cookies",
+  "~/Library/Application Support/Google/Chrome/*/Cookies-journal",
+  "~/Library/Application Support/Google/Chrome/*/Network/Cookies",
+  "~/Library/Application Support/Google/Chrome/*/Network/Cookies-journal",
+]
+target = "self"
+running = ["com.google.Chrome"]
+default = false
+note = "Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay."
+
+[[rule]]
+id = "privacy.edge.history"
+group = "privacy"
+title = "Edge history"
+paths = [
+  "~/Library/Application Support/Microsoft Edge/*/History",
+  "~/Library/Application Support/Microsoft Edge/*/History-journal",
+  "~/Library/Application Support/Microsoft Edge/*/History-wal",
+]
+target = "self"
+running = ["com.microsoft.edgemac"]
+default = false
+note = "Sites you visited and your download list. Bookmarks, passwords and open tabs stay."
+
+[[rule]]
+id = "privacy.edge.cookies"
+group = "privacy"
+title = "Edge cookies"
+paths = [
+  "~/Library/Application Support/Microsoft Edge/*/Cookies",
+  "~/Library/Application Support/Microsoft Edge/*/Cookies-journal",
+  "~/Library/Application Support/Microsoft Edge/*/Network/Cookies",
+  "~/Library/Application Support/Microsoft Edge/*/Network/Cookies-journal",
+]
+target = "self"
+running = ["com.microsoft.edgemac"]
+default = false
+note = "Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay."
+
+[[rule]]
+id = "privacy.brave.history"
+group = "privacy"
+title = "Brave history"
+paths = [
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/History",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/History-journal",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/History-wal",
+]
+target = "self"
+running = ["com.brave.Browser"]
+default = false
+note = "Sites you visited and your download list. Bookmarks, passwords and open tabs stay."
+
+[[rule]]
+id = "privacy.brave.cookies"
+group = "privacy"
+title = "Brave cookies"
+paths = [
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Cookies",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Cookies-journal",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Network/Cookies",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Network/Cookies-journal",
+]
+target = "self"
+running = ["com.brave.Browser"]
+default = false
+note = "Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay."
+
+[[rule]]
+id = "privacy.arc.history"
+group = "privacy"
+title = "Arc history"
+paths = [
+  "~/Library/Application Support/Arc/User Data/*/History",
+  "~/Library/Application Support/Arc/User Data/*/History-journal",
+  "~/Library/Application Support/Arc/User Data/*/History-wal",
+]
+target = "self"
+running = ["company.thebrowser.Browser"]
+default = false
+note = "Sites you visited and your download list. Bookmarks, passwords and open tabs stay."
+
+[[rule]]
+id = "privacy.arc.cookies"
+group = "privacy"
+title = "Arc cookies"
+paths = [
+  "~/Library/Application Support/Arc/User Data/*/Cookies",
+  "~/Library/Application Support/Arc/User Data/*/Cookies-journal",
+  "~/Library/Application Support/Arc/User Data/*/Network/Cookies",
+  "~/Library/Application Support/Arc/User Data/*/Network/Cookies-journal",
+]
+target = "self"
+running = ["company.thebrowser.Browser"]
+default = false
+note = "Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay."
+
+[[rule]]
+id = "privacy.firefox.history"
+group = "privacy"
+title = "Firefox history"
+paths = [
+  "~/Library/Application Support/Firefox/Profiles/*/places.sqlite",
+  "~/Library/Application Support/Firefox/Profiles/*/places.sqlite-wal",
+  "~/Library/Application Support/Firefox/Profiles/*/places.sqlite-shm",
+]
+target = "self"
+running = ["org.mozilla.firefox"]
+default = false
+note = "Sites you visited. Firefox restores your bookmarks from its latest automatic backup; bookmarks changed since that backup may be lost."
+
+[[rule]]
+id = "privacy.firefox.cookies"
+group = "privacy"
+title = "Firefox cookies"
+paths = [
+  "~/Library/Application Support/Firefox/Profiles/*/cookies.sqlite",
+  "~/Library/Application Support/Firefox/Profiles/*/cookies.sqlite-wal",
+  "~/Library/Application Support/Firefox/Profiles/*/cookies.sqlite-shm",
+]
+target = "self"
+running = ["org.mozilla.firefox"]
+default = false
+note = "Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay."

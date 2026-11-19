@@ -13,6 +13,10 @@ title = "Developer tools"
 id = "system"
 title = "Temporary files & logs"
 
+[[group]]
+id = "privacy"
+title = "Privacy"
+
 [[rule]]
 id = "browser.chrome"
 group = "browsers"
@@ -147,3 +151,92 @@ paths = ["%LOCALAPPDATA%/Microsoft/Windows/Explorer"]
 include = ["thumbcache_*.db", "iconcache_*.db"]
 default = false
 note = "Explorer rebuilds thumbnails as you browse folders. Files Explorer has open are skipped."
+
+# --- privacy --------------------------------------------------------------------------
+# History and cookies, one choice each, never preselected; skipped while the browser runs.
+
+[[rule]]
+id = "privacy.chrome.history"
+group = "privacy"
+title = "Chrome history"
+paths = [
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/History",
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/History-journal",
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/History-wal",
+]
+target = "self"
+running = ["chrome.exe"]
+default = false
+note = "Sites you visited and your download list. Bookmarks, passwords and open tabs stay."
+
+[[rule]]
+id = "privacy.chrome.cookies"
+group = "privacy"
+title = "Chrome cookies"
+paths = [
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/Cookies",
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/Cookies-journal",
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/Network/Cookies",
+  "%LOCALAPPDATA%/Google/Chrome/User Data/*/Network/Cookies-journal",
+]
+target = "self"
+running = ["chrome.exe"]
+default = false
+note = "Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay."
+
+[[rule]]
+id = "privacy.edge.history"
+group = "privacy"
+title = "Edge history"
+paths = [
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/History",
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/History-journal",
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/History-wal",
+]
+target = "self"
+running = ["msedge.exe"]
+default = false
+note = "Sites you visited and your download list. Bookmarks, passwords and open tabs stay."
+
+[[rule]]
+id = "privacy.edge.cookies"
+group = "privacy"
+title = "Edge cookies"
+paths = [
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Cookies",
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Cookies-journal",
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Network/Cookies",
+  "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Network/Cookies-journal",
+]
+target = "self"
+running = ["msedge.exe"]
+default = false
+note = "Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay."
+
+[[rule]]
+id = "privacy.firefox.history"
+group = "privacy"
+title = "Firefox history"
+paths = [
+  "%APPDATA%/Mozilla/Firefox/Profiles/*/places.sqlite",
+  "%APPDATA%/Mozilla/Firefox/Profiles/*/places.sqlite-wal",
+  "%APPDATA%/Mozilla/Firefox/Profiles/*/places.sqlite-shm",
+]
+target = "self"
+running = ["firefox.exe"]
+default = false
+note = "Sites you visited. Firefox restores your bookmarks from its latest automatic backup; bookmarks changed since that backup may be lost."
+
+[[rule]]
+id = "privacy.firefox.cookies"
+group = "privacy"
+title = "Firefox cookies"
+paths = [
+  "%APPDATA%/Mozilla/Firefox/Profiles/*/cookies.sqlite",
+  "%APPDATA%/Mozilla/Firefox/Profiles/*/cookies.sqlite-wal",
+  "%APPDATA%/Mozilla/Firefox/Profiles/*/cookies.sqlite-shm",
+]
+target = "self"
+running = ["firefox.exe"]
+default = false
+note = "Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay."

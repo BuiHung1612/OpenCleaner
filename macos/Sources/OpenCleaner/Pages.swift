@@ -209,6 +209,7 @@ struct SettingsView: View {
     @AppStorage("language") private var language = ""
     @AppStorage(Updater.autoKey) private var checkUpdates = true
     @AppStorage(Engine.fastKey) private var fastScans = false
+    @AppStorage("refreshOnFocus") private var refreshOnFocus = false
     @State private var languageChanged = false
     @State private var exclusions: [String] = []
     @AppStorage("largeMiB") private var largeMiB = 500

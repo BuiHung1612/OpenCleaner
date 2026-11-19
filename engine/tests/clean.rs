@@ -423,6 +423,62 @@ fn shipped_rules_never_aim_at_personal_folders() {
     }
 }
 
+#[test]
+fn privacy_rules_are_never_preselected_and_wait_for_their_browser() {
+    for pack in [
+        include_str!("../rules/macos.toml"),
+        include_str!("../rules/windows.toml"),
+    ] {
+        let set = RuleSet::parse(pack).unwrap();
+        let privacy: Vec<_> = set.rules.iter().filter(|r| r.group == "privacy").collect();
+        // Chrome, Edge, Firefox everywhere; history and cookies are separate choices
+        assert!(privacy.len() >= 6);
+        for r in &privacy {
+            assert!(!r.default, "{} must never be preselected", r.id);
+            assert!(!r.running.is_empty(), "{} must wait for its browser", r.id);
+            assert_eq!(r.target, oc_engine::rules::Target::Itself, "{}", r.id);
+            assert!(!r.note.is_empty(), "{} must say what is lost", r.id);
+            assert!(
+                r.id.ends_with(".history") || r.id.ends_with(".cookies"),
+                "{}",
+                r.id
+            );
+        }
+        assert!(!privacy.iter().any(|r| r.id.contains("safari")));
+    }
+}
+
+#[test]
+fn browser_history_goes_with_its_sidecar_files_and_cookies_stay() {
+    let h = Home::new();
+    let profile = "Library/Application Support/Google/Chrome/Default";
+    write(&h.p(&format!("{profile}/History")), 4000);
+    write(&h.p(&format!("{profile}/History-journal")), 100);
+    write(&h.p(&format!("{profile}/Cookies")), 2000);
+    write(&h.p(&format!("{profile}/Bookmarks")), 500);
+    // the removal checks the real running apps again: name a browser that is never running
+    let pack = include_str!("../rules/macos.toml").replace("com.google.Chrome", "oc.test.browser");
+    let set = RuleSet::parse(&pack).unwrap();
+
+    let busy = scan(&h, &set, &Running::of(&["oc.test.browser"]));
+    assert_eq!(
+        rule(&busy, "privacy.chrome.history").unwrap().status,
+        "in_use"
+    );
+
+    let plan = scan(&h, &set, &Running::default());
+    assert_eq!(rule(&plan, "privacy.chrome.history").unwrap().items, 2);
+    assert_eq!(rule(&plan, "privacy.chrome.cookies").unwrap().items, 1);
+    run(&h, &plan, &["privacy.chrome.history"]);
+    assert!(!h.p(&format!("{profile}/History")).exists());
+    assert!(!h.p(&format!("{profile}/History-journal")).exists());
+    assert!(
+        h.p(&format!("{profile}/Cookies")).exists(),
+        "cookies were not chosen"
+    );
+    assert!(h.p(&format!("{profile}/Bookmarks")).exists());
+}
+
 #[allow(dead_code)]
 fn exists(p: &Path) -> bool {
     p.exists()

@@ -106,6 +106,17 @@ enum Request {
     TouchidScript {
         enable: bool,
     },
+    /// What starts at login (`items`).
+    StartupItems,
+    /// Turns off one of the user's startup items (`path` and `label` as listed).
+    DisableStartup {
+        path: PathBuf,
+        #[serde(default)]
+        label: String,
+    },
+    /// macOS: apps allowed to use the camera, microphone, screen, all files or
+    /// accessibility (`grants`), or `needs_full_disk_access`.
+    Permissions,
     /// Past cleanups, newest first.
     History {
         #[serde(default = "history_limit")]
@@ -243,6 +254,23 @@ pub fn call(request: &str) -> Value {
                 .collect();
             json!({"ok": true, "results": results})
         }
+        Ok(Request::StartupItems) => {
+            json!({"ok": true, "items": crate::startup::list(ctx())})
+        }
+        Ok(Request::DisableStartup { path, label }) => {
+            match crate::startup::disable(ctx(), &path, &label) {
+                Ok(()) => json!({"ok": true}),
+                Err(e) => json!({"ok": false, "error": e}),
+            }
+        }
+        Ok(Request::Permissions) => {
+            #[cfg(target_os = "macos")]
+            let mut v = crate::startup::permissions(ctx());
+            #[cfg(not(target_os = "macos"))]
+            let mut v = json!({"grants": [], "needs_full_disk_access": false});
+            v["ok"] = json!(true);
+            v
+        }
         Ok(Request::History { limit }) => {
             let mut v = ledger::sessions(ctx(), limit);
             v["ok"] = json!(true);
@@ -305,7 +333,10 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         | Request::Maintenance
         | Request::RunUninstaller { .. }
         | Request::Optimize { .. }
-        | Request::TouchidScript { .. } => emit(json!({"event": "error", "error": "use call"})),
+        | Request::TouchidScript { .. }
+        | Request::StartupItems
+        | Request::DisableStartup { .. }
+        | Request::Permissions => emit(json!({"event": "error", "error": "use call"})),
         Request::Apps => {
             let list = apps::list(ctx(), &procs::Running::snapshot());
             emit(json!({"event": "apps", "apps": list}));

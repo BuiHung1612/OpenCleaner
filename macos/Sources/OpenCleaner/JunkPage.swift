@@ -230,6 +230,10 @@ struct JunkPage: View {
                                 Text(tr(group.title.string ?? "")).font(.system(size: 13, weight: .semibold)).foregroundStyle(.dim)
                                     .padding(.leading, 12)
                                 ForEach(rules, id: \.id.string) { rule in ruleRow(rule) }
+                                if group.id.string == "privacy" {
+                                    Text("Safari is not listed: macOS protects its history and cookies.")
+                                        .font(.system(size: 12)).foregroundStyle(.dim).padding(.leading, 12)
+                                }
                             }
                         }
                     }

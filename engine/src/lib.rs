@@ -21,6 +21,7 @@ pub mod size;
 #[cfg(target_os = "macos")]
 pub mod slim;
 pub mod space;
+pub mod startup;
 pub mod status;
 pub mod trash;
 

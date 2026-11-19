@@ -293,3 +293,40 @@
 "OpenCleaner never scans or removes anything inside these folders." = "OpenCleaner không bao giờ quét hay xóa bất cứ thứ gì trong các thư mục này.";
 "Put Back" = "Đưa lại";
 "The oldest copy stays" = "Bản cũ nhất được giữ lại";
+
+/* Privacy (System Junk) */
+"Privacy" = "Quyền riêng tư";
+"Chrome history" = "Lịch sử Chrome";
+"Chrome cookies" = "Cookie Chrome";
+"Edge history" = "Lịch sử Edge";
+"Edge cookies" = "Cookie Edge";
+"Brave history" = "Lịch sử Brave";
+"Brave cookies" = "Cookie Brave";
+"Arc history" = "Lịch sử Arc";
+"Arc cookies" = "Cookie Arc";
+"Firefox history" = "Lịch sử Firefox";
+"Firefox cookies" = "Cookie Firefox";
+"Sites you visited and your download list. Bookmarks, passwords and open tabs stay." = "Các trang bạn đã xem và danh sách tải về. Dấu trang, mật khẩu và các tab đang mở được giữ nguyên.";
+"Signs you out of every website and forgets site preferences kept in cookies. Saved passwords stay." = "Bạn sẽ bị đăng xuất khỏi mọi trang web và mất các tùy chọn trang lưu trong cookie. Mật khẩu đã lưu được giữ nguyên.";
+"Sites you visited. Firefox restores your bookmarks from its latest automatic backup; bookmarks changed since that backup may be lost." = "Các trang bạn đã xem. Firefox khôi phục dấu trang từ bản sao lưu tự động gần nhất; dấu trang thay đổi sau bản sao lưu đó có thể bị mất.";
+"Safari is not listed: macOS protects its history and cookies." = "Không có Safari: macOS bảo vệ lịch sử và cookie của Safari.";
+
+/* Startup Items */
+"Startup Items" = "Mục khởi động";
+"See what starts when you log in, turn off what you do not need, and which apps hold privacy permissions." = "Xem những gì chạy khi bạn đăng nhập, tắt những gì không cần, và ứng dụng nào đang giữ quyền riêng tư.";
+"Turned-off items go to the Trash" = "Mục đã tắt được chuyển vào Thùng rác";
+"System items are shown, never changed" = "Mục hệ thống chỉ hiển thị, không bao giờ bị thay đổi";
+"Starts at login" = "Chạy khi đăng nhập";
+"Login items added in System Settings are not listed here." = "Các mục đăng nhập thêm trong Cài đặt hệ thống không có ở đây.";
+"Open Login Items" = "Mở Mục đăng nhập";
+"System, needs admin" = "Hệ thống, cần quyền quản trị";
+"Turn off %@?" = "Tắt %@?";
+"It stops now and no longer starts at login. Its file goes to the Trash, so you can put it back." = "Mục này dừng ngay và không còn chạy khi đăng nhập. Tệp của nó được chuyển vào Thùng rác để bạn có thể khôi phục.";
+"Permissions" = "Quyền";
+"Camera" = "Camera";
+"Microphone" = "Micrô";
+"Screen Recording" = "Ghi màn hình";
+"Full Disk Access" = "Truy cập toàn bộ ổ đĩa";
+"Accessibility" = "Trợ năng";
+"Seeing which apps hold permissions needs Full Disk Access for OpenCleaner." = "Để xem ứng dụng nào giữ quyền, OpenCleaner cần quyền Truy cập toàn bộ ổ đĩa.";
+"Open Privacy & Security" = "Mở Quyền riêng tư & Bảo mật";
