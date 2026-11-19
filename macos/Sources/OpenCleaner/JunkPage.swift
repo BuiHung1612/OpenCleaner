@@ -124,7 +124,9 @@ struct JunkPage: View {
     private var status: String {
         switch model.phase {
         case .idle: return ""
-        case .scanning: return String(localized: "Scanning… \(bytes(model.plan.bytes.double ?? 0)) found so far")
+        case .scanning:
+            let found = model.plan.bytes.double ?? 0
+            return found > 0 ? String(localized: "Scanning… \(bytes(found)) found so far") : String(localized: "Scanning…")
         case .review: return String(localized: "\(bytes(model.plan.bytes.double ?? 0)) found. Nothing has been removed yet.")
         case .cleaning:
             let p = model.cleanProgress
@@ -147,7 +149,16 @@ struct JunkPage: View {
                             ForEach(group.rules.array, id: \.id.string) { rule in ruleRow(rule) }
                         }
                     }
+                    if model.groups.isEmpty {
+                        HStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+                            Text("Looking through caches, logs and app data…").foregroundStyle(.dim)
+                        }
+                        .padding(8)
+                    }
                 }
+                // fill the panel even before the first rows arrive
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
             }
             .brightScroller()

@@ -111,6 +111,7 @@ struct PicksList: View {
                     Text("Nothing found.").foregroundStyle(.dim).padding(20)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
         }
         .brightScroller()
