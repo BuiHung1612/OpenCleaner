@@ -219,6 +219,10 @@ fn freed_excludes_clone_blocks_shared_with_files_outside() {
         .unwrap();
     assert!(ok.success());
     write(&t.path().join("d/own"), 1 << 20);
+    // APFS may allocate blocks only when the data reaches the disk: flush before measuring
+    for f in ["orig", "d/clone", "d/own"] {
+        std::fs::File::open(t.path().join(f)).unwrap().sync_all().unwrap();
+    }
     let freed = size::measure(&t.path().join("d"), &opts(Mode::Freed))
         .unwrap()
         .bytes;
