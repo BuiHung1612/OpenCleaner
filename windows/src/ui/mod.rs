@@ -3,6 +3,7 @@
 //! is painted (double-buffered) and clicks are matched against the areas the last paint
 //! registered. Long engine work runs on threads (`jobs`) and comes back as messages.
 
+mod auto;
 mod gfx;
 mod jobs;
 mod pages;
@@ -107,6 +108,9 @@ pub fn run() {
         style_frame(hwnd, pages::Module::Dashboard.palette().0);
         ShowWindow(hwnd, SW_SHOW);
         with(|st| st.on_show_module());
+        // scheduled cleaning: now, then every hour
+        with(|st| st.auto_clean_check());
+        SetTimer(hwnd, TIMER_AUTO, 3_600_000, None);
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
@@ -144,6 +148,8 @@ pub fn invalidate(hwnd: HWND) {
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const TIMER_SPIN: usize = 1;
+/// Hourly: is a scheduled clean due?
+const TIMER_AUTO: usize = 2;
 /// Keeps a timer running while something animates (busy buttons). The dashboard has no
 /// timer: it reads once, then on the refresh button (or on focus, if chosen in Settings).
 pub fn timers(hwnd: HWND, spinning: bool) {
@@ -335,6 +341,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             invalidate(hwnd);
             0
         }
+        WM_TIMER if wparam == TIMER_AUTO => {
+            with(|st| st.auto_clean_check());
+            0
+        }
         WM_TIMER => {
             // only the spinners move: repaint their squares
             let s = scale(hwnd);
@@ -359,6 +369,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_DESTROY => {
+            auto::remove_tray(hwnd);
             unsafe { PostQuitMessage(0) };
             0
         }

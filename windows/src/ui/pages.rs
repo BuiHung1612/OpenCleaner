@@ -3,6 +3,7 @@
 //! bottom with pill buttons beside it. Each paint registers the areas that act on a click.
 
 use super::gfx::{Align, Canvas, Fonts, R, WHITE, amber, argb, backdrop, dim, fg, hex, light, mint};
+use super::auto;
 use super::jobs::{self, Job};
 use super::{confirm, invalidate, reveal, style_frame, timers};
 use serde_json::{Value, json};
@@ -19,6 +20,7 @@ pub enum Module {
     Installers,
     Projects,
     Uninstaller,
+    Startup,
     SpaceLens,
     LargeOld,
     Duplicates,
@@ -33,7 +35,7 @@ const PICK_MODULES: [Module; 4] = [Module::Installers, Module::Projects, Module:
 const SECTIONS: &[(&str, &[Module])] = &[
     ("", &[Module::Dashboard]),
     ("Cleanup", &[Module::Junk, Module::Installers, Module::Projects]),
-    ("Applications", &[Module::Uninstaller]),
+    ("Applications", &[Module::Uninstaller, Module::Startup]),
     ("Files", &[Module::SpaceLens, Module::LargeOld, Module::Duplicates]),
     (" ", &[Module::History, Module::Settings]),
 ];
@@ -74,6 +76,7 @@ impl Module {
             Module::Junk => Some("clean"),
             Module::Installers => Some("installer"),
             Module::Projects => Some("purge"),
+            Module::Startup => Some("startup"),
             _ => None,
         }
     }
@@ -117,6 +120,7 @@ impl Module {
             Module::Installers => '\u{E896}',
             Module::Projects => '\u{E943}',
             Module::Uninstaller => '\u{E71D}', // AllApps (was ChromeClose, read as "close window")
+            Module::Startup => '\u{E7E8}',    // PowerButton
             Module::SpaceLens => '\u{EB05}',
             Module::LargeOld => '\u{E8A5}',    // Document (was Recent, next to History's clock)
             Module::Duplicates => '\u{E8C8}',
@@ -132,6 +136,7 @@ impl Module {
             Module::Installers => include_bytes!("../../art/installer.png"),
             Module::Projects => include_bytes!("../../art/purge.png"),
             Module::Uninstaller => include_bytes!("../../art/uninstaller.png"),
+            Module::Startup => include_bytes!("../../art/startup.png"),
             Module::SpaceLens => include_bytes!("../../art/spaceLens.png"),
             Module::History => include_bytes!("../../art/history.png"),
             Module::LargeOld => include_bytes!("../../art/large_old.png"),
@@ -185,6 +190,7 @@ const FILE: char = '\u{E7C3}';
 const DRIVE: char = '\u{EDA2}';
 const OPENED: char = '\u{E70D}';
 const MINUS: char = '\u{E738}';
+const LOCK: char = '\u{E72E}';
 
 // ---------------------------------------------------------------- actions
 
@@ -224,6 +230,13 @@ pub enum Action {
     AppsReload,
     FastToggle,
     FocusRefreshToggle,
+    /// turn off the startup item at this index (asks first)
+    StartupOff(usize),
+    StartupReload,
+    /// Windows Settings > Apps > Startup
+    StartupSettings,
+    AutoCleanToggle,
+    AutoPeriodToggle,
 }
 
 impl Action {
@@ -240,6 +253,8 @@ impl Action {
                 | Action::SpaceToggle(_)
                 | Action::FastToggle
                 | Action::FocusRefreshToggle
+                | Action::AutoCleanToggle
+                | Action::AutoPeriodToggle
         )
     }
 }
@@ -428,6 +443,13 @@ struct Apps {
 }
 
 #[derive(Default)]
+struct Startup {
+    items: Vec<Value>,
+    message: Option<String>,
+    scroll: f32,
+}
+
+#[derive(Default)]
 struct History {
     sessions: Vec<Value>,
     log: Option<String>,
@@ -454,11 +476,19 @@ pub struct State {
     large: Picks,
     dups: Picks,
     apps: Apps,
+    startup: Startup,
     history: History,
     /// Settings: scans and removals take every core
     fast: bool,
     /// re-read the dashboard when the window comes to the front (off: only the button)
     refresh_on_focus: bool,
+    /// Settings: clean System Junk on a schedule while the app is open
+    auto_clean: bool,
+    auto_monthly: bool,
+    /// the scheduled scan, then its clean
+    auto_job: Option<Job>,
+    /// what the last scheduled clean did, this session
+    auto_note: Option<String>,
     /// this paint's controls in order, unclipped, with the scroll panel they sit in:
     /// Tab moves along all of them, Up/Down along the tick boxes
     focusables: Vec<(R, Option<R>, Action)>,
@@ -498,9 +528,14 @@ impl State {
             large: Picks::default(),
             dups: Picks::default(),
             apps: Apps::default(),
+            startup: Startup::default(),
             history: History::default(),
             fast: set_fast(super::reg_dword(super::SETTINGS_KEY, FAST_VALUE) == Some(1)),
             refresh_on_focus: super::reg_dword(super::SETTINGS_KEY, FOCUS_REFRESH_VALUE) == Some(1),
+            auto_clean: super::reg_dword(super::SETTINGS_KEY, auto::ENABLED_VALUE) == Some(1),
+            auto_monthly: super::reg_dword(super::SETTINGS_KEY, auto::MONTHLY_VALUE) == Some(1),
+            auto_job: None,
+            auto_note: None,
             focusables: Vec::new(),
             focus: None,
             default_action: None,
@@ -585,6 +620,7 @@ impl State {
             Module::Junk => &mut self.junk.scroll,
             m @ (Module::Installers | Module::Projects | Module::LargeOld | Module::Duplicates) => &mut self.picks(m).scroll,
             Module::Uninstaller => &mut self.apps.scroll,
+            Module::Startup => &mut self.startup.scroll,
             Module::History => &mut self.history.scroll,
             Module::Dashboard | Module::Settings => return,
         };
@@ -617,6 +653,7 @@ impl State {
             Module::Dashboard if self.dash.read_at.is_none() => self.refresh_dashboard(),
             Module::Uninstaller if !self.apps.loaded && self.apps.job.is_none() => self.load_apps(),
             Module::History => self.load_history(),
+            Module::Startup => self.load_startup(),
             _ => {}
         }
         style_frame(self.hwnd, self.module.palette().0);
@@ -659,6 +696,7 @@ impl State {
             m if PICK_MODULES.contains(&m) && self.pick(m).job.is_none() => Some(Action::PickFind(m)),
             Module::Uninstaller if self.apps.job.is_none() => Some(Action::AppsReload),
             Module::SpaceLens if !self.space.stack.is_empty() => Some(Action::SpaceRefresh),
+            Module::Startup => Some(Action::StartupReload),
             _ => None,
         }
     }
@@ -717,6 +755,24 @@ impl State {
         self.apps.loaded = false;
         self.apps.job = Some(jobs::start(self.hwnd, json!({"op": "apps"})));
         self.update_timers();
+    }
+
+    /// Quick (a few registry keys and two folders): read on the UI thread.
+    fn load_startup(&mut self) {
+        self.startup.items = jobs::call(json!({"op": "startup_items"}))["items"].as_array().cloned().unwrap_or_default();
+    }
+
+    /// A scheduled clean, if it is on, due and nothing else is cleaning junk: scan, then
+    /// clean only the safe rules (`on_event`).
+    pub fn auto_clean_check(&mut self) {
+        let now = auto::now();
+        let last = super::reg_dword(super::SETTINGS_KEY, auto::LAST_VALUE).map(u64::from);
+        if !self.auto_clean || self.auto_job.is_some() || self.junk.job.is_some() || !auto::is_due(last, now, self.auto_monthly) {
+            return;
+        }
+        // stamped before running: a failing clean is retried next period, not every hour
+        super::set_reg_dword(super::SETTINGS_KEY, auto::LAST_VALUE, now as u32);
+        self.auto_job = Some(jobs::start(self.hwnd, json!({"op": "scan"})));
     }
 
     fn load_history(&mut self) {
@@ -816,6 +872,28 @@ impl State {
                 }
                 _ => {}
             }
+        } else if is(&self.auto_job) {
+            match kind.as_str() {
+                "plan" => {
+                    let rules = auto::safe_rules(&e);
+                    match e["plan"].as_u64() {
+                        Some(plan) if !rules.is_empty() => {
+                            self.auto_job = Some(jobs::start(self.hwnd, json!({"op": "clean", "plan": plan, "rules": rules})));
+                        }
+                        _ => self.auto_note = Some("Nothing to clean.".into()),
+                    }
+                }
+                "cleaned" => {
+                    let (title, text) = match e["error"].as_str() {
+                        Some(err) => ("Scheduled cleaning failed".to_string(), err.to_string()),
+                        None => (format!("Freed {}", bytes(e["bytes"].as_f64())), "OpenCleaner cleaned System Junk: only the items selected by default.".into()),
+                    };
+                    auto::notify(self.hwnd, &title, &text);
+                    self.auto_note = Some(title);
+                }
+                "done" => self.auto_job = None,
+                _ => {}
+            }
         } else if is(&self.apps.job) {
             match kind.as_str() {
                 "apps" => {
@@ -849,6 +927,7 @@ impl State {
             Module::Junk => self.draw_junk(c, page),
             m @ (Module::Installers | Module::Projects | Module::LargeOld | Module::Duplicates) => self.draw_picks(c, page, m),
             Module::Uninstaller => self.draw_apps(c, page),
+            Module::Startup => self.draw_startup(c, page),
             Module::SpaceLens => self.draw_space(c, page),
             Module::History => self.draw_history(c, page),
             Module::Settings => self.draw_settings(c, page),
@@ -1181,6 +1260,11 @@ impl State {
                     for g in plan["groups"].as_array().into_iter().flatten() {
                         c.text(R::new(panel.x + 20.0, yy, panel.w - 40.0, 24.0), g["title"].as_str().unwrap_or(""), 13.0, true, dim(), Align::Left);
                         yy += 28.0;
+                        if g["id"] == "privacy" {
+                            let note = "Never ticked for you. Close the browser first. Removing cookies signs you out of websites.";
+                            c.text(R::new(panel.x + 20.0, yy - 4.0, panel.w - 40.0, 20.0), note, 12.0, false, dim(), Align::Left);
+                            yy += 20.0;
+                        }
                         for rule in g["rules"].as_array().into_iter().flatten() {
                             yy = st.junk_rule_row(c, panel, yy, rule, review);
                         }
@@ -1708,6 +1792,54 @@ impl State {
         self.update_timers();
     }
 
+    // ------------------------------------------------------------ Startup Items
+
+    fn draw_startup(&mut self, c: &mut Canvas, page: R) {
+        let error = self.startup.message.clone();
+        let status = if error.is_some() { "" } else { "What starts when you sign in. Turn off what you do not need; system items are only shown." };
+        let y = self.header(c, page.inset(18.0, 0.0), Module::Startup, Phase::Idle, &Module::Startup.title(), status);
+        if let Some(e) = error {
+            // in place of the status line (`header` puts it there)
+            c.text(R::new(page.x + 108.0, page.y + 70.0, page.w - 200.0, 22.0), &e, 14.0, false, amber(), Align::Left);
+        }
+        self.icon_pill(c, page.right() - 58.0, page.y + 66.0, REFRESH, Action::StartupReload);
+        let foot = page.bottom() - 46.0;
+        let panel = R::new(page.x + 18.0, y, page.w - 36.0, foot - 34.0 - y);
+        let items = std::mem::take(&mut self.startup.items);
+        let scroll = self.startup.scroll;
+        self.scroll_panel(c, panel, scroll, |st, c, mut yy| {
+            let start = yy;
+            c.text(R::new(panel.x + 20.0, yy, panel.w - 40.0, 24.0), "Starts when you sign in", 13.0, true, dim(), Align::Left);
+            yy += 28.0;
+            if items.is_empty() {
+                c.text(R::new(panel.x + 20.0, yy, panel.w - 40.0, 24.0), "Nothing found.", 14.0, false, dim(), Align::Left);
+                yy += 30.0;
+            }
+            for (i, it) in items.iter().enumerate() {
+                let row = R::new(panel.x + 10.0, yy, panel.w - 20.0, 52.0);
+                yy += 54.0;
+                let name = it["name"].as_str().unwrap_or("?");
+                let program = it["program"].as_str().filter(|p| !p.is_empty()).or(it["label"].as_str()).unwrap_or("");
+                c.text(R::new(row.x + 12.0, row.y + 6.0, row.w - 230.0, 22.0), name, 14.0, true, fg(), Align::Left);
+                c.text(R::new(row.x + 12.0, row.y + 28.0, row.w - 230.0, 18.0), program, 12.0, false, dim(), Align::Left);
+                let right = R::new(row.right() - 210.0, row.y, 200.0, row.h);
+                if it["scope"] != "user" {
+                    c.text(R::new(right.x, right.y, right.w - 26.0, right.h), "System, needs admin", 12.0, false, dim(), Align::Right);
+                    c.icon(R::new(right.right() - 20.0, right.y, 20.0, right.h), LOCK, 12.0, dim());
+                } else if it["enabled"] == false {
+                    c.text(right, "Off", 12.0, false, dim(), Align::Right);
+                } else {
+                    st.pill_right(c, right.right(), row.y + 26.0, "Turn Off", Action::StartupOff(i));
+                }
+            }
+            yy - start
+        });
+        self.startup.items = items;
+        let note = "Scheduled tasks and services are not listed. Windows Settings shows startup apps too.";
+        let w = self.pill_right(c, page.right() - 18.0, foot, "Open Startup Apps", Action::StartupSettings);
+        c.text(R::new(page.x + 20.0, foot - 12.0, page.w - w - 60.0, 24.0), note, 12.0, false, dim(), Align::Left);
+    }
+
     // ------------------------------------------------------------ History
 
     fn draw_history(&mut self, c: &mut Canvas, page: R) {
@@ -1730,6 +1862,7 @@ impl State {
                     "large_old" => Module::LargeOld.title(),
                     "duplicates" => Module::Duplicates.title(),
                     "uninstall" => "Uninstaller".into(),
+                    "startup" => Module::Startup.title(),
                     other => other.to_string(),
                 };
                 c.text(R::new(panel.x + 20.0, yy + 4.0, panel.w * 0.6, 20.0), &title, 14.0, true, fg(), Align::Left);
@@ -1749,7 +1882,7 @@ impl State {
 
     fn draw_settings(&mut self, c: &mut Canvas, page: R) {
         let y = self.header(c, page.inset(18.0, 0.0), Module::Settings, Phase::Idle, "Settings", "Light or dark follows the Windows app theme.");
-        let panel = R::new(page.x + 18.0, y, page.w - 36.0, 168.0);
+        let panel = R::new(page.x + 18.0, y, page.w - 36.0, 140.0);
         c.glass(panel, 20.0);
         c.text(R::new(panel.x + 20.0, panel.y + 12.0, 200.0, 20.0), "Engine", 13.0, true, dim(), Align::Left);
         self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Faster scans", self.fast, Action::FastToggle);
@@ -1759,7 +1892,6 @@ impl State {
             13.0,
             dim(),
         );
-        c.text(R::new(panel.x + 20.0, panel.bottom() - 30.0, panel.w - 40.0, 20.0), &format!("OpenCleaner engine {}", self.version), 12.0, false, dim(), Align::Left);
 
         let panel = R::new(page.x + 18.0, panel.bottom() + 16.0, page.w - 36.0, 150.0);
         c.glass(panel, 20.0);
@@ -1775,6 +1907,35 @@ impl State {
             R::new(panel.x + 20.0, panel.y + 82.0, panel.w - 40.0, 60.0),
             "Off (recommended): the dashboard reads once when you first open it; press Refresh (or F5) for new numbers, so they may be minutes old. On: numbers are fresh whenever you come back, but every switch back costs a short CPU sample and a redraw (at most once per 10 seconds).",
             13.0,
+            dim(),
+        );
+
+        let panel = R::new(page.x + 18.0, panel.bottom() + 16.0, page.w - 36.0, 150.0);
+        c.glass(panel, 20.0);
+        c.text(R::new(panel.x + 20.0, panel.y + 12.0, 200.0, 20.0), "Automation", 13.0, true, dim(), Align::Left);
+        let last = super::reg_dword(super::SETTINGS_KEY, auto::LAST_VALUE).filter(|&t| t > 0);
+        let last = match (last, &self.auto_job, &self.auto_note) {
+            (_, Some(_), _) => "Cleaning now…".to_string(),
+            (Some(t), _, note) => format!("Last run {}{}", when(t.into()), note.as_ref().map(|n| format!(" · {n}")).unwrap_or_default()),
+            (None, ..) => String::new(),
+        };
+        c.text(R::new(panel.x + 220.0, panel.y + 12.0, panel.w - 240.0, 20.0), &last, 12.0, false, dim(), Align::Right);
+        self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Clean automatically", self.auto_clean, Action::AutoCleanToggle);
+        c.text(R::new(panel.x + 20.0, panel.y + 80.0, 120.0, 32.0), "How often", 14.0, false, if self.auto_clean { fg() } else { dim() }, Align::Left);
+        for (i, (label, on)) in [("Weekly", !self.auto_monthly), ("Monthly", self.auto_monthly)].into_iter().enumerate() {
+            let r = R::new(panel.x + 140.0 + i as f32 * 104.0, panel.y + 80.0, 96.0, 32.0);
+            let hot = self.auto_clean && !on && self.hot(r);
+            c.rounded(r, 16.0, Some(argb(fg(), if on { 60 } else if hot { 36 } else { 14 })), Some(argb(fg(), 50)));
+            c.text(r, label, 13.0, on, if self.auto_clean { fg() } else { dim() }, Align::Center);
+            // only the other choice acts, and only while scheduled cleaning is on
+            if self.auto_clean && !on {
+                self.hit(r, Action::AutoPeriodToggle);
+            }
+        }
+        c.para(
+            R::new(panel.x + 20.0, panel.y + 116.0, panel.w - 40.0, 34.0),
+            "Runs System Junk while OpenCleaner is open (checked at start and every hour), removing only the items selected by default. The Recycle Bin and browser privacy items are never touched.",
+            12.0,
             dim(),
         );
     }
@@ -2035,6 +2196,44 @@ pub fn perform(hwnd: HWND, action: Action) {
             with(|st| {
                 st.refresh_on_focus = !st.refresh_on_focus;
                 super::set_reg_dword(super::SETTINGS_KEY, FOCUS_REFRESH_VALUE, st.refresh_on_focus as u32);
+            });
+        }
+        Action::AutoCleanToggle => {
+            with(|st| {
+                st.auto_clean = !st.auto_clean;
+                super::set_reg_dword(super::SETTINGS_KEY, auto::ENABLED_VALUE, st.auto_clean as u32);
+            });
+        }
+        Action::AutoPeriodToggle => {
+            with(|st| {
+                st.auto_monthly = !st.auto_monthly;
+                super::set_reg_dword(super::SETTINGS_KEY, auto::MONTHLY_VALUE, st.auto_monthly as u32);
+            });
+        }
+        Action::StartupReload => {
+            with(|st| {
+                st.startup.message = None;
+                st.load_startup();
+            });
+        }
+        Action::StartupSettings => {
+            let _ = std::process::Command::new("explorer.exe").arg("ms-settings:startupapps").spawn();
+        }
+        Action::StartupOff(i) => {
+            let Some(Some(item)) = with(|st| st.startup.items.get(i).cloned()) else { return };
+            let name = item["name"].as_str().unwrap_or("?").to_string();
+            let how = if item["path"].as_str().is_some_and(|p| p.starts_with("HKCU")) {
+                "Its registry entry is removed; the command is kept in OpenCleaner's history."
+            } else {
+                "Its shortcut goes to the Recycle Bin, so you can put it back."
+            };
+            if !confirm(hwnd, &format!("Turn off {name}?\n\nIt no longer starts when you sign in (if it is running now, it keeps running until you close it). {how}")) {
+                return;
+            }
+            let reply = jobs::call(json!({"op": "disable_startup", "path": item["path"], "label": item["label"]}));
+            with(|st| {
+                st.startup.message = (reply["ok"] != true).then(|| format!("Could not turn off {name}: {}", reply["error"].as_str().unwrap_or("unknown error")));
+                st.load_startup();
             });
         }
         Action::AppsReload => {
