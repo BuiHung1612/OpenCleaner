@@ -5,6 +5,7 @@ use crate::context::Context;
 use crate::fs::{self, Detail, Kind};
 use crate::rules::{is_clean_path, is_within};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Why an item is refused.
 pub type Refusal = &'static str;
@@ -128,6 +129,9 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
     if !is_clean_path(item) {
         return Err("not a plain absolute path");
     }
+    if excluded(item, ctx) {
+        return Err("excluded in Settings");
+    }
     let name = item
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -191,6 +195,46 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
     }
     no_symlink_between(&ctx.home, item)?;
     Ok(())
+}
+
+/// The folders the user excluded in Settings, read once per data folder (tests each have
+/// their own) and kept until `set_exclusions` replaces them.
+static EXCLUDED: Mutex<Vec<(PathBuf, Vec<PathBuf>)>> = Mutex::new(Vec::new());
+
+fn exclusions_file(ctx: &Context) -> PathBuf {
+    ctx.data_dir.join("exclusions.json")
+}
+
+/// Folders never scanned into or removed from.
+pub fn exclusions(ctx: &Context) -> Vec<PathBuf> {
+    let mut cache = EXCLUDED.lock().unwrap();
+    if let Some((_, list)) = cache.iter().find(|(d, _)| *d == ctx.data_dir) {
+        return list.clone();
+    }
+    let list: Vec<PathBuf> = std::fs::read(exclusions_file(ctx))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    cache.push((ctx.data_dir.clone(), list.clone()));
+    list
+}
+
+/// Saves the list; only plain absolute paths are kept.
+pub fn set_exclusions(ctx: &Context, paths: Vec<PathBuf>) -> std::io::Result<()> {
+    let mut list: Vec<PathBuf> = paths.into_iter().filter(|p| is_clean_path(p)).collect();
+    list.sort();
+    list.dedup();
+    std::fs::create_dir_all(&ctx.data_dir)?;
+    std::fs::write(exclusions_file(ctx), serde_json::to_vec_pretty(&list)?)?;
+    let mut cache = EXCLUDED.lock().unwrap();
+    cache.retain(|(d, _)| *d != ctx.data_dir);
+    cache.push((ctx.data_dir.clone(), list));
+    Ok(())
+}
+
+/// Inside (or is) a folder the user excluded.
+pub fn excluded(item: &Path, ctx: &Context) -> bool {
+    exclusions(ctx).iter().any(|e| is_within(item, e))
 }
 
 #[cfg(target_os = "macos")]

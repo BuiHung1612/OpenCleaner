@@ -225,7 +225,9 @@ pub fn slim_app(app: &Path) -> io::Result<()> {
         let _ = fs::remove_dir_all(&clone);
         return Err(e);
     }
-    crate::trash::move_to_trash(&old).or_else(|_| fs::remove_dir_all(&old))
+    crate::trash::move_to_trash(&old)
+        .map(|_| ())
+        .or_else(|_| fs::remove_dir_all(&old))
 }
 
 /// Replaces a universal file with its arm64 slice, keeping its permissions.

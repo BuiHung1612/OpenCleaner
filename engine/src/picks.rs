@@ -212,7 +212,7 @@ pub fn execute(
             None => act(pick, &running, ctx),
         };
         let (word, reason) = match &result {
-            Ok(()) => {
+            Ok(_) => {
                 out.removed += 1;
                 out.bytes += pick.bytes;
                 ("removed", None)
@@ -239,6 +239,7 @@ pub fn execute(
             bytes: if word == "removed" { pick.bytes } else { 0 },
             result: word.into(),
             reason,
+            trashed: result.ok().flatten(),
         });
     }
     out.current = None;
@@ -259,7 +260,8 @@ enum Failure {
     Failed(String),
 }
 
-fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<(), Failure> {
+/// On success, where the item went in the Trash (when it went there and the system said).
+fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<Option<PathBuf>, Failure> {
     let (Some(purpose), Some(id)) = (pick.purpose, pick.id) else {
         return Err(Failure::Skipped("not checked".into()));
     };
@@ -278,8 +280,8 @@ fn act(pick: &Pick, running: &Running, ctx: &Context) -> Result<(), Failure> {
     }
     let result = match pick.action {
         Action::Trash => trash::move_to_trash(&pick.path),
-        Action::Delete => remove(&pick.path, id.kind),
-        Action::Slim => slim(&pick.path),
+        Action::Delete => remove(&pick.path, id.kind).map(|()| None),
+        Action::Slim => slim(&pick.path).map(|()| None),
     };
     result.map_err(|e| Failure::Failed(e.to_string()))
 }

@@ -2,10 +2,12 @@
 //! user can put things back from Finder / Explorer.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+/// Moves `path` to the Trash; returns where it went when the system says (macOS), so it
+/// can be put back from History.
 #[cfg(target_os = "macos")]
-pub fn move_to_trash(path: &Path) -> io::Result<()> {
+pub fn move_to_trash(path: &Path) -> io::Result<Option<PathBuf>> {
     // Given something it cannot remove, macOS copies it into the Trash and then reports
     // success or an error depending on the system: never ask it to move what cannot move.
     if !movable(path) {
@@ -35,13 +37,68 @@ fn movable(path: &Path) -> bool {
 }
 
 #[cfg(windows)]
-pub fn move_to_trash(path: &Path) -> io::Result<()> {
-    win::trash(path)
+pub fn move_to_trash(path: &Path) -> io::Result<Option<PathBuf>> {
+    win::trash(path).map(|()| None)
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-pub fn move_to_trash(_path: &Path) -> io::Result<()> {
+pub fn move_to_trash(_path: &Path) -> io::Result<Option<PathBuf>> {
     Err(io::Error::from(io::ErrorKind::Unsupported))
+}
+
+/// Inside a `.Trash` (home) or `.Trashes` (other volumes) folder.
+fn in_trash(path: &Path) -> bool {
+    path.ancestors().skip(1).any(|a| {
+        a.file_name()
+            .is_some_and(|n| n == ".Trash" || n == ".Trashes")
+    })
+}
+
+/// Moves `trashed` (an item in a Trash folder) back to `original`, only if nothing is
+/// there now: an existing file is never replaced.
+pub fn put_back(original: &Path, trashed: &Path) -> io::Result<()> {
+    let refuse = |why: &str| {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            why.to_string(),
+        ))
+    };
+    if !crate::rules::is_clean_path(original) || !crate::rules::is_clean_path(trashed) {
+        return refuse("not a plain absolute path");
+    }
+    if !in_trash(trashed) {
+        return refuse("not in the Trash");
+    }
+    if std::fs::symlink_metadata(trashed).is_err() {
+        return refuse("no longer in the Trash");
+    }
+    if std::fs::symlink_metadata(original).is_ok() {
+        return refuse("something else is there now");
+    }
+    if !original.parent().is_some_and(|p| p.is_dir()) {
+        return refuse("its folder is gone");
+    }
+    rename_new(trashed, original)
+}
+
+/// A rename that fails when the target exists (no check-then-rename race).
+#[cfg(target_os = "macos")]
+fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| CString::new(p.as_os_str().as_bytes()).map_err(io::Error::other);
+    let (from, to) = (c(from)?, c(to)?);
+    if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+// ponytail: checked just before in put_back; no Trash location is recorded off macOS anyway
+#[cfg(not(target_os = "macos"))]
+fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::rename(from, to)
 }
 
 /// `-[NSFileManager trashItemAtURL:resultingItemURL:error:]` through the Objective-C
@@ -51,7 +108,7 @@ mod mac {
     use std::ffi::{CString, c_char, c_void};
     use std::io;
     use std::os::unix::ffi::OsStrExt;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     type Id = *mut c_void;
     type Sel = *mut c_void;
@@ -78,7 +135,7 @@ mod mac {
         unsafe { sel_registerName(c.as_ptr()) }
     }
 
-    pub fn trash(path: &Path) -> io::Result<()> {
+    pub fn trash(path: &Path) -> io::Result<Option<PathBuf>> {
         let c_path = CString::new(path.as_os_str().as_bytes())
             .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         unsafe {
@@ -112,29 +169,36 @@ mod mac {
                 ) != 0;
             let utf8: unsafe extern "C" fn(Id, Sel) -> *const c_char =
                 std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let resulting_path = || {
+                if resulting.is_null() {
+                    return None;
+                }
+                let p = send(resulting, sel("path"));
+                let text = if p.is_null() {
+                    std::ptr::null()
+                } else {
+                    utf8(p, sel("UTF8String"))
+                };
+                (!text.is_null()).then(|| {
+                    PathBuf::from(
+                        std::ffi::CStr::from_ptr(text)
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                })
+            };
             let result = if ok && std::fs::symlink_metadata(path).is_ok() {
                 // What it cannot remove (an item on a read-only or protected volume) is
                 // *copied* to the Trash and reported as trashed. Undo the copy and say so.
-                if !resulting.is_null() {
-                    let copy_path = send(resulting, sel("path"));
-                    let text = if copy_path.is_null() {
-                        std::ptr::null()
-                    } else {
-                        utf8(copy_path, sel("UTF8String"))
-                    };
-                    if !text.is_null() {
-                        let copy = std::ffi::CStr::from_ptr(text)
-                            .to_string_lossy()
-                            .into_owned();
-                        super::remove_trash_copy(Path::new(&copy));
-                    }
+                if let Some(copy) = resulting_path() {
+                    super::remove_trash_copy(&copy);
                 }
                 Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "it cannot be moved (read-only or protected)",
                 ))
             } else if ok {
-                Ok(())
+                Ok(resulting_path())
             } else if !error.is_null() {
                 let desc = send(error, sel("localizedDescription"));
                 let text = utf8(desc, sel("UTF8String"));
@@ -159,11 +223,7 @@ mod mac {
 /// inside a `.Trash` (home) or `.Trashes` (other volumes) folder.
 #[cfg(target_os = "macos")]
 fn remove_trash_copy(copy: &Path) {
-    let in_trash = copy.ancestors().skip(1).any(|a| {
-        a.file_name()
-            .is_some_and(|n| n == ".Trash" || n == ".Trashes")
-    });
-    if !in_trash {
+    if !in_trash(copy) {
         return;
     }
     let _ = match std::fs::symlink_metadata(copy) {

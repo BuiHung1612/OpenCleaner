@@ -76,6 +76,36 @@
       ]
     },
     {
+      "id": "large_old",
+      "group": "Files",
+      "title": "Large & Old Files",
+      "subtitle": "Find big files you have not opened for months, and old screenshots on the Desktop.",
+      "points": [
+        "Looks only in your own folders",
+        "Everything goes to the Trash"
+      ],
+      "icon": "doc.badge.clock",
+      "colors": [
+        "#B8860B",
+        "#5A2A12"
+      ]
+    },
+    {
+      "id": "duplicates",
+      "group": "Files",
+      "title": "Duplicates",
+      "subtitle": "Find files whose contents are exactly the same, and keep one copy of each.",
+      "points": [
+        "Compares every byte, not just names",
+        "The oldest copy stays"
+      ],
+      "icon": "doc.on.doc",
+      "colors": [
+        "#2E8B57",
+        "#1A2F5A"
+      ]
+    },
+    {
       "id": "touchid",
       "group": "Security",
       "title": "Touch ID for sudo",

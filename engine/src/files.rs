@@ -4,7 +4,7 @@
 use crate::context::Context;
 use crate::fs::walk::{self, Visitor};
 use crate::fs::{self, Detail, Entry, Kind};
-use crate::guard::Purpose;
+use crate::guard::{self, Purpose};
 use crate::picks::{Action, Pick};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hasher;
@@ -72,6 +72,8 @@ type Found = (PathBuf, PathBuf, Entry);
 struct Collect<'a> {
     roots: &'a [PathBuf],
     keep: &'a (dyn Fn(&Path, &Entry) -> bool + Sync),
+    /// folders the user excluded in Settings: not looked into
+    excluded: Vec<PathBuf>,
     found: Mutex<Vec<Found>>,
 }
 
@@ -79,7 +81,12 @@ impl Visitor for Collect<'_> {
     fn entry(&self, dir: &Path, tag: u32, e: &Entry) -> Option<u32> {
         let name = e.name.to_string_lossy();
         match e.kind {
-            Kind::Dir if !e.mount_point && !name.starts_with('.') && !is_package(&name) => {
+            Kind::Dir
+                if !e.mount_point
+                    && !name.starts_with('.')
+                    && !is_package(&name)
+                    && !self.excluded.contains(&dir.join(&e.name)) =>
+            {
                 Some(tag)
             }
             Kind::File if (self.keep)(dir, e) => {
@@ -108,13 +115,15 @@ fn collect(
         .iter()
         .map(|f| ctx.home.join(f))
         .filter(|r| {
-            fs::stat(r, Detail::Basic)
-                .is_ok_and(|e| e.kind == Kind::Dir && seen.insert((e.dev, e.ino)))
+            !guard::excluded(r, ctx)
+                && fs::stat(r, Detail::Basic)
+                    .is_ok_and(|e| e.kind == Kind::Dir && seen.insert((e.dev, e.ino)))
         })
         .collect();
     let visitor = Collect {
         roots: &roots,
         keep,
+        excluded: guard::exclusions(ctx),
         found: Mutex::new(Vec::new()),
     };
     walk::walk_tagged(

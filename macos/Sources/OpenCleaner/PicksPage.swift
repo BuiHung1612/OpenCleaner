@@ -278,7 +278,17 @@ struct PicksPage: View {
         .padding(.horizontal, 32)
         .confirmationDialog(confirmText, isPresented: $confirming) {
             Button(actionTitle, role: .destructive) { model.act() }
+        } message: {
+            if allCopies > 0 {
+                Text("Every copy of \(allCopies) files is ticked: no copy would be left outside the Trash.")
+            }
         }
+    }
+
+    /// Duplicates: sets (groups) whose every copy is ticked.
+    private var allCopies: Int {
+        guard tool.id == "duplicates" else { return 0 }
+        return model.groups.filter { $0.indexes.allSatisfy(model.selected.contains) }.count
     }
 
     private var actionTitle: String {

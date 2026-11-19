@@ -119,6 +119,7 @@ struct HistoryPage: View {
     @State private var sessions: [JSON]?
     @State private var log: String?
     @State private var error: String?
+    @State private var putBackNote: String?
 
     /// The engine logs a session per tool run; show the tool's own name.
     static func title(_ command: String) -> String {
@@ -129,6 +130,7 @@ struct HistoryPage: View {
         }
         switch id {
         case "uninstall": return String(localized: "Uninstaller")
+        case "space_lens": return String(localized: "Space Lens")
         default: return Tools.all.first { $0.id == id }?.title ?? id.capitalized
         }
     }
@@ -150,6 +152,12 @@ struct HistoryPage: View {
                             }
                             Spacer()
                             Text("\(s.items.string ?? "0") items · \(bytes(s.bytes.double))").monospacedDigit()
+                            // what this session moved to the Trash and is still there
+                            if !s.trashed.array.isEmpty {
+                                Button(String(localized: "Put Back")) { putBack(s.trashed.array) }
+                                    .buttonStyle(.pill)
+                                    .help(String(localized: "Move \(s.trashed.array.count) items from the Trash back where they were"))
+                            }
                         }
                         .padding(.horizontal, 14).padding(.vertical, 10)
                     }
@@ -161,21 +169,32 @@ struct HistoryPage: View {
             }
             .brightScroller()
             .glassPanel()
+            if let putBackNote { Text(verbatim: putBackNote).font(.system(size: 12)).foregroundStyle(Color(hex: "#FFD54F")) }
             if let log {
                 Text("Every deleted file is listed in \((log as NSString).abbreviatingWithTildeInPath)")
                     .font(.system(size: 12)).foregroundStyle(.dim)
             }
         }
         .padding(.horizontal, 32).padding(.bottom, 28)
-        .task {
-            let history = Engine.call(["op": "history"])
-            if history.ok.bool {
-                sessions = history.sessions.array
-                log = history.logs.deletions.string
-            } else {
-                error = history.error.string ?? String(localized: "The engine did not answer.")
-                sessions = []
-            }
+        .task { load() }
+    }
+
+    private func putBack(_ items: [JSON]) {
+        let request = items.map { ["from": $0.from.string ?? "", "to": $0.to.string ?? ""] }
+        let reply = Engine.call(["op": "put_back", "items": request])
+        let failed = reply.ok.bool ? reply.results.strings.filter { $0 != "ok" } : [reply.error.string ?? "?"]
+        putBackNote = failed.isEmpty ? nil : String(localized: "\(failed.count) items were not put back: \(failed[0])")
+        load()
+    }
+
+    private func load() {
+        let history = Engine.call(["op": "history"])
+        if history.ok.bool {
+            sessions = history.sessions.array
+            log = history.logs.deletions.string
+        } else {
+            error = history.error.string ?? String(localized: "The engine did not answer.")
+            sessions = []
         }
     }
 
@@ -191,6 +210,9 @@ struct SettingsView: View {
     @AppStorage(Updater.autoKey) private var checkUpdates = true
     @AppStorage(Engine.fastKey) private var fastScans = false
     @State private var languageChanged = false
+    @State private var exclusions: [String] = []
+    @AppStorage("largeMiB") private var largeMiB = 500
+    @AppStorage("idleDays") private var idleDays = 180
 
     var body: some View {
         Form {
@@ -226,6 +248,26 @@ struct SettingsView: View {
                     .font(.system(size: 12)).foregroundStyle(.dim)
             }
             AutomationSettings()
+            Section(String(localized: "Excluded folders")) {
+                ForEach(exclusions, id: \.self) { path in
+                    HStack {
+                        Text(verbatim: (path as NSString).abbreviatingWithTildeInPath).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button(String(localized: "Remove")) { saveExclusions(exclusions.filter { $0 != path }) }
+                    }
+                }
+                Button(String(localized: "Add Folder…"), action: addExclusion)
+                Text("OpenCleaner never scans or removes anything inside these folders.")
+                    .font(.system(size: 12)).foregroundStyle(.dim)
+            }
+            Section(String(localized: "Large & Old Files")) {
+                Picker(String(localized: "At least"), selection: $largeMiB) {
+                    ForEach([100, 250, 500, 1000, 5000], id: \.self) { Text(verbatim: bytes(Double($0) * 1_048_576)).tag($0) }
+                }
+                Picker(String(localized: "Not opened for"), selection: $idleDays) {
+                    ForEach([30, 90, 180, 365], id: \.self) { Text("\($0) days").tag($0) }
+                }
+            }
             Section(String(localized: "Engine")) {
                 Toggle(String(localized: "Faster scans"), isOn: $fastScans)
                     .onChange(of: fastScans) { Engine.setFast(fastScans) }
@@ -238,6 +280,22 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 520)
+        .task { exclusions = Engine.call(["op": "exclusions"]).paths.strings }
+    }
+
+    private func addExclusion() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = String(localized: "Exclude")
+        guard panel.runModal() == .OK else { return }
+        saveExclusions(exclusions + panel.urls.map(\.path))
+    }
+
+    private func saveExclusions(_ paths: [String]) {
+        let reply = Engine.call(["op": "set_exclusions", "paths": paths])
+        if reply.ok.bool { exclusions = reply.paths.strings }
     }
 
     private func relaunch() {
