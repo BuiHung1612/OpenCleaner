@@ -245,6 +245,8 @@ pub enum Action {
     /// Settings tab: 0 General, 1 Cleaning, 2 Automation, 3 Dashboard
     SettingsTab(u8),
     UpdatesToggle,
+    /// 0 the system's, 1 English, 2 Vietnamese
+    Language(u32),
     CheckUpdates,
     ExclusionAdd,
     ExclusionRemove(String),
@@ -777,6 +779,14 @@ impl State {
         r.contains(self.mouse.0, self.mouse.1)
     }
 
+    /// The page in the window title, in the chosen language: what a screen reader announces
+    /// for this painted window.
+    pub fn retitle(&self) {
+        let page = crate::i18n::tr(&self.module.title()).into_owned();
+        let title = super::wide(&format!("OpenCleaner - {page}"));
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetWindowTextW(self.hwnd, title.as_ptr()) };
+    }
+
     pub fn on_show_module(&mut self) {
         match self.module {
             // read once; after that only the refresh button (or focus, if the user chose it)
@@ -790,9 +800,7 @@ impl State {
         }
         self.update_dash_timer();
         style_frame(self.hwnd, self.module.palette().0);
-        // the page in the title: what a screen reader announces for this painted window
-        let title = super::wide(&format!("OpenCleaner - {}", self.module.title()));
-        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetWindowTextW(self.hwnd, title.as_ptr()) };
+        self.retitle();
         // keep the focus on the sidebar after choosing a page from it with the keyboard
         self.focus = self.focus.take().filter(|f| matches!(f, Action::Go(_)));
         self.update_timers();
@@ -2286,6 +2294,17 @@ impl State {
     }
 
     fn settings_general(&mut self, c: &mut Canvas, body: R) {
+        let lang = R::new(body.x, body.y, body.w, 84.0);
+        c.glass(lang, 20.0);
+        Self::section_title(c, lang, "Language");
+        let choice = crate::i18n::choice();
+        let items = vec![
+            ("System".to_string(), choice == 0, Action::Language(0)),
+            ("English".to_string(), choice == 1, Action::Language(1)),
+            ("Tiếng Việt".to_string(), choice == 2, Action::Language(2)),
+        ];
+        self.chips(c, lang.x + 20.0, lang.y + 40.0, items, true);
+        let body = R::new(body.x, body.y + 98.0, body.w, body.h - 98.0);
         let panel = R::new(body.x, body.y, body.w, 214.0);
         c.glass(panel, 20.0);
         Self::section_title(c, panel, "Updates");
@@ -2736,6 +2755,11 @@ pub fn perform(hwnd: HWND, action: Action) {
                 st.check_updates = !st.check_updates;
                 super::set_reg_dword(super::SETTINGS_KEY, crate::github::CHECK_VALUE, st.check_updates as u32);
             });
+        }
+        Action::Language(choice) => {
+            super::set_reg_dword(super::SETTINGS_KEY, crate::i18n::LANG_VALUE, choice);
+            crate::i18n::set_choice(choice);
+            with(|st| st.retitle());
         }
         Action::CheckUpdates => {
             std::thread::spawn(|| crate::github::check(true));

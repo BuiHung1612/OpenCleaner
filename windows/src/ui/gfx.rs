@@ -192,7 +192,7 @@ impl Canvas {
 
     /// Width of one line of text, as `text` would draw it.
     pub fn measure(&self, fonts: &mut Fonts, text: &str, size: f32, bold: bool) -> f32 {
-        let w: Vec<u16> = text.encode_utf16().collect();
+        let w: Vec<u16> = crate::i18n::tr(text).encode_utf16().collect();
         let mut sz = SIZE { cx: 0, cy: 0 };
         unsafe {
             let old = SelectObject(self.hdc, fonts.get(size * self.s, bold, false));
@@ -414,6 +414,9 @@ impl Canvas {
         if text.is_empty() {
             return;
         }
+        // every label in the chosen language (glyphs are not words)
+        let translated = if icon { std::borrow::Cow::Borrowed(text) } else { crate::i18n::tr(text) };
+        let text: &str = &translated;
         self.texts.push(TextRun { r, clip: self.clip, text: text.into(), size, bold, color, align, wrap, icon });
     }
 

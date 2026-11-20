@@ -160,6 +160,22 @@ jobs:
           }
           Alive $p 'at the end'
           Stop-Process -Id $p.Id
+
+          # the same app in Vietnamese (Settings > General > Language), a few pages
+          New-Item -Path 'HKCU:\Software\OpenCleaner' -Force | Out-Null
+          Set-ItemProperty -Path 'HKCU:\Software\OpenCleaner' -Name 'Language' -Value 2 -Type DWord
+          $p = Start-Process -FilePath windows/target/release/OpenCleaner.exe -PassThru
+          Start-Sleep -Seconds 8
+          Alive $p 'in Vietnamese'
+          $p.Refresh(); $hwnd = $p.MainWindowHandle
+          [void][W]::SetForegroundWindow($hwnd)
+          Shot 'vi-01-dashboard'
+          Key $hwnd 0x09
+          Key $hwnd 0x09; Key $hwnd 0x0D; Start-Sleep -Seconds 2; Shot 'vi-02-system-junk'
+          foreach ($i in 1..10) { Key $hwnd 0x09 }   # System Junk to Settings in the sidebar
+          Key $hwnd 0x0D; Start-Sleep -Seconds 2; Shot 'vi-03-settings'
+          Alive $p 'at the end in Vietnamese'
+          Stop-Process -Id $p.Id
       - uses: actions/upload-artifact@v7
         if: always()
         with:

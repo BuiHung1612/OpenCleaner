@@ -130,6 +130,7 @@ pub fn now() -> u64 {
 /// A balloon from the notification area (a toast on Windows 10 and 11). The icon is added on
 /// first use and removed when the window closes (`remove_tray`).
 pub fn notify(hwnd: HWND, title: &str, text: &str) {
+    let (title, text) = (&*crate::i18n::tr(title), &*crate::i18n::tr(text));
     use windows_sys::Win32::UI::Shell::*;
     let mut nid = tray(hwnd);
     nid.uFlags = NIF_ICON | NIF_TIP | NIF_INFO;

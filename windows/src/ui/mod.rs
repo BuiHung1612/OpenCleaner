@@ -138,6 +138,7 @@ pub fn run() {
         let h = (wh * 0.9).min(880.0 * s).max((720.0 * s).min(wh));
         let (x, y) = (work.left + ((ww - w) / 2.0) as i32, work.top + ((wh - h) / 2.0) as i32);
         SetWindowPos(hwnd, null_mut(), x, y, w as i32, h as i32, SWP_NOZORDER);
+        crate::i18n::set_choice(reg_dword(SETTINGS_KEY, crate::i18n::LANG_VALUE).unwrap_or(0));
         STATE.with(|cell| *cell.borrow_mut() = Some(State::new(hwnd)));
         style_frame(hwnd, pages::Module::Dashboard.palette().0);
         ShowWindow(hwnd, SW_SHOW);
@@ -539,7 +540,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 /// Native confirmation (OK / Cancel) for anything that removes files.
 pub fn confirm(hwnd: HWND, text: &str) -> bool {
-    let text = wide(text);
+    let text = wide(&crate::i18n::tr(text));
     let caption = wide("OpenCleaner");
     unsafe { MessageBoxW(hwnd, text.as_ptr(), caption.as_ptr(), MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) == IDOK }
 }

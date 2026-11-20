@@ -4,6 +4,7 @@
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 mod github;
+mod i18n;
 #[cfg(windows)]
 mod ui;
 

@@ -4,6 +4,7 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
 ## Unreleased
 
+- Windows in Vietnamese: follows the Windows display language, or Settings › General › Language (System, English, Tiếng Việt). It uses the Mac app's translations plus the Windows-only text.
 - Windows: Developer Tools page (Docker, and Android system images and older NDKs through sdkmanager).
 - Windows: Settings › Cleaning › Project folders, so Project Junk also looks on other drives (D:\ and others).
 - Windows: alerts in Settings › Automation when the system drive is almost full, or the Recycle Bin or Downloads grows past a size; at most once a day each.

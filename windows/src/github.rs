@@ -64,7 +64,7 @@ mod win {
     }
 
     fn ask(text: &str) -> bool {
-        let (text, caption) = (wide(text), wide("OpenCleaner"));
+        let (text, caption) = (wide(&crate::i18n::tr(text)), wide("OpenCleaner"));
         unsafe { MessageBoxW(null_mut(), text.as_ptr(), caption.as_ptr(), MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND) == IDYES }
     }
 
@@ -179,7 +179,7 @@ mod win {
             .map_err(|_| failed)?;
         let mut d = Download { child, file: file.to_owned(), size, done: None, cancelled: false };
         let title = wide("OpenCleaner");
-        let main = wide(&format!("Downloading OpenCleaner {version}"));
+        let main = wide(&crate::i18n::tr(&format!("Downloading OpenCleaner {version}")));
         let content = wide(&format!("{} of {}", megabytes(0), megabytes(size)));
         let mut cfg: TASKDIALOGCONFIG = unsafe { std::mem::zeroed() };
         cfg.cbSize = size_of::<TASKDIALOGCONFIG>() as u32;
@@ -242,7 +242,7 @@ mod win {
     }
 
     fn tell(text: &str) {
-        let (text, caption) = (wide(text), wide("OpenCleaner"));
+        let (text, caption) = (wide(&crate::i18n::tr(text)), wide("OpenCleaner"));
         unsafe { MessageBoxW(null_mut(), text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND) };
     }
 }
