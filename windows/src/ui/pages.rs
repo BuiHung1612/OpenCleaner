@@ -1073,14 +1073,19 @@ impl State {
                     self.devtools.cleaning = false;
                     self.load_devtools();
                 }
+                "reply" if e["ok"] == false => {
+                    // shown like a failed cleanup: the listing that was there stays
+                    self.devtools.outcome = json!({"failures": [e["error"].as_str().unwrap_or("The engine did not answer.")]});
+                }
                 "reply" => {
-                    self.devtools.selected = e["items"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter(|it| it["default"] == true && it["bytes"].as_f64().unwrap_or(0.0) > 0.0)
+                    // first listing: the defaults; a refresh keeps what the user ticked
+                    let first = self.devtools.listing.is_null();
+                    let ids: Vec<String> = e["items"].as_array().into_iter().flatten()
+                        .filter(|it| first || self.devtools.selected.contains(it["id"].as_str().unwrap_or("")))
+                        .filter(|it| !first || (it["default"] == true && it["bytes"].as_f64().unwrap_or(0.0) > 0.0))
                         .filter_map(|it| it["id"].as_str().map(String::from))
                         .collect();
+                    self.devtools.selected = ids.into_iter().collect();
                     self.devtools.listing = e;
                 }
                 "done" => self.devtools.job = None,

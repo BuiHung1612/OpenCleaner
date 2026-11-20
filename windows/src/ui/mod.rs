@@ -61,7 +61,13 @@ pub fn set_reg_dword(key: &str, name: &str, value: u32) {
 pub fn reg_string(key: &str, name: &str) -> Option<String> {
     use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
     let (key, name) = (wide(key), wide(name));
-    let mut buf = vec![0u16; 8192];
+    // the size first: a long list must not read as missing (and be overwritten)
+    let mut size = 0u32;
+    let status = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, null_mut(), null_mut(), &mut size) };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let mut buf = vec![0u16; size as usize / 2 + 1];
     let mut size = (buf.len() * 2) as u32;
     let status = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr().cast(), &mut size) };
     let end = buf.iter().position(|&c| c == 0).unwrap_or(0);

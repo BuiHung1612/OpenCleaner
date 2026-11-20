@@ -41,8 +41,20 @@ pub fn check_alerts(hwnd: HWND) {
     if !disk && !watch {
         return;
     }
+    // one check at a time: two at once would both find an alert due and show it twice
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
     let target = hwnd as isize;
     std::thread::spawn(move || {
+        struct Done;
+        impl Drop for Done {
+            fn drop(&mut self) {
+                RUNNING.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let _done = Done;
         let gb = |name, choices: [u32; 4], default| reg_dword(SETTINGS_KEY, name).filter(|v| choices.contains(v)).unwrap_or(default) as f64 * 1e9;
         let now = now();
         // not shown in the last day; stamped once shown
