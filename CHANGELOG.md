@@ -2,6 +2,11 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## 0.3.5
+
+- macOS and Windows: the window opens at a more compact 1280 x 880 (the whole sidebar still fits) instead of most of the screen.
+- macOS: Settings > Permissions offers "Reopen OpenCleaner" while Full Disk Access shows Not allowed: macOS applies that permission only when the app starts again.
+
 ## 0.3.4
 
 **Windows**

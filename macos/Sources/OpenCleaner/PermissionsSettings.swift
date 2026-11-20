@@ -14,7 +14,9 @@ struct PermissionsSettings: View {
                     title: String(localized: "Full Disk Access"),
                     why: String(localized: "Measure and empty the Trash, clean Mail attachments and read which apps have privacy permissions."),
                     granted: fullDisk,
-                    pane: "com.apple.preference.security?Privacy_AllFiles")
+                    pane: "com.apple.preference.security?Privacy_AllFiles",
+                    // macOS applies Full Disk Access to an app when it starts
+                    reopen: fullDisk == false)
                 row(icon: "app.badge.checkmark",
                     title: String(localized: "App Management"),
                     why: String(localized: "Uninstall apps and slim them. macOS asks the first time; allow it here if you declined."),
@@ -26,7 +28,7 @@ struct PermissionsSettings: View {
                     granted: notifications,
                     pane: "com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "")")
             } footer: {
-                Note("Not in the list? Click + under the list and choose OpenCleaner in Applications. After you change a permission, come back here: the status updates. Some readings (like the Trash size) need the app to be reopened.")
+                Note("Not in the list? Click + under the list and choose OpenCleaner in Applications. After you change a permission, come back here: the status updates. Full Disk Access takes effect once OpenCleaner is reopened.")
             }
         }
         .formStyle(.grouped)
@@ -38,7 +40,7 @@ struct PermissionsSettings: View {
         }
     }
 
-    private func row(icon: String, title: String, why: String, granted: Bool?, pane: String) -> some View {
+    private func row(icon: String, title: String, why: String, granted: Bool?, pane: String, reopen: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon).font(.title2).foregroundStyle(.secondary).frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
@@ -49,8 +51,14 @@ struct PermissionsSettings: View {
                 Text(verbatim: why).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Button(String(localized: "Open Settings")) {
-                if let url = URL(string: "x-apple.systempreferences:\(pane)") { NSWorkspace.shared.open(url) }
+            VStack(alignment: .trailing, spacing: 6) {
+                Button(String(localized: "Open Settings")) {
+                    if let url = URL(string: "x-apple.systempreferences:\(pane)") { NSWorkspace.shared.open(url) }
+                }
+                if reopen {
+                    Button(String(localized: "Reopen OpenCleaner"), action: relaunchApp)
+                        .help(String(localized: "Allowed already? macOS applies it when OpenCleaner starts again."))
+                }
             }
         }
         .padding(.vertical, 4)

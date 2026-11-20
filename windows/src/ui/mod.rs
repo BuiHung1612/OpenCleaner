@@ -102,16 +102,16 @@ pub fn run() {
         if hwnd.is_null() {
             return;
         }
-        // most of the monitor's work area (so the sidebar fits without scrolling), centered;
-        // at least 1080 x 720 logical where the screen has room
+        // tall enough for the whole sidebar where the work area allows (880), no wider than
+        // the pages use (1280), centered; at least 1080 x 720 logical where there is room
         let s = GetDpiForWindow(hwnd) as f32 / 96.0;
         let mut mi: MONITORINFO = std::mem::zeroed();
         mi.cbSize = size_of::<MONITORINFO>() as u32;
         GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mut mi);
         let work = mi.rcWork;
         let (ww, wh) = ((work.right - work.left) as f32, (work.bottom - work.top) as f32);
-        let w = (ww * 0.8).min(1600.0 * s).max((1080.0 * s).min(ww));
-        let h = (wh * 0.88).min(1100.0 * s).max((720.0 * s).min(wh));
+        let w = (ww * 0.8).min(1280.0 * s).max((1080.0 * s).min(ww));
+        let h = (wh * 0.9).min(880.0 * s).max((720.0 * s).min(wh));
         let (x, y) = (work.left + ((ww - w) / 2.0) as i32, work.top + ((wh - h) / 2.0) as i32);
         SetWindowPos(hwnd, null_mut(), x, y, w as i32, h as i32, SWP_NOZORDER);
         STATE.with(|cell| *cell.borrow_mut() = Some(State::new(hwnd)));

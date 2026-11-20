@@ -509,12 +509,15 @@ private struct GeneralSettings: View {
         .task { engineVersion = await Engine.ask(["op": "version"]).version.string }
     }
 
-    private func relaunch() {
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
-            DispatchQueue.main.async { NSApp.terminate(nil) }
-        }
+    private func relaunch() { relaunchApp() }
+}
+
+/// Starts a new copy of the app, then quits this one.
+func relaunchApp() {
+    let config = NSWorkspace.OpenConfiguration()
+    config.createsNewApplicationInstance = true
+    NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
+        DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 }
 
