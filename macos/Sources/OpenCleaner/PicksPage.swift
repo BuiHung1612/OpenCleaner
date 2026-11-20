@@ -593,7 +593,7 @@ struct UninstallerPage: View {
     }
 
     private var bar: some View {
-        ActionBar {
+        ActionBar(shown: !(picks.phase == .idle && model.chosen.isEmpty)) {
             if picks.phase == .review || picks.phase == .done {
                 Button(String(localized: "Start Over")) { model.startOver() }.buttonStyle(.pill)
             } else if picks.phase == .idle, !model.chosen.isEmpty {

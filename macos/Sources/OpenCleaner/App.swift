@@ -195,7 +195,7 @@ struct MainView: View {
         HStack(spacing: 0) {
             sidebar
                 .frame(width: 236 * max(1, TextScale.shared.value))  // room for larger text
-                .padding(.leading, 14).padding(.top, 44).padding(.bottom, 14)
+                .padding(.leading, 14).padding(.top, 12).padding(.bottom, 14)
             page
                 .id(module)
                 .transition(.opacity)
@@ -394,8 +394,10 @@ struct GlassSwitch: ToggleStyle {
 extension View {
     /// Scroll areas and spinners sit on colored glass: ask for the light-on-dark style, not the default black one.
     /// Only for scroll views whose content has no glass of its own (it would turn dark too).
+    /// Also keeps the scroller off the rounded corners of the panel it sits in.
     func brightScroller() -> some View {
         environment(\.colorScheme, .dark)
+            .contentMargins(.vertical, 14, for: .scrollIndicators)
     }
 
     /// The one glass surface used for every panel.
@@ -541,6 +543,8 @@ extension ButtonStyle where Self == PillStyle {
 /// Bottom bar: the big round button stays dead center, secondary actions sit on either side.
 /// Same height and bottom margin on every page, so the big button never moves.
 struct ActionBar<Leading: View, Center: View, Trailing: View>: View {
+    /// false: nothing to offer yet, so the bar gives its height to the list above
+    var shown = true
     @ViewBuilder var leading: Leading
     @ViewBuilder var center: Center
     @ViewBuilder var trailing: Trailing
@@ -551,7 +555,8 @@ struct ActionBar<Leading: View, Center: View, Trailing: View>: View {
             center
             HStack(spacing: 12) { trailing }.frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(height: 124)
+        .frame(height: shown ? 124 : 0)
+        .opacity(shown ? 1 : 0)
         .padding(.bottom, Layout.bottom)
     }
 }
@@ -559,7 +564,7 @@ struct ActionBar<Leading: View, Center: View, Trailing: View>: View {
 /// Page margins shared by every module page.
 enum Layout {
     static let side: CGFloat = 32
-    static let top: CGFloat = 36
+    static let top: CGFloat = 12
     static let bottom: CGFloat = 20
 }
 
