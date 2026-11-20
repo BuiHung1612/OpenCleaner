@@ -175,6 +175,10 @@ enum Updater {
             try p.run() // a child of launchd once we quit, so it outlives us
         } catch let e as InstallFailure {
             throw e
+        } catch let e as CancellationError {
+            throw e  // Cancel: reported as nothing (check() ignores it), never as a failure
+        } catch let e as URLError where e.code == .cancelled {
+            throw e
         } catch {
             throw InstallFailure(errorDescription: error.localizedDescription)
         }
