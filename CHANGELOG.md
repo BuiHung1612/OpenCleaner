@@ -2,10 +2,11 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
-## Unreleased
+## 0.3.8
 
 - macOS: installing an update shows its download in a small window with a progress bar and Cancel, then "Checking and installing…", as on Windows.
 - Hidden Items (macOS and Windows): the hidden folders and files in your home folder, each with what it belongs to. Old backups (`.zshrc.backup.…`) and files zsh rebuilds are ticked; download caches of tools that are no longer installed are ticked once unchanged for 90 days; the rest is only shown: in use, left by removed apps, unchanged for 6 months or not recognized. Known settings, keys and history are never listed. Everything goes to the Trash.
+- Windows: a Microsoft Store package (MSIX) is built with each release; the Store copy is updated by the Store.
 
 ## 0.3.7
 
