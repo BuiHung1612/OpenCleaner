@@ -15,6 +15,18 @@ final class JunkModel {
     var expanded: Set<String> = []
     /// a group the review is limited to (Developer Tools opens it on "developer"); nil: all
     var onlyGroup: String?
+    /// a group whose ready rules are ticked when the review opens, because the user asked
+    /// for exactly that ("Empty the Trash"); Clean still asks before anything goes
+    var tickGroup: String?
+
+    /// Ticks the ready rules of `tickGroup`, once.
+    func applyTickGroup() {
+        guard let g = tickGroup else { return }
+        tickGroup = nil
+        let ids = groups.filter { $0.id.string == g }.flatMap(\.rules.array)
+            .filter { $0.status.string == "ready" }.compactMap(\.id.string)
+        selected.formUnion(ids)
+    }
     /// items opened in turn, with some of their children ticked
     var parts = Parts()
     private(set) var outcome = JSON(nil)
@@ -134,6 +146,7 @@ final class JunkModel {
             plan = final
             // what each rule says, minus rows with nothing to do
             selected = Set(rules.filter { $0.default.bool && $0.status.string == "ready" }.compactMap(\.id.string))
+            applyTickGroup()
             phase = .review
         }
     }
@@ -251,6 +264,7 @@ struct JunkPage: View {
                             Button(String(localized: "Show All")) { model.onlyGroup = nil }.buttonStyle(.pill)
                         }
                         .padding(.leading, 12)
+                        .accessibilityElement(children: .contain)
                     }
                     ForEach(model.groups.filter { model.onlyGroup == nil || $0.id.string == model.onlyGroup }, id: \.id.string) { group in
                         let rules = shownRules(group)

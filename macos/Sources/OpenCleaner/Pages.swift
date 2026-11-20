@@ -147,7 +147,9 @@ struct DashboardPage: View {
     private func open(_ tip: Suggestion) {
         if tip.module == .tool("clean") {
             junk.onlyGroup = tip.group
+            junk.tickGroup = tip.group
             if tip.group != nil, junk.phase == .idle || junk.phase == .done { junk.scan() }
+            if junk.phase == .review { junk.applyTickGroup() }
         }
         Automation.shared.openModule = tip.module
     }
