@@ -49,7 +49,7 @@
       "id": "devtools",
       "group": "Cleanup",
       "title": "Developer Tools",
-      "subtitle": "Give back space held by Docker and Xcode's iOS Simulators, with their own cleanup commands.",
+      "subtitle": "Give back space held by Docker, Xcode's iOS Simulators and the Android SDK, with their own cleanup commands.",
       "points": [
         "Runs Docker's and Xcode's own commands",
         "Nothing runs until you press Clean"

@@ -425,7 +425,7 @@
 
 /* Developer Tools */
 "Developer Tools" = "Công cụ lập trình";
-"Give back space held by Docker and Xcode's iOS Simulators, with their own cleanup commands." = "Lấy lại dung lượng Docker và iOS Simulator của Xcode đang giữ, bằng chính lệnh dọn dẹp của chúng.";
+"Give back space held by Docker, Xcode's iOS Simulators and the Android SDK, with their own cleanup commands." = "Lấy lại dung lượng Docker, iOS Simulator của Xcode và Android SDK đang giữ, bằng chính lệnh dọn dẹp của chúng.";
 "Runs Docker's and Xcode's own commands" = "Chạy lệnh của chính Docker và Xcode";
 "Nothing runs until you press Clean" = "Không chạy gì cho đến khi bạn bấm Dọn dẹp";
 "Docker" = "Docker";
@@ -433,7 +433,7 @@
 "iOS Simulators" = "iOS Simulator";
 "Simulator devices use %@ in ~/Library/Developer/CoreSimulator/Devices" = "Các thiết bị simulator chiếm %@ trong ~/Library/Developer/CoreSimulator/Devices";
 "No developer tools found" = "Không tìm thấy công cụ lập trình";
-"Docker and Xcode's simulators are not set up on this Mac." = "Docker và simulator của Xcode chưa được cài trên máy Mac này.";
+"Docker, Xcode's simulators and the Android SDK are not set up on this Mac." = "Docker, simulator của Xcode và Android SDK chưa được cài trên máy Mac này.";
 "Run the cleanup of %lld items? What they remove cannot be put back." = "Chạy dọn dẹp %lld mục? Những gì bị xóa không thể khôi phục.";
 "Freed %@." = "Đã giải phóng %@.";
 "Unused images" = "Image không dùng";
@@ -538,3 +538,9 @@
 "Superset" = "Superset";
 "Sculptor" = "Sculptor";
 "Replit" = "Replit";
+"Android" = "Android";
+"Unused emulator system image" = "System image emulator không dùng";
+"No emulator uses it. Android Studio's Device Manager downloads it again if you need it." = "Không emulator nào dùng. Device Manager của Android Studio sẽ tải lại khi bạn cần.";
+"Older NDK" = "NDK cũ";
+"A newer NDK is installed. A project that pins this version (ndkVersion) downloads it again when it builds." = "Đã có NDK mới hơn. Dự án nào ghim phiên bản này (ndkVersion) sẽ tải lại khi build.";
+"Unused system images and old NDKs are offered once Android Studio (or the SDK Command-line Tools and a Java runtime) is installed." = "System image không dùng và NDK cũ sẽ hiện khi có Android Studio (hoặc SDK Command-line Tools và Java).";

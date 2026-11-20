@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Debug, Serialize)]
 pub struct Item {
     pub id: String,
-    /// "docker" or "simulators"
+    /// "docker", "simulators" or "android"
     pub group: &'static str,
     pub title: &'static str,
     pub note: &'static str,
@@ -40,6 +40,10 @@ pub struct Listing {
     pub simulators: bool,
     /// What ~/Library/Developer/CoreSimulator/Devices holds (the devices' data)
     pub devices_bytes: u64,
+    /// An Android SDK is installed
+    pub android: bool,
+    /// Why Android items are not offered (empty when they are)
+    pub android_note: String,
     pub items: Vec<Item>,
 }
 
@@ -115,7 +119,185 @@ pub fn list(ctx: &Context) -> Listing {
             }
         }
     }
+    if let Some(sdk) = android_sdk(ctx) {
+        out.android = true;
+        if sdkmanager(&sdk).is_some() && java_home().is_some() {
+            out.items.extend(android_items(ctx, &sdk));
+        } else {
+            out.android_note = "Unused system images and old NDKs are offered once Android Studio (or the SDK Command-line Tools and a Java runtime) is installed.".into();
+        }
+    }
     out
+}
+
+/// ANDROID_HOME, ANDROID_SDK_ROOT, else where Android Studio installs it.
+fn android_sdk(ctx: &Context) -> Option<PathBuf> {
+    let env = ["ANDROID_HOME", "ANDROID_SDK_ROOT"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from);
+    let default = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|l| PathBuf::from(l).join("Android/Sdk"))
+    } else {
+        Some(ctx.home.join("Library/Android/sdk"))
+    };
+    env.chain(default)
+        .find(|p| p.join("platform-tools").is_dir() || p.join("system-images").is_dir())
+}
+
+fn sdkmanager(sdk: &Path) -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "sdkmanager.bat"
+    } else {
+        "sdkmanager"
+    };
+    Some(sdk.join("cmdline-tools/latest/bin").join(name)).filter(|p| p.is_file())
+}
+
+/// JAVA_HOME, else the runtime Android Studio ships (sdkmanager needs one).
+fn java_home() -> Option<PathBuf> {
+    let bundled = if cfg!(windows) {
+        PathBuf::from("C:/Program Files/Android/Android Studio/jbr")
+    } else {
+        PathBuf::from("/Applications/Android Studio.app/Contents/jbr/Contents/Home")
+    };
+    std::env::var_os("JAVA_HOME")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain([bundled])
+        .find(|p| p.join("bin").is_dir())
+}
+
+/// Where emulators (AVDs) live: ANDROID_AVD_HOME, ANDROID_USER_HOME/avd, ~/.android/avd.
+fn avd_home(ctx: &Context) -> PathBuf {
+    if let Some(p) = std::env::var_os("ANDROID_AVD_HOME") {
+        return p.into();
+    }
+    std::env::var_os("ANDROID_USER_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| ctx.home.join(".android"))
+        .join("avd")
+}
+
+/// System images no emulator uses, and NDKs older than the newest one installed.
+fn android_items(ctx: &Context, sdk: &Path) -> Vec<Item> {
+    let used = used_system_images(&avd_home(ctx));
+    let size = |p: &Path| {
+        let opts = crate::size::Options {
+            mode: crate::size::Mode::Freed,
+            ..Default::default()
+        };
+        crate::size::measure(p, &opts).map_or(0, |r| r.bytes)
+    };
+    let dirs = |p: &Path| -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(p)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        v.sort();
+        v
+    };
+    let mut items = Vec::new();
+    // system-images/<api>/<tag>/<abi>
+    for api in dirs(&sdk.join("system-images")) {
+        for tag in dirs(&api) {
+            for abi in dirs(&tag) {
+                let rel: Vec<String> = [&api, &tag, &abi]
+                    .iter()
+                    .map(|p| {
+                        p.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .collect();
+                if used.contains(&rel.join("/")) {
+                    continue;
+                }
+                let Some(package) = android_package(&["system-images", &rel[0], &rel[1], &rel[2]])
+                else {
+                    continue;
+                };
+                items.push(Item {
+                    id: format!("android.pkg:{package}"),
+                    group: "android",
+                    title: "Unused emulator system image",
+                    note: "No emulator uses it. Android Studio's Device Manager downloads it again if you need it.",
+                    detail: format!("{} · {} · {}", rel[0], rel[1].replace('_', " "), rel[2]),
+                    bytes: size(&abi),
+                    default: false,
+                });
+            }
+        }
+    }
+    // ndk/<version>: every one but the newest
+    let mut ndks: Vec<(Vec<u64>, PathBuf)> = dirs(&sdk.join("ndk"))
+        .into_iter()
+        .map(|p| {
+            let v = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .split('.')
+                .map(|n| n.parse().unwrap_or(0))
+                .collect();
+            (v, p)
+        })
+        .collect();
+    ndks.sort();
+    ndks.pop();
+    for (_, path) in ndks {
+        let version = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let Some(package) = android_package(&["ndk", &version]) else {
+            continue;
+        };
+        items.push(Item {
+            id: format!("android.pkg:{package}"),
+            group: "android",
+            title: "Older NDK",
+            note: "A newer NDK is installed. A project that pins this version (ndkVersion) downloads it again when it builds.",
+            detail: version,
+            bytes: size(&path),
+            default: false,
+        });
+    }
+    items
+}
+
+/// "system-images;android-36.1;google_apis;arm64-v8a", when every part is a plain name
+/// (it becomes an argument of sdkmanager).
+fn android_package(parts: &[&str]) -> Option<String> {
+    let plain = |p: &&str| {
+        !p.is_empty()
+            && p.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    };
+    parts.iter().all(plain).then(|| parts.join(";"))
+}
+
+/// "android-37.0/google_apis_playstore/arm64-v8a" of every AVD's image.sysdir.1.
+pub fn used_system_images(avd_home: &Path) -> HashSet<String> {
+    let mut used = HashSet::new();
+    for e in std::fs::read_dir(avd_home).into_iter().flatten().flatten() {
+        let Ok(text) = std::fs::read_to_string(e.path().join("config.ini")) else {
+            continue;
+        };
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("image.sysdir.1=") {
+                let v = v.trim().replace('\\', "/");
+                let v = v.trim_start_matches("system-images/").trim_end_matches('/');
+                used.insert(v.to_string());
+            }
+        }
+    }
+    used
 }
 
 /// Runs the cleanup of each chosen item still offered, and measures what it freed.
@@ -131,7 +313,7 @@ pub fn clean(ctx: &Context, ids: &[String]) -> Outcome {
             out.failures.push(format!("{id}: not available"));
             continue;
         }
-        let Some((program, args)) = command(id, docker.as_deref()) else {
+        let Some((program, args)) = command(ctx, id, docker.as_deref()) else {
             continue;
         };
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -163,7 +345,7 @@ pub fn clean(ctx: &Context, ids: &[String]) -> Outcome {
 }
 
 /// The tool's own command for an item.
-fn command(id: &str, docker: Option<&Path>) -> Option<(PathBuf, Vec<String>)> {
+fn command(ctx: &Context, id: &str, docker: Option<&Path>) -> Option<(PathBuf, Vec<String>)> {
     let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let docker_args: &[&str] = match id {
         "docker.images" => &["image", "prune", "-a", "-f"],
@@ -172,6 +354,13 @@ fn command(id: &str, docker: Option<&Path>) -> Option<(PathBuf, Vec<String>)> {
         "docker.containers" => &["container", "prune", "-f"],
         // no -a: named volumes stay (prune takes only anonymous ones)
         "docker.volumes" => &["volume", "prune", "-f"],
+        _ if id.starts_with("android.pkg:") => {
+            let sdk = android_sdk(ctx)?;
+            return Some((
+                sdkmanager(&sdk)?,
+                args(&["--uninstall", id.strip_prefix("android.pkg:")?]),
+            ));
+        }
         "sim.unavailable" => {
             return Some((XCRUN.into(), args(&["simctl", "delete", "unavailable"])));
         }
@@ -231,7 +420,11 @@ fn run(
     args: &[&str],
     timeout: Duration,
 ) -> std::io::Result<(bool, String, String)> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    if let Some(java) = java_home() {
+        command.env("JAVA_HOME", java);
+    }
+    let mut child = command
         .args(args)
         .env("PATH", search_path(program))
         .stdin(Stdio::null())
@@ -469,6 +662,27 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn android_images_in_use() {
+        let home = std::env::temp_dir().join(format!("oc-avd-{}", std::process::id()));
+        let avd = home.join("Pixel.avd");
+        std::fs::create_dir_all(&avd).unwrap();
+        std::fs::write(
+            avd.join("config.ini"),
+            "AvdId=Pixel\nimage.sysdir.1=system-images/android-37.0/google_apis/arm64-v8a/\n",
+        )
+        .unwrap();
+        let used = used_system_images(&home);
+        assert!(used.contains("android-37.0/google_apis/arm64-v8a"));
+        assert_eq!(used.len(), 1);
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(
+            android_package(&["ndk", "27.0.1"]).as_deref(),
+            Some("ndk;27.0.1")
+        );
+        assert_eq!(android_package(&["ndk", "x y"]), None);
+    }
+
+    #[test]
     fn docker_sizes() {
         assert_eq!(parse_size("0B"), 0);
         assert_eq!(parse_size("12.5kB"), 12_500);
@@ -592,14 +806,15 @@ WARNING: something unrelated"#;
 
     #[test]
     fn commands_are_fixed() {
+        let ctx = Context::from_env();
         let docker = Path::new("/usr/local/bin/docker");
-        let (p, a) = command("docker.volumes", Some(docker)).unwrap();
+        let (p, a) = command(&ctx, "docker.volumes", Some(docker)).unwrap();
         assert_eq!(p, docker);
         assert_eq!(a, ["volume", "prune", "-f"]);
-        assert!(command("docker.images", None).is_none());
-        let (p, a) = command("sim.runtime:84A4", None).unwrap();
+        assert!(command(&ctx, "docker.images", None).is_none());
+        let (p, a) = command(&ctx, "sim.runtime:84A4", None).unwrap();
         assert_eq!(p, Path::new(XCRUN));
         assert_eq!(a, ["simctl", "runtime", "delete", "84A4"]);
-        assert!(command("rm -rf", None).is_none());
+        assert!(command(&ctx, "rm -rf", None).is_none());
     }
 }

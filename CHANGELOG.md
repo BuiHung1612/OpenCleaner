@@ -2,6 +2,10 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## Unreleased
+
+- Developer Tools: Android emulator system images no emulator uses, and NDKs older than the newest one, removed with Android's own sdkmanager. Never ticked for you.
+
 ## 0.3.6
 
 - System Junk › Developer tools covers editors and AI coding apps: VS Code (and Insiders), Cursor, Windsurf, Antigravity, Kiro, Trae, Qoder, Void, VSCodium, Positron, CodeBuddy, Zed, ChatGPT and Codex (including downloaded update packages), the Codex CLI cache, Claude, Orca, Factory, Superset, Sculptor, Replit, LM Studio, Jan and Msty, and JetBrains IDE and Android Studio indexes and logs. Each app has its own row and is skipped while it runs; projects, chats, models and settings are never touched. Windows gets the editors too.

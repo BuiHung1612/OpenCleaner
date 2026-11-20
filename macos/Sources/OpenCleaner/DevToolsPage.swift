@@ -52,9 +52,9 @@ struct DevToolsPage: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if l.raw == nil {
                         ProgressView().frame(maxWidth: .infinity).padding(40)
-                    } else if l.docker.string == "missing" && !l.simulators.bool {
+                    } else if l.docker.string == "missing" && !l.simulators.bool && !l.android.bool {
                         EmptyState(symbol: "hammer", title: String(localized: "No developer tools found"),
-                                   message: String(localized: "Docker and Xcode's simulators are not set up on this Mac."))
+                                   message: String(localized: "Docker, Xcode's simulators and the Android SDK are not set up on this Mac."))
                     } else {
                         if l.docker.string == "missing" {
                             section(String(localized: "Docker"))
@@ -76,6 +76,13 @@ struct DevToolsPage: View {
                             Text("Simulator devices use \(bytes(l.devices_bytes.double)) in ~/Library/Developer/CoreSimulator/Devices")
                                 .font(.app(13)).foregroundStyle(.dim).padding(.horizontal, 12)
                             ForEach(group("simulators"), id: \.id.string) { row($0) }
+                        }
+                        if l.android.bool {
+                            section(String(localized: "Android"))
+                            if let note = l.android_note.string, !note.isEmpty {
+                                Text(tr(note)).font(.app(13)).foregroundStyle(.dim).padding(.horizontal, 12)
+                            }
+                            ForEach(group("android"), id: \.id.string) { row($0) }
                         }
                     }
                     // file caches (editors, AI coding apps, package managers) are rules of
