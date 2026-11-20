@@ -196,6 +196,11 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
         Purpose::Projects if !PROJECT_ARTIFACTS.contains(&name.as_str()) => {
             return Err("not a build folder");
         }
+        // an older version inside a tool's folder (".gradle/wrapper/dists/gradle-8.9-bin")
+        Purpose::HomeItems
+            if item.parent() != Some(ctx.home.as_path())
+                && crate::dotfiles::is_versioned_entry(rel)
+                && std::fs::symlink_metadata(item).is_ok_and(|m| m.is_dir()) => {}
         Purpose::HomeItems
             if item.parent() != Some(ctx.home.as_path())
                 || !name.starts_with('.')

@@ -175,6 +175,10 @@ enum PickText {
     private static func hidden(_ item: JSON, _ flags: Set<String>) -> String {
         let owner = item.kind.string ?? ""
         var parts: [String] = []
+        if flags.contains("inner") {
+            parts.append(owner)
+            parts.append(String(localized: "\(item.place.string ?? "") is newer"))
+        }
         if flags.contains("backup") { parts.append(String(localized: "Backup of \(owner)")) }
         if flags.contains("rebuilt") { parts.append(String(localized: "zsh rebuilds it when needed")) }
         if flags.contains("cache") { parts.append(String(localized: "\(owner) cache, downloaded again when needed")) }
@@ -182,15 +186,22 @@ enum PickText {
         if flags.contains("data") { parts.append(String(localized: "\(owner) settings and data")) }
         if flags.contains("missing") { parts.append(String(localized: "\(owner) is not installed")) }
         let days = Int(item.changed_days.double ?? 0)
+        if flags.contains("inner") {
+            parts.append(days == 0 ? String(localized: "installed today") : String(localized: "installed \(days) days ago"))
+        } else {
         parts.append(days == 0 ? String(localized: "last used today")
                      : days == 1 ? String(localized: "last used yesterday")
                      : String(localized: "last used \(days) days ago"))
+        }
         if flags.contains("newest") { parts.append(String(localized: "newest, not ticked")) }
         return parts.joined(separator: " · ")
     }
 
     /// A group's header: a duplicate set ("a.zip · 2 copies" from the engine) says how many copies it has.
     static func group(_ name: String, first: JSON?) -> String {
+        if let first, first.flags.strings.contains("inner") {
+            return String(localized: "Old versions: \(first.kind.string ?? "")")
+        }
         if first?.flags.strings.contains("dot") == true { return tr(name) }
         guard let copies = first?.copies.double, let cut = name.range(of: " · ", options: .backwards) else { return name }
         return String(localized: "\(String(name[..<cut.lowerBound])) · \(Int(copies)) copies")

@@ -273,12 +273,134 @@ fn role(name: &str) -> Role {
     }
 }
 
+/// Folders inside tools' hidden folders that hold one version per entry: the newest of
+/// each kind and the one set as default stay, older ones are listed. (folder, tool, which
+/// entries count: a name prefix, "digit" for names starting with a digit, "" for all)
+pub const VERSIONED: &[(&str, &str, &str)] = &[
+    (".gradle/wrapper/dists", "Gradle", ""),
+    (".gradle/caches", "Gradle", "digit"),
+    (".gradle/daemon", "Gradle", "digit"),
+    (".nvm/versions/node", "Node.js", ""),
+    (".rbenv/versions", "Ruby", ""),
+    (".pyenv/versions", "Python", ""),
+    (".rustup/toolchains", "Rust", ""),
+    (".konan", "Kotlin/Native", "kotlin-native-prebuilt-"),
+    (".vscode/extensions", "Visual Studio Code", ""),
+    (".vscode-insiders/extensions", "Visual Studio Code Insiders", ""),
+    (".cursor/extensions", "Cursor", ""),
+    (".windsurf/extensions", "Windsurf", ""),
+    (".kiro/extensions", "Kiro", ""),
+    (".trae/extensions", "Trae", ""),
+    (".antigravity/extensions", "Antigravity", ""),
+    (".pub-cache/hosted/pub.dev", "Flutter", ""),
+];
+
+const OLD_VERSIONS: &str = "Old versions";
+
+/// Splits a name at its version: "gradle-8.9-bin" → ("gradle--bin", [8, 9]),
+/// "v20.11.0" → ("v", [20, 11, 0]), "ms-python.python-2024.2.0-darwin-arm64" →
+/// ("ms-python.python--darwin-arm64", [2024, 2, 0]). The version starts after a "-", or at
+/// the start (after an optional "v").
+fn split_version(name: &str) -> Option<(String, Vec<u64>, String)> {
+    let b = name.as_bytes();
+    let start = if b.first().is_some_and(u8::is_ascii_digit) {
+        0
+    } else if b.first() == Some(&b'v') && b.get(1).is_some_and(u8::is_ascii_digit) {
+        1
+    } else {
+        (1..b.len()).find(|&i| b[i - 1] == b'-' && b[i].is_ascii_digit())?
+    };
+    let mut end = start;
+    while end < b.len() && (b[end].is_ascii_digit() || (b"._-".contains(&b[end]) && b.get(end + 1).is_some_and(u8::is_ascii_digit))) {
+        end += 1;
+    }
+    let numbers = name[start..end].split(['.', '-', '_']).filter_map(|n| n.parse().ok()).collect();
+    Some((format!("{}{}", &name[..start], &name[end..]), numbers, name[start..end].to_string()))
+}
+
+/// What the tool is set to use (it stays even when a newer one is installed).
+fn defaults(home: &Path, folder: &str) -> Vec<String> {
+    let read = |p: &str| std::fs::read_to_string(home.join(p)).unwrap_or_default();
+    match folder {
+        ".rbenv/versions" => read(".rbenv/version").lines().map(|l| l.trim().to_string()).collect(),
+        ".pyenv/versions" => read(".pyenv/version").lines().map(|l| l.trim().to_string()).collect(),
+        // "20" or "v20.11.0" (a name like "lts/iron" or "node" means the newest, kept anyway)
+        ".nvm/versions/node" => {
+            let alias = read(".nvm/alias/default").trim().trim_start_matches('v').to_string();
+            if alias.is_empty() { vec![] } else { vec![format!("v{alias}")] }
+        }
+        ".rustup/toolchains" => read(".rustup/settings.toml")
+            .lines()
+            .filter_map(|l| l.strip_prefix("default_toolchain"))
+            .map(|v| v.trim_start_matches([' ', '=']).trim().trim_matches('"').to_string())
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// Is `rel` (inside the home folder) an entry of a `VERSIONED` folder?
+pub fn is_versioned_entry(rel: &Path) -> bool {
+    let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    rel.parent().is_some_and(|p| {
+        VERSIONED.iter().any(|(folder, _, which)| p == Path::new(folder) && counts(&name, which))
+    }) && split_version(&name).is_some()
+}
+
+/// Is `name` one of the entries a `VERSIONED` folder lists?
+fn counts(name: &str, which: &str) -> bool {
+    !name.starts_with('.')
+        && match which {
+            "" => true,
+            "digit" => name.starts_with(|c: char| c.is_ascii_digit()),
+            prefix => name.starts_with(prefix),
+        }
+}
+
+/// Older versions in `VERSIONED` folders; `place` is the newer version that stays.
+fn old_versions(home: &Path) -> Vec<Pick> {
+    let mut out = Vec::new();
+    for (folder, tool, which) in VERSIONED {
+        let dir = home.join(folder);
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let keep = defaults(home, folder);
+        // family → [(numbers, version text, name)]
+        let mut families: HashMap<String, Vec<(Vec<u64>, String, String)>> = HashMap::new();
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+            if !is_dir || !counts(&name, which) {
+                continue;
+            }
+            if let Some((family, numbers, text)) = split_version(&name) {
+                families.entry(family).or_default().push((numbers, text, name));
+            }
+        }
+        for mut versions in families.into_values() {
+            versions.sort();
+            let Some((_, newest, _)) = versions.pop() else { continue };
+            for (_, _, name) in versions {
+                if keep.iter().any(|k| name == *k || name.starts_with(&format!("{k}-")) || name.starts_with(&format!("{k}."))) {
+                    continue;
+                }
+                let mut pick = Pick::new(dir.join(&name), home.to_path_buf(), Purpose::HomeItems, Action::Trash);
+                pick.flags.push("dot");
+                pick.flags.push("inner");
+                pick.kind = (*tool).into();
+                pick.place = newest.clone();
+                pick.group = format!("{OLD_VERSIONS}: {tool}");
+                out.push(pick);
+            }
+        }
+    }
+    out
+}
+
 /// Verdicts (group names), in the order they are listed.
 const SAFE: &str = "Safe to remove";
 const OUTDATED: &str = "Probably outdated";
 const UNKNOWN: &str = "Not recognized";
 const NEEDED: &str = "Still needed";
-const ORDER: [&str; 4] = [SAFE, OUTDATED, UNKNOWN, NEEDED];
+const ORDER: [&str; 5] = [OLD_VERSIONS, SAFE, OUTDATED, UNKNOWN, NEEDED];
 
 /// Not used for this long: outdated (or a cache safe to clear).
 const IDLE_DAYS: i64 = 180;
@@ -309,6 +431,8 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
         pick.flags.push("dot");
         out.push(pick);
     }
+    let first_inner = out.len();
+    out.extend(old_versions(&ctx.home));
     // sizes and the last change anywhere inside, in two parallel walks
     let paths: Vec<PathBuf> = out.iter().map(|p| p.path.clone()).collect();
     let (sizes, newest) = std::thread::scope(|s| {
@@ -323,7 +447,12 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
         pick.changed_days = Some(used);
         let name = pick.name.clone();
         let mut parts: Vec<String> = Vec::new();
-        if let Some(base) = backup_of(&name) {
+        if i >= first_inner {
+            // an older version: the newer one stays; ticked once installed a while ago
+            parts.push(pick.kind.clone());
+            parts.push(format!("{} is newer", pick.place));
+            pick.preselect = used >= LEFTOVER_DAYS;
+        } else if let Some(base) = backup_of(&name) {
             pick.group = SAFE.into();
             pick.flags.push("backup");
             parts.push(format!("Backup of {base}"));
@@ -375,7 +504,11 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
             pick.flags.push("unknown");
             pick.group = if used >= IDLE_DAYS { OUTDATED } else { UNKNOWN }.into();
         }
+        // what is inside an installed version does not change after it is installed
+        let inner = i >= first_inner;
         parts.push(match used {
+            _ if inner && used == 0 => "installed today".into(),
+            _ if inner => format!("installed {used} days ago"),
             0 => "last used today".into(),
             1 => "last used yesterday".into(),
             _ => format!("last used {used} days ago"),
@@ -394,8 +527,10 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
             }
         }
     }
-    out.sort_by_key(|p| {
-        (ORDER.iter().position(|g| *g == p.group).unwrap_or(ORDER.len()), std::cmp::Reverse(p.bytes))
+    // old versions first, one group per tool
+    out.sort_by(|a, b| {
+        let rank = |p: &Pick| ORDER.iter().position(|g| p.group.starts_with(g)).unwrap_or(ORDER.len());
+        (rank(a), &a.group, std::cmp::Reverse(a.bytes)).cmp(&(rank(b), &b.group, std::cmp::Reverse(b.bytes)))
     });
     out
 }
@@ -542,6 +677,37 @@ mod tests {
         assert!(!removable(".ssh.bak", true) && !removable(".zshrc", false) && !removable(".netrc", false));
         assert!(removable(".zshrc.bak", false) && removable(".zcompdump", false) && removable(".gradle", true));
         assert!(is_essential(".app-signing") && !is_essential(".design"));
+    }
+
+    #[test]
+    fn versions() {
+        let v = |n: &str| split_version(n).map(|(f, v, _)| (f, v));
+        assert_eq!(v("gradle-8.9-bin"), Some(("gradle--bin".into(), vec![8, 9])));
+        assert_eq!(v("v20.11.0"), Some(("v".into(), vec![20, 11, 0])));
+        assert_eq!(v("9.4.1"), Some(("".into(), vec![9, 4, 1])));
+        assert_eq!(v("ms-python.python-2024.2.0-darwin-arm64"), Some(("ms-python.python--darwin-arm64".into(), vec![2024, 2, 0])));
+        assert_eq!(v("stable-aarch64-apple-darwin"), None);
+        assert_eq!(v("nightly-2024-01-05-aarch64-apple-darwin").map(|x| x.1), Some(vec![2024, 1, 5]));
+    }
+
+    #[test]
+    fn old_versions_inside_folders() {
+        let home = std::env::temp_dir().join(format!("oc-ver-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        for d in [".gradle/wrapper/dists/gradle-8.9-bin", ".gradle/wrapper/dists/gradle-9.1-bin", ".gradle/wrapper/dists/gradle-8.9-all",
+                  ".rbenv/versions/3.1.0", ".rbenv/versions/3.2.0", ".rbenv/versions/3.3.0", ".gradle/caches/modules-2"] {
+            std::fs::create_dir_all(home.join(d)).unwrap();
+        }
+        std::fs::write(home.join(".rbenv/version"), "3.1.0\n").unwrap();
+        let old: Vec<String> = old_versions(&home).iter().map(|p| p.name.clone()).collect();
+        // 8.9-all is the only "all"; 3.1.0 is the default; modules-2 is not a version
+        assert_eq!(old.len(), 2, "{old:?}");
+        assert!(old.contains(&"gradle-8.9-bin".to_string()) && old.contains(&"3.2.0".to_string()));
+        let ctx = Context { home: home.clone(), vars: HashMap::new(), data_dir: home.join("data") };
+        let ok = |rel: &str| crate::guard::check_for(&home.join(rel), &home, &ctx, Purpose::HomeItems).is_ok();
+        assert!(ok(".gradle/wrapper/dists/gradle-8.9-bin") && ok(".rbenv/versions/3.2.0"));
+        assert!(!ok(".gradle/caches/modules-2") && !ok(".gradle/caches/modules-2/x") && !ok(".rbenv/version"));
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

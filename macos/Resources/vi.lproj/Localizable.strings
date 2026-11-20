@@ -581,3 +581,7 @@
 "last used today" = "dùng lần cuối hôm nay";
 "last used yesterday" = "dùng lần cuối hôm qua";
 "last used %lld days ago" = "dùng lần cuối %lld ngày trước";
+"Old versions: %@" = "Bản cũ: %@";
+"%@ is newer" = "đã có %@ mới hơn";
+"installed today" = "cài hôm nay";
+"installed %lld days ago" = "cài %lld ngày trước";
