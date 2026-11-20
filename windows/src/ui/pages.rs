@@ -108,6 +108,8 @@ impl Module {
             Module::Uninstaller => (0x2F6FD6, 0x2A1857),
             Module::LargeOld => (0x9A5B13, 0x3B1D52),
             Module::Duplicates => (0x1F7A8C, 0x2B1B5C),
+            Module::History => (0x8E3FA3, 0x241240),
+            Module::Settings => (0x13806E, 0x0F2A3D),
             _ => (0x4D5B73, 0x1C2233),
         }
     }

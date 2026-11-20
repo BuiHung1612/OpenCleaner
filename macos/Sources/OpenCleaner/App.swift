@@ -130,8 +130,8 @@ enum Module: Hashable {
         // start colors kept dark enough for white text (WCAG AA) at the light end of the gradient
         case .spaceLens: [Color(hex: "#0C7889"), Color(hex: "#123063")]
         case .uninstaller: [Color(hex: "#2961BA"), Color(hex: "#2A1857")]
-        case .history: [Color(hex: "#4D5B73"), Color(hex: "#1C2233")]
-        case .settings: [Color(hex: "#55557A"), Color(hex: "#1D1E33")]
+        case .history: [Color(hex: "#8E3FA3"), Color(hex: "#241240")]
+        case .settings: [Color(hex: "#13806E"), Color(hex: "#0F2A3D")]
         case .tool(let id): (Tools.all.first { $0.id == id }?.colors ?? []).map(Color.init(hex:)).paddedPalette
         }
     }
@@ -212,6 +212,9 @@ struct MainView: View {
                 }
                 .padding(10)
             }
+            // keep the scroller off the panel's rounded corners and edge
+            .contentMargins(.vertical, 14, for: .scrollIndicators)
+            .padding(.trailing, 4)
             .brightScroller()
             Text("Engine \(version ?? "—")").font(.app(12)).foregroundStyle(.dim)
                 .padding(.horizontal, 20).padding(.vertical, 12)
