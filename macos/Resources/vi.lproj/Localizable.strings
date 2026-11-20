@@ -557,3 +557,7 @@
 "Welcome to OpenCleaner" = "Chào mừng đến với OpenCleaner";
 "Nothing is removed until you have reviewed it and said so. A few settings help before you start." = "Không có gì bị xóa cho tới khi bạn đã xem lại và đồng ý. Vài thiết lập sau sẽ giúp ích trước khi bắt đầu.";
 "Get Started" = "Bắt đầu";
+"Downloading OpenCleaner %@" = "Đang tải OpenCleaner %@";
+"Checking and installing…" = "Đang kiểm tra và cài đặt…";
+"%@ of %@" = "%@ / %@";
+"Connecting…" = "Đang kết nối…";

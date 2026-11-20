@@ -2,6 +2,10 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## Unreleased
+
+- macOS: installing an update shows its download in a small window with a progress bar and Cancel, then "Checking and installing…", as on Windows.
+
 ## 0.3.7
 
 - Windows in Vietnamese: follows the Windows display language, or Settings › General › Language (System, English, Tiếng Việt). It uses the Mac app's translations plus the Windows-only text.

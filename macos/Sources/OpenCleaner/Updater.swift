@@ -5,6 +5,7 @@
 
 import AppKit
 import Foundation
+import SwiftUI
 
 enum Updater {
     static let repo = "BuiHung1612/OpenCleaner"
@@ -89,8 +90,14 @@ enum Updater {
                 NSWorkspace.shared.open(releasesPage)
                 return
             }
-            try await install(from: url)
+            let progress = UpdateProgress.shared
+            progress.show(version: release.version)
+            defer { progress.close() }
+            try await install(from: url, progress: progress)
             NSApp.terminate(nil)
+        } catch is CancellationError {
+            // the user pressed Cancel: nothing was changed
+        } catch let e as URLError where e.code == .cancelled {
         } catch {
             guard manual || error is InstallFailure else { return } // automatic check: stay quiet when offline
             alert(String(localized: "Couldn't update"), error.localizedDescription)
@@ -110,7 +117,7 @@ enum Updater {
 
     /// Downloads and unpacks the new app, checks it, swaps the bundles (old one to the Trash) and
     /// starts a script that reopens the app once we have quit.
-    @MainActor static func install(from url: URL) async throws {
+    @MainActor static func install(from url: URL, progress: UpdateProgress? = nil) async throws {
         do {
             let app = Bundle.main.bundleURL
             let parent = app.deletingLastPathComponent()
@@ -120,7 +127,22 @@ enum Updater {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("opencleaner-update")
             try? FileManager.default.removeItem(at: dir)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let (downloaded, _) = try await URLSession.shared.download(from: url)
+            let tracker = DownloadTracker()
+            let watching = Task { @MainActor in
+                // the download's own counters, a few times a second, into the progress window
+                while !Task.isCancelled {
+                    if let task = tracker.task {
+                        progress?.task = task
+                        progress?.done = task.countOfBytesReceived
+                        progress?.total = task.countOfBytesExpectedToReceive
+                    }
+                    try? await Task.sleep(for: .milliseconds(150))
+                }
+            }
+            defer { watching.cancel() }
+            let (downloaded, _) = try await URLSession.shared.download(from: url, delegate: tracker)
+            if progress?.cancelled == true { throw CancellationError() }
+            progress?.installing = true
             let image = dir.appendingPathComponent(asset)
             try FileManager.default.moveItem(at: downloaded, to: image)
             // copy the app out of the disk image, then let the image go
@@ -210,5 +232,83 @@ enum Updater {
         a.messageText = title
         a.informativeText = text
         a.runModal()
+    }
+}
+
+
+/// Hands over the download task as soon as URLSession creates it (for its byte counters).
+final class DownloadTracker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var created: URLSessionTask?
+    var task: URLSessionTask? { lock.withLock { created } }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        lock.withLock { created = task }
+    }
+}
+
+/// The small window that shows an update downloading, with Cancel (as on Windows).
+@MainActor @Observable
+final class UpdateProgress {
+    static let shared = UpdateProgress()
+    var version = ""
+    var done: Int64 = 0
+    var total: Int64 = 0
+    /// downloaded: checking the signature and swapping the app, no longer cancellable
+    var installing = false
+    private(set) var cancelled = false
+    @ObservationIgnored var task: URLSessionTask?
+    @ObservationIgnored private var panel: NSPanel?
+
+    func show(version: String) {
+        self.version = version
+        (done, total, installing, cancelled) = (0, 0, false, false)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 150),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+        panel.title = "OpenCleaner"
+        panel.contentViewController = NSHostingController(rootView: UpdateProgressView(model: self))
+        panel.isReleasedWhenClosed = false
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        self.panel = panel
+    }
+
+    func cancel() {
+        cancelled = true
+        task?.cancel()
+    }
+
+    func close() {
+        panel?.close()
+        panel = nil
+        task = nil
+    }
+}
+
+struct UpdateProgressView: View {
+    let model: UpdateProgress
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Downloading OpenCleaner \(model.version)").font(.headline)
+            if model.installing || model.total <= 0 {
+                ProgressView().progressViewStyle(.linear)
+            } else {
+                ProgressView(value: Double(model.done), total: Double(model.total))
+            }
+            HStack {
+                Text(model.installing ? String(localized: "Checking and installing…")
+                     : model.total > 0 ? String(localized: "\(bytes(Double(model.done))) of \(bytes(Double(model.total)))")
+                     : String(localized: "Connecting…"))
+                    .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                Spacer()
+                Button(String(localized: "Cancel")) { model.cancel() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(model.installing)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
     }
 }
