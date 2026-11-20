@@ -424,13 +424,32 @@ mod platform {
 
     /// What emptying the Trash frees, as System Junk counts it: blocks a clone shares with
     /// a file outside (an app copy that Slim Apps kept, say) stay in use after emptying.
+    /// Measured again only when the Trash folder itself changed (something put in or taken
+    /// out changes its modification time): the Dashboard may read every few seconds.
     pub fn trash_size() -> Option<u64> {
-        let home = std::env::var_os("HOME")?;
+        use std::sync::Mutex;
+        static LAST: Mutex<Option<(std::time::SystemTime, Option<u64>)>> = Mutex::new(None);
+        let trash = std::path::Path::new(&std::env::var_os("HOME")?).join(".Trash");
+        let changed = std::fs::metadata(&trash).and_then(|m| m.modified()).ok();
+        if let (Some(t), Ok(last)) = (changed, LAST.lock())
+            && let Some((when, size)) = *last
+            && when == t
+        {
+            return size;
+        }
+        let size = measure_trash(&trash);
+        if let (Some(t), Ok(mut last)) = (changed, LAST.lock()) {
+            *last = Some((t, size));
+        }
+        size
+    }
+
+    fn measure_trash(trash: &std::path::Path) -> Option<u64> {
         let opts = crate::size::Options {
             mode: crate::size::Mode::Freed,
             ..Default::default()
         };
-        let r = crate::size::measure(&std::path::Path::new(&home).join(".Trash"), &opts).ok()?;
+        let r = crate::size::measure(trash, &opts).ok()?;
         (!r.permission_only || r.bytes > 0).then_some(r.bytes)
     }
 
