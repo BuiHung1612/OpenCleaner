@@ -2,6 +2,11 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## Unreleased
+
+- Hidden Items gives each item a verdict: Safe to remove, Probably outdated, Still needed or Not recognized, with what it holds (a cache downloaded again when needed, the tool itself, or settings and data), whether its app is still installed, and when anything inside it was last used (the whole folder, not only its top level).
+- Windows: text made of parts ("… · last used 3 days ago") is translated part by part.
+
 ## 0.3.8
 
 - macOS: installing an update shows its download in a small window with a progress bar and Cancel, then "Checking and installing…", as on Windows.

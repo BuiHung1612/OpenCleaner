@@ -170,7 +170,18 @@ fn translate(text: &str) -> Option<String> {
     if let Some(v) = t.exact.get(text) {
         return Some(v.clone());
     }
-    t.templates.iter().find_map(|tpl| capture(&tpl.parts, text).map(|args| fill(&tpl.value, &args)))
+    if let Some(v) = t.templates.iter().find_map(|tpl| capture(&tpl.parts, text).map(|args| fill(&tpl.value, &args))) {
+        return Some(v);
+    }
+    // "Gradle cache, downloaded again when needed · last used 3 days ago": part by part
+    let parts: Vec<&str> = text.split(" · ").collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let translated: Vec<Option<String>> = parts.iter().map(|p| translate(p)).collect();
+    translated.iter().any(Option::is_some).then(|| {
+        parts.iter().zip(translated).map(|(p, t)| t.unwrap_or_else(|| p.to_string())).collect::<Vec<_>>().join(" · ")
+    })
 }
 
 /// `text` in the chosen language (as it is when English, or when no translation fits).
@@ -206,6 +217,7 @@ mod tests {
         assert_eq!(tr("Drive C: is almost full: 3 GB free"), "Ổ C: sắp đầy: còn trống 3 GB");
         assert_eq!(tr("C:\\Users\\me\\Downloads"), "C:\\Users\\me\\Downloads");
         assert_eq!(tr("4.2 GB"), "4.2 GB");
+        assert_eq!(tr("Gradle cache, downloaded again when needed · last used 3 days ago"), "Bộ nhớ đệm của Gradle, sẽ tải lại khi cần · dùng lần cuối 3 ngày trước");
         set_choice(1);
         assert_eq!(tr("Settings"), "Settings");
     }

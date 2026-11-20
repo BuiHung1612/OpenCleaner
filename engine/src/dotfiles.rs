@@ -1,8 +1,8 @@
 //! Hidden items in the home folder (`.android`, `.vscode`, `.zshrc.backup.…`): what each
-//! belongs to and whether it still earns its place. Old backups and files tools rebuild
-//! start ticked; download caches of tools that are gone are ticked once unchanged for 90
-//! days;
-//! everything else is only shown. Settings, keys and history are never listed.
+//! belongs to, what it holds (a cache, the tool itself, settings and data), when anything
+//! in it last changed, and a verdict: safe to remove, probably outdated, still needed or not
+//! recognized. Old backups, files tools rebuild and caches of tools gone or unused start
+//! ticked; everything else is only shown. Settings, keys and history are never listed.
 //! Everything goes to the Trash.
 
 use crate::context::Context;
@@ -11,7 +11,9 @@ use crate::picks::{Action, Pick};
 use crate::size;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use crate::fs::walk::{self, Visitor};
+use crate::fs::{self, Detail, Entry, Kind};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::SystemTime;
 
 /// Never listed or removed: settings, keys, credentials, and folders other tools share.
@@ -240,104 +242,144 @@ const OWNERS: &[Owner] = &[
     o(".zsh_sessions", "Terminal", &[], &["zsh"]),
 ];
 
-/// Group names, in the order they are listed.
-const BACKUPS: &str = "Old backups";
-const REBUILT: &str = "Rebuilt automatically";
-const LEFTOVERS: &str = "Left by apps no longer installed";
-const IDLE: &str = "Not changed for 6 months";
-const IN_USE: &str = "In use";
-const UNKNOWN: &str = "Not recognized";
-const ORDER: [&str; 6] = [BACKUPS, REBUILT, LEFTOVERS, IDLE, UNKNOWN, IN_USE];
+/// What a known folder holds, for the verdict and its wording.
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    /// Downloads and build output its tool fetches or makes again.
+    Cache,
+    /// The tool itself (toolchains, version managers).
+    Tool,
+    /// Settings, history, sessions, models, keys.
+    Data,
+}
 
+const CACHES: &[&str] = &[
+    ".npm", ".yarn", ".cocoapods", ".pub-cache", ".dartServer", ".dart-tool", ".dart-cli-completion",
+    ".swiftpm", ".konan", ".gradle", ".m2", ".gem", ".nuget", ".matplotlib", ".expo",
+    ".react-native-cli", ".ServiceHub", ".templateengine",
+];
+const TOOLS: &[&str] = &[
+    ".nvm", ".sdkman", ".bun", ".deno", ".volta", ".rustup", ".cargo", ".rbenv", ".pyenv", ".conda",
+    ".dotnet", ".shorebird", ".maestro", ".bundle",
+];
+
+fn role(name: &str) -> Role {
+    if CACHES.contains(&name) {
+        Role::Cache
+    } else if TOOLS.contains(&name) {
+        Role::Tool
+    } else {
+        Role::Data
+    }
+}
+
+/// Verdicts (group names), in the order they are listed.
+const SAFE: &str = "Safe to remove";
+const OUTDATED: &str = "Probably outdated";
+const UNKNOWN: &str = "Not recognized";
+const NEEDED: &str = "Still needed";
+const ORDER: [&str; 4] = [SAFE, OUTDATED, UNKNOWN, NEEDED];
+
+/// Not used for this long: outdated (or a cache safe to clear).
 const IDLE_DAYS: i64 = 180;
-/// Changed this recently: in use, even when its owner is not found.
+/// Used this recently: in use, even when its owner is not found.
 const RECENT_DAYS: i64 = 30;
-/// A missing app's folder starts ticked once unchanged this long.
+/// A removed tool's cache starts ticked once unused this long.
 const LEFTOVER_DAYS: i64 = 90;
 
 pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
     let Ok(entries) = std::fs::read_dir(&ctx.home) else {
         return Vec::new();
     };
-    let installed = Installed::read(ctx);
     let mut out: Vec<Pick> = Vec::new();
-    let mut backups: HashMap<String, Vec<usize>> = HashMap::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
             continue;
         };
-        if !name.starts_with('.') || name == "." || name == ".." || meta.file_type().is_symlink() {
+        if !name.starts_with('.') || meta.file_type().is_symlink() || !removable(&name, meta.is_dir()) {
             continue;
         }
-        if is_essential(&name) {
+        let is_file = meta.is_file();
+        // other hidden files are settings, history or tokens
+        if is_file && backup_of(&name).is_none() && !name.starts_with(".zcompdump") {
             continue;
         }
-        let path = entry.path();
-        let changed = days_since(newest_change(&path, &meta));
-        let mut pick = Pick::new(
-            path.clone(),
-            ctx.home.clone(),
-            Purpose::HomeItems,
-            Action::Trash,
-        );
-        pick.changed_days = Some(changed);
+        let mut pick = Pick::new(entry.path(), ctx.home.clone(), Purpose::HomeItems, Action::Trash);
         pick.flags.push("dot");
-        if !removable(&name, meta.is_dir()) {
-            continue;
-        }
+        out.push(pick);
+    }
+    // sizes and the last change anywhere inside, in two parallel walks
+    let paths: Vec<PathBuf> = out.iter().map(|p| p.path.clone()).collect();
+    let (sizes, newest) = std::thread::scope(|s| {
+        let newest = s.spawn(|| last_changes(&paths, cancel));
+        (size::freed_many(&paths, cancel, &mut |_| {}), newest.join().unwrap_or_default())
+    });
+    let installed = Installed::read(ctx);
+    let mut backups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, pick) in out.iter_mut().enumerate() {
+        pick.bytes = sizes.get(i).copied().unwrap_or(0);
+        let used = newest.get(i).map_or(0, |&t| days_since(t));
+        pick.changed_days = Some(used);
+        let name = pick.name.clone();
+        let mut parts: Vec<String> = Vec::new();
         if let Some(base) = backup_of(&name) {
-            pick.group = BACKUPS.into();
+            pick.group = SAFE.into();
             pick.flags.push("backup");
-            pick.detail = format!("Backup of {base}");
+            parts.push(format!("Backup of {base}"));
             pick.kind = base.clone();
             // the live file is there: the backups are spare copies
             if ctx.home.join(&base).exists() {
-                backups.entry(base).or_default().push(out.len());
+                backups.entry(base).or_default().push(i);
             }
-        } else if name.starts_with(".zcompdump") && meta.is_file() {
-            pick.group = REBUILT.into();
+        } else if name.starts_with(".zcompdump") {
+            pick.group = SAFE.into();
             pick.flags.push("rebuilt");
-            pick.detail = "zsh rebuilds it when needed".into();
+            parts.push("zsh rebuilds it when needed".into());
             pick.preselect = true;
-        } else if meta.is_file() {
-            // settings, history, tokens: small and personal
-            continue;
         } else if let Some(owner) = OWNERS.iter().find(|o| o.name.eq_ignore_ascii_case(&name)) {
             pick.kind = owner.label.into();
+            let role = role(owner.name);
+            let (flag, text) = match role {
+                Role::Cache => ("cache", format!("{} cache, downloaded again when needed", owner.label)),
+                Role::Tool => ("tool", format!("{} installation", owner.label)),
+                Role::Data => ("data", format!("{} settings and data", owner.label)),
+            };
+            pick.flags.push(flag);
+            parts.push(text);
             // something still writes to it, wherever its owner lives
-            if changed < RECENT_DAYS || installed.has(owner, &path) {
-                if changed >= IDLE_DAYS {
-                    pick.group = IDLE.into();
-                    pick.flags.push("idle");
-                    pick.detail = format!("{} · unchanged for {changed} days", owner.label);
-                } else {
-                    pick.group = IN_USE.into();
-                    pick.flags.push("in_use");
-                    pick.detail = owner.label.into();
-                }
-            } else {
-                pick.group = LEFTOVERS.into();
+            let present = used < RECENT_DAYS || installed.has(owner, &pick.path);
+            if !present {
                 pick.flags.push("missing");
-                pick.detail = format!(
-                    "{} is not installed · unchanged for {changed} days",
-                    owner.label
-                );
-                pick.preselect = changed >= LEFTOVER_DAYS && REBUILDABLE.contains(&owner.name);
+                parts.push(format!("{} is not installed", owner.label));
             }
+            let rebuildable = REBUILDABLE.contains(&owner.name);
+            pick.group = match (role, present) {
+                (Role::Cache, false) => {
+                    pick.preselect = used >= LEFTOVER_DAYS && rebuildable;
+                    SAFE
+                }
+                // its tool is still there: clearing it is the user's call (VS Code's extensions)
+                (Role::Cache, true) if used >= IDLE_DAYS => SAFE,
+                (_, false) => OUTDATED,
+                (_, true) if used >= IDLE_DAYS => OUTDATED,
+                _ => NEEDED,
+            }
+            .into();
         } else {
-            pick.group = UNKNOWN.into();
             pick.flags.push("unknown");
-            pick.detail = format!("Unchanged for {changed} days");
+            pick.group = if used >= IDLE_DAYS { OUTDATED } else { UNKNOWN }.into();
         }
-        out.push(pick);
+        parts.push(match used {
+            0 => "last used today".into(),
+            1 => "last used yesterday".into(),
+            _ => format!("last used {used} days ago"),
+        });
+        pick.detail = parts.join(" · ");
     }
     // of each file's backups, all but the newest start ticked
     for indexes in backups.values() {
-        let newest = indexes
-            .iter()
-            .copied()
-            .max_by_key(|&i| std::cmp::Reverse(out[i].changed_days));
+        let newest = indexes.iter().copied().min_by_key(|&i| out[i].changed_days);
         for &i in indexes {
             if Some(i) == newest {
                 out[i].flags.push("newest");
@@ -347,21 +389,8 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
             }
         }
     }
-    let paths: Vec<PathBuf> = out.iter().map(|p| p.path.clone()).collect();
-    for (pick, bytes) in out
-        .iter_mut()
-        .zip(size::freed_many(&paths, cancel, &mut |_| {}))
-    {
-        pick.bytes = bytes;
-    }
     out.sort_by_key(|p| {
-        (
-            ORDER
-                .iter()
-                .position(|g| *g == p.group)
-                .unwrap_or(ORDER.len()),
-            std::cmp::Reverse(p.bytes),
-        )
+        (ORDER.iter().position(|g| *g == p.group).unwrap_or(ORDER.len()), std::cmp::Reverse(p.bytes))
     });
     out
 }
@@ -386,20 +415,32 @@ fn backup_of(name: &str) -> Option<String> {
         .map(|at| name[..at].to_string())
 }
 
-/// The newest change of the item and what it directly holds.
-// ponytail: one level deep, a walk of the whole tree if folders read as idle while in use
-fn newest_change(path: &Path, meta: &std::fs::Metadata) -> SystemTime {
-    let mut newest = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    if meta.is_dir()
-        && let Ok(children) = std::fs::read_dir(path)
-    {
-        for child in children.flatten() {
-            if let Ok(t) = child.metadata().and_then(|m| m.modified()) {
-                newest = newest.max(t);
+/// The newest modification time of each item and everything inside it (one parallel walk).
+fn last_changes(items: &[PathBuf], cancel: &AtomicBool) -> Vec<SystemTime> {
+    struct Newest(Vec<AtomicI64>);
+    impl Visitor for Newest {
+        fn entry(&self, _dir: &Path, tag: u32, e: &Entry) -> Option<u32> {
+            self.0[tag as usize].fetch_max(e.mtime, Ordering::Relaxed);
+            (e.kind == Kind::Dir && !e.mount_point).then_some(tag)
+        }
+        fn error(&self, _path: &Path, _tag: u32, _err: std::io::Error) {}
+    }
+    let newest = Newest(items.iter().map(|_| AtomicI64::new(0)).collect());
+    let mut roots = Vec::new();
+    for (i, path) in items.iter().enumerate() {
+        if let Ok(e) = fs::stat(path, Detail::Basic) {
+            newest.0[i].store(e.mtime, Ordering::Relaxed);
+            if e.kind == Kind::Dir {
+                roots.push((path.clone(), i as u32));
             }
         }
     }
+    walk::walk_tagged(roots, walk::default_threads(), Detail::Basic, cancel, &newest);
     newest
+        .0
+        .iter()
+        .map(|t| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(t.load(Ordering::Relaxed).max(0) as u64))
+        .collect()
 }
 
 fn days_since(t: SystemTime) -> i64 {
@@ -544,7 +585,7 @@ mod tests {
             let again = home_items(&ctx, &AtomicBool::new(false));
             assert!(again.iter().any(|p| p.name == ".ollama" && !p.preselect));
         }
-        let backups: Vec<&Pick> = items.iter().filter(|p| p.group == BACKUPS).collect();
+        let backups: Vec<&Pick> = items.iter().filter(|p| p.flags.contains(&"backup")).collect();
         assert_eq!(backups.len(), 2);
         assert_eq!(backups.iter().filter(|p| p.preselect).count(), 1);
         let _ = std::fs::remove_dir_all(&home);

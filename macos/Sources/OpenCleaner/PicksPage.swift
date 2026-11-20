@@ -170,19 +170,23 @@ enum PickText {
         return flags.contains("shared") ? text + " · " + String(localized: "also used by the other copy of this app") : text
     }
 
-    /// A hidden home item: what it is or belongs to, and how long it has been unchanged.
+    /// A hidden home item: what it holds, whether its app is still there, when anything in
+    /// it last changed.
     private static func hidden(_ item: JSON, _ flags: Set<String>) -> String {
         let owner = item.kind.string ?? ""
+        var parts: [String] = []
+        if flags.contains("backup") { parts.append(String(localized: "Backup of \(owner)")) }
+        if flags.contains("rebuilt") { parts.append(String(localized: "zsh rebuilds it when needed")) }
+        if flags.contains("cache") { parts.append(String(localized: "\(owner) cache, downloaded again when needed")) }
+        if flags.contains("tool") { parts.append(String(localized: "\(owner) installation")) }
+        if flags.contains("data") { parts.append(String(localized: "\(owner) settings and data")) }
+        if flags.contains("missing") { parts.append(String(localized: "\(owner) is not installed")) }
         let days = Int(item.changed_days.double ?? 0)
-        if flags.contains("backup") {
-            let text = String(localized: "Backup of \(owner)")
-            return flags.contains("newest") ? text + " · " + String(localized: "newest, not ticked") : text
-        }
-        if flags.contains("rebuilt") { return String(localized: "zsh rebuilds it when needed") }
-        if flags.contains("missing") { return String(localized: "\(owner) is not installed · unchanged for \(days) days") }
-        if flags.contains("idle") { return String(localized: "\(owner) · unchanged for \(days) days") }
-        if flags.contains("in_use") { return owner }
-        return String(localized: "Unchanged for \(days) days")
+        parts.append(days == 0 ? String(localized: "last used today")
+                     : days == 1 ? String(localized: "last used yesterday")
+                     : String(localized: "last used \(days) days ago"))
+        if flags.contains("newest") { parts.append(String(localized: "newest, not ticked")) }
+        return parts.joined(separator: " · ")
     }
 
     /// A group's header: a duplicate set ("a.zip · 2 copies" from the engine) says how many copies it has.
