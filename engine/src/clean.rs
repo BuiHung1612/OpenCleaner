@@ -603,6 +603,8 @@ fn make_writable(dir: &Path) {
             return;
         }
         let mut perms = meta.permissions();
+        // Windows: clears the read-only attribute (macOS sets the mode above)
+        #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         let _ = std::fs::set_permissions(dir, perms);
     }

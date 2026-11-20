@@ -717,8 +717,9 @@ mod tests {
         let home = std::env::temp_dir().join(format!("oc-nvm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".nvm/alias/lts")).unwrap();
-        std::fs::write(home.join(".nvm/alias/default"), "lts/*\n").unwrap();
-        std::fs::write(home.join(".nvm/alias/lts/*"), "lts/jod").unwrap();
+        // "lts/*" is a file name only Unix allows; the chain is the same
+        std::fs::write(home.join(".nvm/alias/default"), "lts/latest\n").unwrap();
+        std::fs::write(home.join(".nvm/alias/lts/latest"), "lts/jod").unwrap();
         std::fs::write(home.join(".nvm/alias/lts/jod"), "v22.11.0").unwrap();
         assert_eq!(defaults(&home, ".nvm/versions/node"), ["v22.11.0"]);
         std::fs::write(home.join(".nvm/alias/default"), "node").unwrap();
