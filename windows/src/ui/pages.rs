@@ -232,6 +232,11 @@ pub enum Action {
     PickFind(Module),
     PickStop(Module),
     PickToggle(Module, usize),
+    /// Show one section of a pick list (None: all).
+    PickOnly(Module, Option<String>),
+    /// Tick every row shown (after a warning when some were left unticked on purpose).
+    PickSelectAll(Module),
+    PickDeselectAll(Module),
     PickOpen(Module, usize),
     PickPart(Module, usize, String),
     PickAct(Module),
@@ -464,6 +469,8 @@ struct Junk {
 struct Picks {
     phase: Phase,
     list: Value,
+    /// the one section shown (None: all)
+    only: Option<String>,
     selected: HashSet<usize>,
     parts: Parts,
     progress: Value,
@@ -1743,6 +1750,8 @@ impl State {
                 if !review {
                     self.removal_progress(c, R::new(page.x + 18.0, y, page.w - 36.0, 40.0), &progress);
                     y += 44.0;
+                } else if count > 0 {
+                    y += self.pick_chips(c, R::new(page.x + 18.0, y, page.w - 36.0, 0.0), m);
                 }
                 let panel = R::new(page.x + 18.0, y, page.w - 36.0, bar_y - 72.0 - y);
                 self.pick_list(c, panel, m, review);
@@ -1767,12 +1776,68 @@ impl State {
         }
     }
 
+    /// The sections of a pick list as chips (All, then each with its count and size) to show
+    /// one at a time, and Select All / Deselect All for the rows shown. Returns the height.
+    fn pick_chips(&mut self, c: &mut Canvas, area: R, m: Module) -> f32 {
+        let p = self.pick(m);
+        let mut sections: Vec<(String, usize, f64)> = Vec::new();
+        for it in items_of(&p.list) {
+            let g = it["group"].as_str().unwrap_or("");
+            match sections.last_mut() {
+                Some(last) if last.0 == g => {
+                    last.1 += 1;
+                    last.2 += it["bytes"].as_f64().unwrap_or(0.0);
+                }
+                _ => sections.push((g.to_string(), 1, it["bytes"].as_f64().unwrap_or(0.0))),
+            }
+        }
+        let only = p.only.clone();
+        let shown = self.pick_shown(m);
+        let all_on = !shown.is_empty() && shown.iter().all(|i| self.pick(m).selected.contains(i));
+        let toggle = if all_on { "Deselect All" } else { "Select All" };
+        let toggle_w = self.pill_width(c, toggle);
+        self.pill(c, area.right() - toggle_w, area.y + 20.0, toggle, if all_on { Action::PickDeselectAll(m) } else { Action::PickSelectAll(m) });
+        // not for duplicates, whose sections are sets of copies (hundreds of them)
+        if sections.len() < 2 || sections.len() > 20 || sections.iter().any(|s| s.0.is_empty()) {
+            return 50.0;
+        }
+        let mut chips = vec![(None, crate::i18n::tr("All").into_owned())];
+        chips.extend(sections.iter().map(|(g, n, b)| (Some(g.clone()), format!("{}  {n} · {}", crate::i18n::tr(g), bytes(Some(*b))))));
+        let (mut x, mut y) = (area.x, area.y + 4.0);
+        let right = area.right() - toggle_w - 12.0;
+        for (id, label) in chips {
+            let w = 26.0 + c.measure(&mut self.fonts, &label, 13.0, false).ceil();
+            if x + w > right && x > area.x {
+                x = area.x;
+                y += 38.0;
+            }
+            let r = R::new(x, y, w, 32.0);
+            let on = only == id;
+            c.rounded(r, 16.0, Some(argb(fg(), if on { 56 } else if self.hot(r) { 30 } else { 18 })), Some(argb(fg(), if on { 90 } else { 30 })));
+            c.text(r, &label, 13.0, on, fg(), Align::Center);
+            self.hit(r, Action::PickOnly(m, id));
+            x += w + 8.0;
+        }
+        (y - area.y) + 46.0
+    }
+
+    /// The indexes of the rows shown (the section chosen, or all).
+    fn pick_shown(&self, m: Module) -> Vec<usize> {
+        let p = self.pick(m);
+        items_of(&p.list)
+            .enumerate()
+            .filter(|(_, it)| p.only.as_deref().is_none_or(|o| it["group"].as_str() == Some(o)))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// The tick list of a pick list, grouped; folders open to tick some of their children.
     /// While acting it only shows.
     fn pick_list(&mut self, c: &mut Canvas, panel: R, m: Module, review: bool) {
         // borrowed for the paint rather than copied
         let list = std::mem::take(&mut self.picks(m).list);
         let scroll = self.pick(m).scroll;
+        let only = self.pick(m).only.clone();
         self.scroll_panel(c, panel, scroll, |st, c, mut yy| {
             let start = yy;
             let mut last_group = "";
@@ -1782,6 +1847,9 @@ impl State {
             }
             for (i, it) in items.into_iter().enumerate() {
                 let group = it["group"].as_str().unwrap_or("");
+                if only.as_deref().is_some_and(|o| o != group) {
+                    continue;
+                }
                 if group != last_group && !group.is_empty() {
                     c.text(R::new(panel.x + 20.0, yy, panel.w - 40.0, 24.0), group, 13.0, true, dim(), Align::Left);
                     yy += 28.0;
@@ -2686,6 +2754,38 @@ pub fn perform(hwnd: HWND, action: Action) {
             with(|st| {
                 if let Some(j) = &st.picks(m).job {
                     j.cancel();
+                }
+            });
+        }
+        Action::PickOnly(m, only) => {
+            with(|st| {
+                let p = st.picks(m);
+                p.only = only;
+                p.scroll = 0.0;
+            });
+        }
+        Action::PickSelectAll(m) => {
+            let Some((shown, risky)) = with(|st| {
+                let shown = st.pick_shown(m);
+                let p = st.pick(m);
+                let items: Vec<&Value> = items_of(&p.list).collect();
+                let risky = shown.iter().filter(|&&i| !p.selected.contains(&i) && items.get(i).is_some_and(|it| it["preselect"] != true)).count();
+                (shown, risky)
+            }) else {
+                return;
+            };
+            if risky == 0
+                || confirm(hwnd, &format!("Select everything shown?\n\n{risky} of these were left unticked on purpose: they may hold settings, history, sign-ins or data an app still uses, or be something OpenCleaner does not recognize. Review them before you remove them. Items moved to the Trash can be put back; items deleted outright cannot."))
+            {
+                with(|st| st.picks(m).selected.extend(shown));
+            }
+        }
+        Action::PickDeselectAll(m) => {
+            with(|st| {
+                let shown = st.pick_shown(m);
+                let p = st.picks(m);
+                for i in shown {
+                    p.selected.remove(&i);
                 }
             });
         }

@@ -272,17 +272,29 @@ struct JunkPage: View {
     private var review: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            if model.phase == .review { FilterBar(filter: $filter) }
+            if model.phase == .review {
+                FilterBar(filter: $filter)
+                // one group at a time; Clean then acts on the group shown
+                let rules = model.groups.filter { model.onlyGroup == nil || $0.id.string == model.onlyGroup }
+                    .flatMap { shownRules($0) }.filter { $0.status.string == "ready" }
+                let ids = rules.compactMap(\.id.string)
+                HStack(spacing: 10) {
+                    GroupChips(chips: model.groups.compactMap { g in
+                        guard let id = g.id.string else { return nil }
+                        let ready = g.rules.array.filter { $0.status.string == "ready" }
+                        return GroupChips.Chip(id: id, title: tr(g.title.string ?? id), count: ready.count,
+                                               bytes: ready.reduce(0) { $0 + ($1.bytes.double ?? 0) })
+                    }, only: Binding(get: { model.onlyGroup }, set: { model.onlyGroup = $0 }))
+                    Spacer(minLength: 0)
+                    SelectAllButton(
+                        allOn: !ids.isEmpty && ids.allSatisfy(model.selected.contains),
+                        risky: rules.filter { !model.selected.contains($0.id.string ?? "") && !$0.default.bool }.count,
+                        select: { model.selected.formUnion(ids) },
+                        deselect: { model.selected.subtract(ids); model.excluded.subtract(rules.flatMap { JunkModel.items($0).map(\.path) }) })
+                }
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if model.onlyGroup != nil, model.phase == .review {
-                        HStack {
-                            Text("Showing one group").font(.app(12)).foregroundStyle(.dim)
-                            Button(String(localized: "Show All")) { model.onlyGroup = nil }.buttonStyle(.pill)
-                        }
-                        .padding(.leading, 12)
-                        .accessibilityElement(children: .contain)
-                    }
                     ForEach(model.groups.filter { model.onlyGroup == nil || $0.id.string == model.onlyGroup }, id: \.id.string) { group in
                         let rules = shownRules(group)
                         if !rules.isEmpty {

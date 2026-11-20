@@ -129,3 +129,4 @@
 "Docker · %@" = "Docker · %@";
 "This copy of OpenCleaner is updated by the Microsoft Store." = "Bản OpenCleaner này được Microsoft Store cập nhật.";
 
+"Select everything shown?\n\n%@ of these were left unticked on purpose: they may hold settings, history, sign-ins or data an app still uses, or be something OpenCleaner does not recognize. Review them before you remove them. Items moved to the Trash can be put back; items deleted outright cannot." = "Chọn mọi mục đang hiển thị?\n\n%@ mục trong số này được cố ý để trống: chúng có thể chứa cài đặt, lịch sử, phiên đăng nhập hoặc dữ liệu ứng dụng vẫn đang dùng, hoặc là thứ OpenCleaner chưa nhận ra. Hãy xem lại trước khi xóa. Mục chuyển vào Thùng rác có thể khôi phục; mục bị xóa hẳn thì không.";

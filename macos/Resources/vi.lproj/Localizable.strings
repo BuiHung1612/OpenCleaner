@@ -587,3 +587,8 @@
 "installed %lld days ago" = "cài %lld ngày trước";
 "Quit %@" = "Thoát %@";
 "Quit it, then scan again: this row can then be cleaned" = "Thoát ứng dụng rồi quét lại: sau đó mục này dọn được";
+"All" = "Tất cả";
+"Select All" = "Chọn tất cả";
+"Deselect All" = "Bỏ chọn tất cả";
+"Select everything shown?" = "Chọn mọi mục đang hiển thị?";
+"%lld of these were left unticked on purpose: they may hold settings, history, sign-ins or data an app still uses, or be something OpenCleaner does not recognize. Review them before you remove them. Items moved to the Trash can be put back; items deleted outright cannot." = "%lld mục trong số này được cố ý để trống: chúng có thể chứa cài đặt, lịch sử, phiên đăng nhập hoặc dữ liệu ứng dụng vẫn đang dùng, hoặc là thứ OpenCleaner chưa nhận ra. Hãy xem lại trước khi xóa. Mục chuyển vào Thùng rác có thể khôi phục; mục bị xóa hẳn thì không.";

@@ -212,21 +212,45 @@ enum PickText {
 struct PicksList: View {
     let model: PicksModel
     @State private var filter = ListFilter()
+    /// the one section shown (nil: all)
+    @State private var only: String?
 
     var body: some View {
         VStack(spacing: 10) {
             if model.phase == .review {
                 if let error = model.error { ErrorBanner(message: error) }
-                if !model.items.isEmpty { FilterBar(filter: $filter) }
+                if !model.items.isEmpty {
+                    FilterBar(filter: $filter)
+                    // not for duplicates, whose sections are sets of copies (hundreds of them)
+                    HStack(alignment: .center, spacing: 10) {
+                        if model.groups.count <= 20 { GroupChips(chips: chips, only: $only) }
+                        Spacer(minLength: 0)
+                        let rows = shown.flatMap(\.indexes)
+                        SelectAllButton(
+                            allOn: !rows.isEmpty && rows.allSatisfy(model.selected.contains),
+                            risky: rows.filter { !model.selected.contains($0) && model.items[$0].preselect.bool != true }.count,
+                            select: { model.selected.formUnion(rows) },
+                            deselect: { model.selected.subtract(rows) })
+                    }
+                }
             }
             list
+        }
+        // a new list has other sections
+        .onChange(of: model.groups.map(\.name)) { if let o = only, !model.groups.contains(where: { $0.name == o }) { only = nil } }
+    }
+
+    private var chips: [GroupChips.Chip] {
+        model.groups.filter { !$0.name.isEmpty }.map { g in
+            GroupChips.Chip(id: g.name, title: PickText.group(g.name, first: g.indexes.first.map { model.items[$0] }),
+                            count: g.indexes.count, bytes: g.indexes.reduce(0) { $0 + (model.items[$1].bytes.double ?? 0) })
         }
     }
 
     /// Groups keep the engine's order; the filter picks and orders the rows inside each.
     private var shown: [(name: String, indexes: [Int])] {
         let items = model.items
-        return model.groups.compactMap { group in
+        return model.groups.filter { only == nil || $0.name == only }.compactMap { group in
             let rows = filter.sorted(
                 group.indexes.filter { filter.matches(items[$0].name.string ?? "", items[$0].path.string ?? "") },
                 name: { items[$0].name.string ?? "" }, size: { items[$0].bytes.double ?? 0 })

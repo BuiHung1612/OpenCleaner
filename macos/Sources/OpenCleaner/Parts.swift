@@ -299,6 +299,77 @@ struct SearchField: View {
     }
 }
 
+/// Ticks every row shown (or unticks them). Rows the app left unticked on purpose are only
+/// ticked after a warning that says what they may hold.
+struct SelectAllButton: View {
+    /// every row shown is ticked
+    let allOn: Bool
+    /// rows shown that were left unticked on purpose (they may hold data still in use)
+    let risky: Int
+    let select: () -> Void
+    let deselect: () -> Void
+    @State private var asking = false
+
+    var body: some View {
+        Button(allOn ? String(localized: "Deselect All") : String(localized: "Select All")) {
+            if allOn { deselect() } else if risky > 0 { asking = true } else { select() }
+        }
+        .buttonStyle(.pill)
+        .fixedSize()
+        .confirmationDialog(String(localized: "Select everything shown?"), isPresented: $asking) {
+            Button(String(localized: "Select All"), role: .destructive) { select() }
+            Button(String(localized: "Cancel"), role: .cancel) {}
+        } message: {
+            Text("\(risky) of these were left unticked on purpose: they may hold settings, history, sign-ins or data an app still uses, or be something OpenCleaner does not recognize. Review them before you remove them. Items moved to the Trash can be put back; items deleted outright cannot.")
+        }
+    }
+}
+
+/// One chip per section of a long review list, to show one section at a time instead of
+/// scrolling to it. Shown when the list has two sections or more.
+struct GroupChips: View {
+    struct Chip: Identifiable {
+        let id: String
+        let title: String
+        let count: Int
+        let bytes: Double
+    }
+    let chips: [Chip]
+    /// nil: every section
+    @Binding var only: String?
+
+    var body: some View {
+        if chips.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    chip(nil, String(localized: "All"), detail: nil)
+                    ForEach(chips) { c in
+                        chip(c.id, c.title, detail: c.bytes > 0 ? "\(c.count) · \(shortBytes(c.bytes))" : "\(c.count)")
+                    }
+                }
+                .padding(.horizontal, 2)
+            }
+            .scrollClipDisabled()
+        }
+    }
+
+    private func chip(_ id: String?, _ title: String, detail: String?) -> some View {
+        let on = only == id
+        return Button { only = id } label: {
+            HStack(spacing: 6) {
+                Text(verbatim: title).font(.app(13, weight: .medium)).lineLimit(1)
+                if let detail { Text(verbatim: detail).font(.app(12)).foregroundStyle(.dim).monospacedDigit() }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(Capsule().fill(.white.opacity(on ? 0.22 : 0.07)))
+            .overlay(Capsule().strokeBorder(.white.opacity(on ? 0.35 : 0.12)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
 /// Search field and sort menu above a review list.
 struct FilterBar: View {
     @Binding var filter: ListFilter
