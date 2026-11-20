@@ -422,13 +422,15 @@ mod platform {
         now.checked_sub(Duration::from_secs(boot.tv_sec as u64))
     }
 
+    /// What emptying the Trash frees, as System Junk counts it: blocks a clone shares with
+    /// a file outside (an app copy that Slim Apps kept, say) stay in use after emptying.
     pub fn trash_size() -> Option<u64> {
         let home = std::env::var_os("HOME")?;
-        let r = crate::size::measure(
-            &std::path::Path::new(&home).join(".Trash"),
-            &Default::default(),
-        )
-        .ok()?;
+        let opts = crate::size::Options {
+            mode: crate::size::Mode::Freed,
+            ..Default::default()
+        };
+        let r = crate::size::measure(&std::path::Path::new(&home).join(".Trash"), &opts).ok()?;
         (!r.permission_only || r.bytes > 0).then_some(r.bytes)
     }
 

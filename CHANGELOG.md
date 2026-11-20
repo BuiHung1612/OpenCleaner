@@ -2,6 +2,10 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## Unreleased
+
+- macOS: the Dashboard's Trash figure is what emptying it frees, as System Junk counts it. App copies that share their space with the apps in Applications no longer show as gigabytes to free.
+
 ## 0.3.5
 
 - macOS and Windows: the window opens at a more compact 1280 x 880 (the whole sidebar still fits) instead of most of the screen.
