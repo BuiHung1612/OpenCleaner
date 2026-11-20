@@ -136,7 +136,7 @@ jobs:
           Shot '01-dashboard'
 
           # sidebar order after the dashboard (pages.rs SECTIONS); the first Tab focuses Dashboard
-          $pages = 'System Junk', 'Installers', 'Project Junk', 'Uninstaller', 'Startup Items', 'Space Lens', 'Large & Old Files', 'Duplicates', 'History', 'Settings'
+          $pages = 'System Junk', 'Installers', 'Project Junk', 'Developer Tools', 'Uninstaller', 'Startup Items', 'Space Lens', 'Large & Old Files', 'Duplicates', 'History', 'Settings'
           Key $hwnd 0x09
           $n = 2
           foreach ($page in $pages) {

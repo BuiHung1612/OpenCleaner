@@ -449,6 +449,9 @@ fn run(
     if let Some(java) = java_home() {
         command.env("JAVA_HOME", java);
     }
+    // docker.exe and sdkmanager.bat are console programs: no console window over the app
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000);
     let mut child = command
         .args(args)
         .env("PATH", search_path(program))
