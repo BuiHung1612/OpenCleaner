@@ -313,7 +313,7 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
     let paths: Vec<PathBuf> = out.iter().map(|p| p.path.clone()).collect();
     let (sizes, newest) = std::thread::scope(|s| {
         let newest = s.spawn(|| last_changes(&paths, cancel));
-        (size::freed_many(&paths, cancel, &mut |_| {}), newest.join().unwrap_or_default())
+        (size::freed_many(&paths, cancel, &mut |_| {}), newest.join().expect("last changes"))
     });
     let installed = Installed::read(ctx);
     let mut backups: HashMap<String, Vec<usize>> = HashMap::new();
@@ -355,11 +355,16 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
             }
             let rebuildable = REBUILDABLE.contains(&owner.name);
             pick.group = match (role, present) {
+                // its tool is gone: caches, extensions and toolchains are of no use now
                 (Role::Cache, false) => {
                     pick.preselect = used >= LEFTOVER_DAYS && rebuildable;
                     SAFE
                 }
-                // its tool is still there: clearing it is the user's call (VS Code's extensions)
+                (_, false) if rebuildable => {
+                    pick.preselect = used >= LEFTOVER_DAYS;
+                    SAFE
+                }
+                // its tool is still there: clearing it is the user's call
                 (Role::Cache, true) if used >= IDLE_DAYS => SAFE,
                 (_, false) => OUTDATED,
                 (_, true) if used >= IDLE_DAYS => OUTDATED,
