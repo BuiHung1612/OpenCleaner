@@ -438,9 +438,9 @@ struct SettingsPage: View {
             }
             }
             // grouped forms in the dark look: white text on translucent rows over the gradient;
-            // switches in the system accent, not the window's white (a white knob on white)
+            // menus in the window's white, switches drawn to match the glass
             .brightScroller()
-            .tint(.accentColor)
+            .toggleStyle(GlassSwitch())
             .id(pane)
         }
         .padding(.horizontal, Layout.side)

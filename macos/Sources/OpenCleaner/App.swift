@@ -345,6 +345,32 @@ extension ShapeStyle where Self == Color {
     static var ok: Color { Color(hex: "#7CF2C8") }
 }
 
+/// A switch for the gradient: mint when on, faint glass when off, white knob either way.
+struct GlassSwitch: ToggleStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Spacer(minLength: 12)
+            Capsule()
+                .fill(configuration.isOn ? AnyShapeStyle(.ok) : AnyShapeStyle(.white.opacity(0.18)))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
+                .frame(width: 38, height: 22)
+                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                    Circle().fill(.white).shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+                        .padding(2)
+                }
+                .opacity(isEnabled ? 1 : 0.4)
+                .animation(reduceMotion ? nil : .spring(duration: 0.25), value: configuration.isOn)
+                .contentShape(Capsule())
+                .onTapGesture { configuration.isOn.toggle() }
+        }
+        .accessibilityRepresentation { Toggle(isOn: configuration.$isOn) { configuration.label } }
+    }
+}
+
 extension View {
     /// Scroll areas and spinners sit on colored glass: ask for the light-on-dark style, not the default black one.
     /// Only for scroll views whose content has no glass of its own (it would turn dark too).
