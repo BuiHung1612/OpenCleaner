@@ -67,7 +67,7 @@ fn macos_installers(out: &mut Vec<Pick>) {
 
 fn collect_installers(root: &Path, dir: &Path, depth: u32, group: &str, out: &mut Vec<Pick>) {
     let mut subdirs = Vec::new();
-    let _ = fs::read_dir(dir, Detail::Basic, &mut |e: &Entry| {
+    let _ = fs::read_dir(dir, Detail::Freed, &mut |e: &Entry| {
         let path = dir.join(&e.name);
         match e.kind {
             Kind::Dir if depth < 1 && !e.name.to_string_lossy().ends_with(".app") => {
@@ -82,7 +82,8 @@ fn collect_installers(root: &Path, dir: &Path, depth: u32, group: &str, out: &mu
                     let age = age_days(e.mtime);
                     let mut pick =
                         Pick::new(path, root.to_path_buf(), Purpose::Installers, Action::Trash);
-                    pick.bytes = e.alloc;
+                    // what removing frees: a cloned copy shares its blocks with the original
+                    pick.bytes = e.freed();
                     pick.group = group.into();
                     pick.kind = ext.to_ascii_uppercase();
                     pick.age_days = Some(age as i64);

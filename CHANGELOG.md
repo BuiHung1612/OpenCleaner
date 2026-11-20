@@ -5,6 +5,8 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 ## Unreleased
 
 - macOS: the Dashboard's Trash figure is what emptying it frees, as System Junk counts it. App copies that share their space with the apps in Applications no longer show as gigabytes to free.
+- macOS: Installers counts what removing a file frees: a cloned copy of an installer no longer shows its full size.
+- macOS: the Dashboard's "Clean … of junk" suggestion shows what System Junk removes by default, not everything it found (Trash and privacy items are never ticked for you).
 
 ## 0.3.5
 

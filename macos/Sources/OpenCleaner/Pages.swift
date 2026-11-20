@@ -51,7 +51,7 @@ struct DashboardPage: View {
                     }
                 }
 
-                let tips = Self.suggestions(status: s, junkBytes: junk.phase == .review ? junk.plan.bytes.double : nil,
+                let tips = Self.suggestions(status: s, junkBytes: junk.phase == .review ? junk.selectedBytes : nil,
                                             devtoolsBytes: devtools.reclaimable)
                 if !tips.isEmpty { suggestions(tips) }
 
