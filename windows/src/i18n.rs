@@ -217,6 +217,7 @@ mod tests {
         assert_eq!(tr("Drive C: is almost full: 3 GB free"), "Ổ C: sắp đầy: còn trống 3 GB");
         assert_eq!(tr("C:\\Users\\me\\Downloads"), "C:\\Users\\me\\Downloads");
         assert_eq!(tr("4.2 GB"), "4.2 GB");
+        assert!(tr("Select everything shown?\n\n12 of these were left unticked on purpose: they may hold settings, history, sign-ins or data an app still uses, or be something OpenCleaner does not recognize. Review them before you remove them. Items moved to the Trash can be put back; items deleted outright cannot.").starts_with("Chọn mọi mục đang hiển thị?\n\n12 mục"));
         assert_eq!(tr("Gradle cache, downloaded again when needed · last used 3 days ago"), "Bộ nhớ đệm của Gradle, sẽ tải lại khi cần · dùng lần cuối 3 ngày trước");
         set_choice(1);
         assert_eq!(tr("Settings"), "Settings");

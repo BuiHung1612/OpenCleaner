@@ -1791,7 +1791,11 @@ impl State {
                 _ => sections.push((g.to_string(), 1, it["bytes"].as_f64().unwrap_or(0.0))),
             }
         }
-        let only = p.only.clone();
+        // a new list without the section chosen: back to all of it
+        if p.only.as_ref().is_some_and(|o| !sections.iter().any(|s| &s.0 == o)) {
+            self.picks(m).only = None;
+        }
+        let only = self.pick(m).only.clone();
         let shown = self.pick_shown(m);
         let all_on = !shown.is_empty() && shown.iter().all(|i| self.pick(m).selected.contains(i));
         let toggle = if all_on { "Deselect All" } else { "Select All" };

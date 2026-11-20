@@ -159,6 +159,8 @@ final class JunkModel {
                 return
             }
             plan = final
+            // the group shown is gone from this scan: show them all
+            if let only = onlyGroup, !groups.contains(where: { $0.id.string == only }) { onlyGroup = nil }
             // what each rule says, minus rows with nothing to do
             selected = Set(rules.filter { rule in
                 rule.status.string == "ready" && (keeping.map { $0.contains(rule.id.string ?? "") } ?? rule.default.bool)
