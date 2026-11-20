@@ -26,3 +26,20 @@ The app updates itself (`auto_updates true`), so `brew upgrade` skips it unless 
 
 The exe is not code-signed, so SmartScreen may warn on first run and the winget review can take
 longer; that is expected.
+
+## Microsoft Store (MSIX)
+
+Every CI run builds `OpenCleaner.msix` (artifact `OpenCleaner-msix`) from `msix/AppxManifest.xml`:
+the same exe, unsigned (the Store signs it, so Smart App Control lets it run). Product
+`slowbuildstudio.OpenCleaner`, Store ID `9PCVNWSXKCCZ`.
+
+1. First submission by hand in Partner Center: upload the `.msix` from a tag's CI run, fill in
+   the listing, age rating and privacy policy, and explain the restricted capabilities:
+   `runFullTrust` (a desktop app) and `unvirtualizedResources` (a cleaner must remove the real
+   caches in AppData and turn off startup entries in HKCU, not a per-package copy).
+2. After that, each tag's `store` job submits the new package, once these repo secrets are set
+   (Partner Center › Account settings › User management › Microsoft Entra applications, role
+   Manager): `MSSTORE_TENANT_ID`, `MSSTORE_CLIENT_ID`, `MSSTORE_CLIENT_SECRET`, `MSSTORE_SELLER_ID`.
+   Without them the job does nothing.
+
+The Store copy never updates itself (it sees it runs from `WindowsApps`); the Store does it.
