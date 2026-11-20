@@ -512,11 +512,12 @@ private struct GeneralSettings: View {
     private func relaunch() { relaunchApp() }
 }
 
-/// Starts a new copy of the app, then quits this one.
+/// Starts a new copy of the app, then quits this one (stays open if the copy did not start).
 func relaunchApp() {
     let config = NSWorkspace.OpenConfiguration()
     config.createsNewApplicationInstance = true
-    NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
+    NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { app, _ in
+        guard app != nil else { return }
         DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 }
