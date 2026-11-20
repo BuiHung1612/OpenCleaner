@@ -281,6 +281,9 @@ jobs:
           # every placeholder of ours filled ({{appdir}} in the cask is Homebrew's own token)
           ! grep -lE '\{\{(VERSION|SHA256)\}\}' dist/opencleaner.rb dist/*.yaml
       # dist/ holds OpenCleaner.dmg and OpenCleaner.exe from the macos and windows-app jobs, and the manifests
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --generate-notes
+      # notes: this version's section of CHANGELOG.md, then GitHub's changelog link
+      - run: |
+          awk -v v="## ${GITHUB_REF_NAME#v}" '$0==v{on=1;next} /^## /{on=0} on' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --notes-file notes.md --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
