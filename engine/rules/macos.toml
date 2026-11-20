@@ -151,6 +151,7 @@ paths = [
   "~/Library/Application Support/Code - Insiders/CachedData",
   "~/Library/Application Support/Code - Insiders/Code Cache",
   "~/Library/Application Support/Code - Insiders/GPUCache",
+  "~/Library/Application Support/Code - Insiders/CachedExtensionVSIXs",
 ]
 running = ["com.todesktop.230313mzl4w4u92", "com.exafunction.windsurf", "com.google.antigravity", "com.google.antigravity-ide", "com.microsoft.VSCodeInsiders"]
 note = "Editor code caches. Settings and extensions stay."
@@ -514,6 +515,7 @@ paths = [
   "~/Library/Application Support/Sculptor/Cache",
   "~/Library/Application Support/Sculptor/Code Cache",
   "~/Library/Application Support/Sculptor/GPUCache",
+  "~/Library/Logs/Sculptor",
 ]
 running = ["com.electron.sculptor"]
 note = "Web cache and logs of the app. Projects, settings and sign-in stay."
@@ -555,8 +557,8 @@ note = "Web cache and logs of the apps. Downloaded models, chats and settings st
 id = "dev.jetbrains"
 group = "developer"
 title = "JetBrains IDE and Android Studio indexes and logs"
-paths = ["~/Library/Caches/JetBrains", "~/Library/Logs/JetBrains", "~/Library/Logs/Google"]
-running = ["com.google.android.studio", "com.jetbrains.intellij", "com.jetbrains.intellij.ce", "com.jetbrains.pycharm", "com.jetbrains.pycharm.ce", "com.jetbrains.WebStorm", "com.jetbrains.goland", "com.jetbrains.rider", "com.jetbrains.CLion", "com.jetbrains.fleet"]
+paths = ["~/Library/Caches/JetBrains", "~/Library/Logs/JetBrains", "~/Library/Logs/Google/AndroidStudio*"]
+running = ["com.google.android.studio", "com.jetbrains.intellij", "com.jetbrains.intellij.ce", "com.jetbrains.pycharm", "com.jetbrains.pycharm.ce", "com.jetbrains.WebStorm", "com.jetbrains.goland", "com.jetbrains.rider", "com.jetbrains.CLion", "com.jetbrains.fleet", "com.jetbrains.PhpStorm", "com.jetbrains.rubymine", "com.jetbrains.datagrip", "com.jetbrains.dataspell", "com.jetbrains.rustrover", "com.jetbrains.AppCode", "com.jetbrains.aqua", "com.google.android.studio-EAP"]
 default = false
 note = "Indexes and logs. Settings and plugins stay; the IDE indexes open projects again on its next start, which takes a while."
 
