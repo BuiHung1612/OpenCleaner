@@ -207,6 +207,13 @@ mod win {
     /// there is nothing newer, or when GitHub could not be reached.
     pub fn check(manual: bool) {
         let version = super::VERSION.trim();
+        // installed from the Microsoft Store: the Store updates it
+        if std::env::current_exe().is_ok_and(|p| p.to_string_lossy().to_ascii_lowercase().contains("\\windowsapps\\")) {
+            if manual {
+                tell("This copy of OpenCleaner is updated by the Microsoft Store.");
+            }
+            return;
+        }
         // curl.exe ships with Windows 10 1803 and later; offline or older systems just stay quiet
         let api = format!("https://api.github.com/repos/{}/releases/latest", super::REPO);
         let reply = quiet("curl.exe", &["-fsSL", "-m", "15", "-H", "User-Agent: OpenCleaner", &api]);

@@ -187,6 +187,23 @@ jobs:
         with:
           name: OpenCleaner-windows
           path: windows/target/release/OpenCleaner.exe
+      # the Microsoft Store package: the same exe, unsigned (the Store signs it)
+      - name: Pack the Microsoft Store package
+        shell: pwsh
+        run: |
+          $version = "$((Get-Content VERSION -Raw).Trim()).0"
+          $dir = Join-Path $env:RUNNER_TEMP msix
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item packaging/msix/Assets $dir -Recurse
+          Copy-Item windows/target/release/OpenCleaner.exe $dir
+          (Get-Content packaging/msix/AppxManifest.xml -Raw).Replace('{{VERSION}}', $version) | Set-Content (Join-Path $dir AppxManifest.xml) -Encoding utf8
+          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" | Sort-Object FullName | Select-Object -Last 1
+          & $makeappx.FullName pack /o /d $dir /p OpenCleaner.msix
+          if ($LASTEXITCODE) { throw "makeappx failed" }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenCleaner-msix
+          path: OpenCleaner.msix
 
   macos:
     # Liquid Glass and swift-tools-version 6.2 need the macOS 26 SDK
@@ -303,3 +320,28 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --notes-file notes.md --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # After the GitHub Release: the same version to the Microsoft Store, when the Partner Center
+  # credentials are set (packaging/README.md). The Store certifies it before it goes out.
+  store:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: windows-latest
+    env:
+      MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+      MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
+      MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+      MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: OpenCleaner-msix
+      - uses: microsoft/setup-msstore-cli@v1
+        if: env.MSSTORE_CLIENT_ID != ''
+      - name: Submit to the Microsoft Store
+        if: env.MSSTORE_CLIENT_ID != ''
+        shell: pwsh
+        run: |
+          msstore reconfigure --tenantId $env:MSSTORE_TENANT_ID --sellerId $env:MSSTORE_SELLER_ID --clientId $env:MSSTORE_CLIENT_ID --clientSecret $env:MSSTORE_CLIENT_SECRET
+          msstore publish . -i OpenCleaner.msix -id 9PCVNWSXKCCZ
+          if ($LASTEXITCODE) { throw "msstore publish failed" }
