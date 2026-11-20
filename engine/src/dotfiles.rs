@@ -275,24 +275,26 @@ fn role(name: &str) -> Role {
 
 /// Folders inside tools' hidden folders that hold one version per entry: the newest of
 /// each kind and the one set as default stay, older ones are listed. (folder, tool, which
-/// entries count: a name prefix, "digit" for names starting with a digit, "" for all)
-pub const VERSIONED: &[(&str, &str, &str)] = &[
-    (".gradle/wrapper/dists", "Gradle", ""),
-    (".gradle/caches", "Gradle", "digit"),
-    (".gradle/daemon", "Gradle", "digit"),
-    (".nvm/versions/node", "Node.js", ""),
-    (".rbenv/versions", "Ruby", ""),
-    (".pyenv/versions", "Python", ""),
-    (".rustup/toolchains", "Rust", ""),
-    (".konan", "Kotlin/Native", "kotlin-native-prebuilt-"),
-    (".vscode/extensions", "Visual Studio Code", ""),
-    (".vscode-insiders/extensions", "Visual Studio Code Insiders", ""),
-    (".cursor/extensions", "Cursor", ""),
-    (".windsurf/extensions", "Windsurf", ""),
-    (".kiro/extensions", "Kiro", ""),
-    (".trae/extensions", "Trae", ""),
-    (".antigravity/extensions", "Antigravity", ""),
-    (".pub-cache/hosted/pub.dev", "Flutter", ""),
+/// entries count: a name prefix, "digit" for names starting with a digit, "" for all, and
+/// whether old ones may start ticked: not runtimes, whose old versions venvs and projects
+/// may point to; downloads like Gradle's or pub's come back when a project needs them)
+pub const VERSIONED: &[(&str, &str, &str, bool)] = &[
+    (".gradle/wrapper/dists", "Gradle", "", true),
+    (".gradle/caches", "Gradle", "digit", true),
+    (".gradle/daemon", "Gradle", "digit", true),
+    (".nvm/versions/node", "Node.js", "", false),
+    (".rbenv/versions", "Ruby", "", false),
+    (".pyenv/versions", "Python", "", false),
+    (".rustup/toolchains", "Rust", "", true),
+    (".konan", "Kotlin/Native", "kotlin-native-prebuilt-", true),
+    (".vscode/extensions", "Visual Studio Code", "", true),
+    (".vscode-insiders/extensions", "Visual Studio Code Insiders", "", true),
+    (".cursor/extensions", "Cursor", "", true),
+    (".windsurf/extensions", "Windsurf", "", true),
+    (".kiro/extensions", "Kiro", "", true),
+    (".trae/extensions", "Trae", "", true),
+    (".antigravity/extensions", "Antigravity", "", true),
+    (".pub-cache/hosted/pub.dev", "Flutter", "", true),
 ];
 
 const OLD_VERSIONS: &str = "Old versions";
@@ -318,16 +320,30 @@ fn split_version(name: &str) -> Option<(String, Vec<u64>, String)> {
     Some((format!("{}{}", &name[..start], &name[end..]), numbers, name[start..end].to_string()))
 }
 
+/// In `defaults`: what the tool uses is unknown, so no version is listed.
+const KEEP_ALL: &str = "*";
+
 /// What the tool is set to use (it stays even when a newer one is installed).
 fn defaults(home: &Path, folder: &str) -> Vec<String> {
     let read = |p: &str| std::fs::read_to_string(home.join(p)).unwrap_or_default();
     match folder {
         ".rbenv/versions" => read(".rbenv/version").lines().map(|l| l.trim().to_string()).collect(),
         ".pyenv/versions" => read(".pyenv/version").lines().map(|l| l.trim().to_string()).collect(),
-        // "20" or "v20.11.0" (a name like "lts/iron" or "node" means the newest, kept anyway)
+        // "20" or "v20.11.0", or another alias ("lts/iron", "lts/*") to follow; one that
+        // does not lead to a version keeps them all
         ".nvm/versions/node" => {
-            let alias = read(".nvm/alias/default").trim().trim_start_matches('v').to_string();
-            if alias.is_empty() { vec![] } else { vec![format!("v{alias}")] }
+            let mut alias = read(".nvm/alias/default").trim().to_string();
+            for _ in 0..4 {
+                let number = alias.trim_start_matches('v');
+                if number.starts_with(|c: char| c.is_ascii_digit()) {
+                    return vec![format!("v{number}")];
+                }
+                if alias.is_empty() || alias.contains("..") {
+                    break;
+                }
+                alias = read(&format!(".nvm/alias/{alias}")).trim().to_string();
+            }
+            vec![KEEP_ALL.into()]
         }
         ".rustup/toolchains" => read(".rustup/settings.toml")
             .lines()
@@ -342,7 +358,7 @@ fn defaults(home: &Path, folder: &str) -> Vec<String> {
 pub fn is_versioned_entry(rel: &Path) -> bool {
     let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     rel.parent().is_some_and(|p| {
-        VERSIONED.iter().any(|(folder, _, which)| p == Path::new(folder) && counts(&name, which))
+        VERSIONED.iter().any(|(folder, _, which, _)| p == Path::new(folder) && counts(&name, which))
     }) && split_version(&name).is_some()
 }
 
@@ -359,10 +375,13 @@ fn counts(name: &str, which: &str) -> bool {
 /// Older versions in `VERSIONED` folders; `place` is the newer version that stays.
 fn old_versions(home: &Path) -> Vec<Pick> {
     let mut out = Vec::new();
-    for (folder, tool, which) in VERSIONED {
+    for (folder, tool, which, ticked) in VERSIONED {
         let dir = home.join(folder);
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         let keep = defaults(home, folder);
+        if keep.iter().any(|k| k == KEEP_ALL) {
+            continue;
+        }
         // family → [(numbers, version text, name)]
         let mut families: HashMap<String, Vec<(Vec<u64>, String, String)>> = HashMap::new();
         for e in entries.flatten() {
@@ -387,6 +406,9 @@ fn old_versions(home: &Path) -> Vec<Pick> {
                 pick.flags.push("inner");
                 pick.kind = (*tool).into();
                 pick.place = newest.clone();
+                if *ticked {
+                    pick.flags.push("redownloaded");
+                }
                 pick.group = format!("{OLD_VERSIONS}: {tool}");
                 out.push(pick);
             }
@@ -451,7 +473,7 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
             // an older version: the newer one stays; ticked once installed a while ago
             parts.push(pick.kind.clone());
             parts.push(format!("{} is newer", pick.place));
-            pick.preselect = used >= LEFTOVER_DAYS;
+            pick.preselect = used >= LEFTOVER_DAYS && pick.flags.contains(&"redownloaded");
         } else if let Some(base) = backup_of(&name) {
             pick.group = SAFE.into();
             pick.flags.push("backup");
@@ -688,6 +710,22 @@ mod tests {
         assert_eq!(v("ms-python.python-2024.2.0-darwin-arm64"), Some(("ms-python.python--darwin-arm64".into(), vec![2024, 2, 0])));
         assert_eq!(v("stable-aarch64-apple-darwin"), None);
         assert_eq!(v("nightly-2024-01-05-aarch64-apple-darwin").map(|x| x.1), Some(vec![2024, 1, 5]));
+    }
+
+    #[test]
+    fn nvm_default_follows_aliases() {
+        let home = std::env::temp_dir().join(format!("oc-nvm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".nvm/alias/lts")).unwrap();
+        std::fs::write(home.join(".nvm/alias/default"), "lts/*\n").unwrap();
+        std::fs::write(home.join(".nvm/alias/lts/*"), "lts/jod").unwrap();
+        std::fs::write(home.join(".nvm/alias/lts/jod"), "v22.11.0").unwrap();
+        assert_eq!(defaults(&home, ".nvm/versions/node"), ["v22.11.0"]);
+        std::fs::write(home.join(".nvm/alias/default"), "node").unwrap();
+        assert_eq!(defaults(&home, ".nvm/versions/node"), [KEEP_ALL]);
+        std::fs::write(home.join(".nvm/alias/default"), "20").unwrap();
+        assert_eq!(defaults(&home, ".nvm/versions/node"), ["v20"]);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

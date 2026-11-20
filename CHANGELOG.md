@@ -5,7 +5,7 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 ## Unreleased
 
 - Hidden Items gives each item a verdict: Safe to remove, Probably outdated, Still needed or Not recognized, with what it holds (a cache downloaded again when needed, the tool itself, or settings and data), whether its app is still installed, and when anything inside it was last used (the whole folder, not only its top level).
-- Hidden Items looks inside tools' folders for older versions kept next to the newer one: Gradle distributions and caches, Node.js (nvm), Ruby (rbenv), Python (pyenv), Rust toolchains, Kotlin/Native, extensions of VS Code, Cursor, Windsurf, Kiro, Trae and Antigravity, and Flutter packages in .pub-cache. The newest and the one set as default stay; older ones installed 90 days ago or more are ticked.
+- Hidden Items looks inside tools' folders for older versions kept next to the newer one: Gradle distributions and caches, Node.js (nvm), Ruby (rbenv), Python (pyenv), Rust toolchains, Kotlin/Native, extensions of VS Code, Cursor, Windsurf, Kiro, Trae and Antigravity, and Flutter packages in .pub-cache. The newest and the one set as default stay; older downloads installed 90 days ago or more are ticked (older Node, Ruby and Python versions are only listed: projects and venvs may use them).
 - Windows: text made of parts ("… · last used 3 days ago") is translated part by part.
 
 ## 0.3.8
