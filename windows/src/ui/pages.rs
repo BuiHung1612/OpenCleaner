@@ -143,6 +143,7 @@ impl Module {
             Module::History => include_bytes!("../../art/history.png"),
             Module::LargeOld => include_bytes!("../../art/large_old.png"),
             Module::Duplicates => include_bytes!("../../art/duplicates.png"),
+            Module::Dashboard => include_bytes!("../../art/dashboard.png"),
             _ => return None,
         })
     }
@@ -189,7 +190,6 @@ const REFRESH: char = '\u{E72C}';
 const CHEVRON: char = '\u{E76C}';
 const FOLDER: char = '\u{E8B7}';
 const FILE: char = '\u{E7C3}';
-const DRIVE: char = '\u{EDA2}';
 const OPENED: char = '\u{E70D}';
 const MINUS: char = '\u{E738}';
 const LOCK: char = '\u{E72E}';
@@ -1292,7 +1292,8 @@ impl State {
         let s = self.dash.status.clone();
         let x = page.x + 18.0;
         let top = page.y + 40.0;
-        let tx = x;
+        c.image(R::new(x - 4.0, top - 4.0, 80.0, 80.0), include_bytes!("../../art/dashboard.png"));
+        let tx = x + 90.0;
         c.text(R::new(tx, top + 6.0, 300.0, 40.0), "Dashboard", 32.0, true, fg(), Align::Left);
         if self.dash.job.is_some() {
             // reading: the arrow turns, like the Mac's rotating refresh symbol
@@ -1388,9 +1389,14 @@ impl State {
                         return 50.0;
                     }
                     for g in plan["groups"].as_array().into_iter().flatten() {
-                        c.text(R::new(panel.x + 20.0, yy, panel.w - 40.0, 24.0), g["title"].as_str().unwrap_or(""), 13.0, true, dim(), Align::Left);
+                        let privacy = g["id"] == "privacy";
+                        let tx = if privacy { panel.x + 50.0 } else { panel.x + 20.0 };
+                        if privacy {
+                            c.image(R::new(panel.x + 18.0, yy - 2.0, 26.0, 26.0), include_bytes!("../../art/privacy.png"));
+                        }
+                        c.text(R::new(tx, yy, panel.w - 40.0, 24.0), g["title"].as_str().unwrap_or(""), 13.0, true, dim(), Align::Left);
                         yy += 28.0;
-                        if g["id"] == "privacy" {
+                        if privacy {
                             let note = "Never ticked for you. Close the browser first. Removing cookies signs you out of websites.";
                             c.text(R::new(panel.x + 20.0, yy - 4.0, panel.w - 40.0, 20.0), note, 12.0, false, dim(), Align::Left);
                             yy += 20.0;
@@ -1657,8 +1663,7 @@ impl State {
             let mut last_group = "";
             let items: Vec<&Value> = items_of(&list).collect();
             if items.is_empty() {
-                c.text(R::new(panel.x + 20.0, yy + 10.0, 300.0, 24.0), "Nothing found.", 14.0, false, dim(), Align::Left);
-                return 50.0;
+                return empty_state(c, panel, yy);
             }
             for (i, it) in items.into_iter().enumerate() {
                 let group = it["group"].as_str().unwrap_or("");
@@ -1784,7 +1789,11 @@ impl State {
             for (i, (path, title, text)) in cards.into_iter().enumerate() {
                 let r = R::new(x0 + i as f32 * (cw + 16.0), page.y + page.h * 0.56, cw, 170.0);
                 c.rounded(r, 24.0, Some(argb(fg(), if self.hot(r) { 40 } else { 26 })), Some(argb(fg(), 56)));
-                c.icon(R::new(r.x, r.y + 16.0, r.w, 56.0), if path.is_none() { DRIVE } else { FOLDER }, 40.0, fg());
+                if path.is_none() {
+                    c.image(R::new(r.x + r.w / 2.0 - 32.0, r.y + 10.0, 64.0, 64.0), include_bytes!("../../art/volumeInternal.png"));
+                } else {
+                    c.icon(R::new(r.x, r.y + 16.0, r.w, 56.0), FOLDER, 40.0, fg());
+                }
                 c.text(R::new(r.x + 12.0, r.y + 82.0, r.w - 24.0, 24.0), title, 15.0, true, fg(), Align::Center);
                 c.text(R::new(r.x + 12.0, r.y + 108.0, r.w - 24.0, 40.0), text, 12.0, false, dim(), Align::Center);
                 self.hit(r, Action::SpaceOpen(path));
@@ -1972,8 +1981,7 @@ impl State {
             c.text(R::new(panel.x + 20.0, yy, panel.w - 40.0, 24.0), "Starts when you sign in", 13.0, true, dim(), Align::Left);
             yy += 28.0;
             if items.is_empty() {
-                c.text(R::new(panel.x + 20.0, yy, panel.w - 40.0, 24.0), "Nothing found.", 14.0, false, dim(), Align::Left);
-                yy += 30.0;
+                yy += empty_state(c, panel, yy);
             }
             for (i, it) in items.iter().enumerate() {
                 let row = R::new(panel.x + 10.0, yy, panel.w - 20.0, 52.0);
@@ -2174,7 +2182,8 @@ impl State {
             (None, ..) => String::new(),
         };
         c.text(R::new(panel.x + 220.0, panel.y + 12.0, panel.w - 240.0, 20.0), &last, 12.0, false, dim(), Align::Right);
-        self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), "Clean automatically", self.auto_clean, Action::AutoCleanToggle);
+        c.image(R::new(panel.x + 18.0, panel.y + 36.0, 40.0, 40.0), include_bytes!("../../art/schedule.png"));
+        self.switch_row(c, R::new(panel.x + 60.0, panel.y + 38.0, panel.w - 70.0, 36.0), "Clean automatically", self.auto_clean, Action::AutoCleanToggle);
         c.text(R::new(panel.x + 20.0, panel.y + 80.0, 130.0, 32.0), "How often", 14.0, false, if self.auto_clean { fg() } else { dim() }, Align::Left);
         let items = vec![("Weekly".to_string(), !self.auto_monthly, Action::AutoPeriodToggle), ("Monthly".to_string(), self.auto_monthly, Action::AutoPeriodToggle)];
         self.chips(c, panel.x + 150.0, panel.y + 80.0, items, self.auto_clean);
@@ -2698,6 +2707,14 @@ fn pack(sizes: &[f64], radius: f32) -> Vec<(usize, f32, f32, f32)> {
     placed.into_iter().map(|(i, x, y, r)| (i, (x - mx) * k, (y - my) * k, r * k)).collect()
 }
 
+/// In place of an empty list, as on macOS: the empty art over "Nothing found."; returns its height.
+fn empty_state(c: &mut Canvas, panel: R, y: f32) -> f32 {
+    let cx = panel.x + panel.w / 2.0;
+    c.image(R::new(cx - 55.0, y + 16.0, 110.0, 110.0), include_bytes!("../../art/empty.png"));
+    c.text(R::new(panel.x, y + 132.0, panel.w, 24.0), "Nothing found.", 15.0, true, fg(), Align::Center);
+    176.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2721,3 +2738,4 @@ mod tests {
         assert_eq!(p.request(|k| k == "D")["D"], vec!["c".to_string()]);
     }
 }
+
