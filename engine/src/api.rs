@@ -40,6 +40,12 @@ enum Request {
         #[serde(default)]
         list: bool,
     },
+    /// Windows: asks the app `name` (an exe name, as a rule's `in_use_id`) to close, as
+    /// closing its window does, waits up to 10 s for it to go, then scans like `scan` with
+    /// `list`. (macOS asks apps to quit itself.)
+    QuitAndScan {
+        name: String,
+    },
     /// Remove the items of `rules` from a scanned plan, except the paths in `skip`:
     /// `progress`, then `cleaned`.
     Clean {
@@ -333,6 +339,29 @@ pub fn run(request: &str, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
     emit(json!({"event": "done"}));
 }
 
+/// Asks the app to close (taskkill without /F: its windows get WM_CLOSE, so it can save
+/// first), then waits for it to go.
+fn quit_app(name: &str) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // an exe name only: never a path or a filter
+        if name.is_empty() || name.contains(['\\', '/', '"', '*']) {
+            return;
+        }
+        let _ = std::process::Command::new("taskkill")
+            .args(["/IM", name])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .output();
+    }
+    for _ in 0..40 {
+        if !procs::Running::snapshot().contains(name) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
 fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
     match req {
         Request::Version => emit(json!({"event": "version", "version": crate::VERSION})),
@@ -496,6 +525,10 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
                 Ok(outcome) => emit_value("removed", &outcome, emit),
                 Err(e) => emit(json!({"event": "removed", "error": e})),
             }
+        }
+        Request::QuitAndScan { name } => {
+            quit_app(&name);
+            run_request(Request::Scan { list: true }, cancel, emit);
         }
         Request::Scan { list } => {
             let t = std::time::Instant::now();

@@ -2,6 +2,11 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## Unreleased
+
+- macOS: an app counts as open only while its own executable runs. Tools inside an app no longer keep its junk from being cleaned (sourcekit-lsp and DeviceHub inside Xcode.app kept DerivedData skipped while Xcode was closed).
+- System Junk measures what running apps hold too, and each such row has Quit [app]: the app is asked to quit (it can still save), then the scan runs again and the row can be cleaned. What running apps hold is not counted in the total.
+
 ## 0.3.9
 
 - Hidden Items gives each item a verdict: Safe to remove, Probably outdated, Still needed or Not recognized, with what it holds (a cache downloaded again when needed, the tool itself, or settings and data), whether its app is still installed, and when anything inside it was last used (the whole folder, not only its top level).

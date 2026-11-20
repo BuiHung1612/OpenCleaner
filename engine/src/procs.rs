@@ -1,7 +1,9 @@
 //! Which apps are running, so their live caches are left alone.
 //!
-//! macOS: the bundle id of every app bundle a running process lives in (helpers inside
-//! an app count as that app). Windows: lower-cased executable names.
+//! macOS: the bundle id of each app whose own executable runs (in its Contents/MacOS; a
+//! helper app inside another counts as itself). Tools that only live inside an app, like
+//! sourcekit-lsp or DeviceHub inside Xcode.app, do not make it count as open. Windows:
+//! lower-cased executable names.
 
 use std::collections::HashMap;
 
@@ -36,6 +38,12 @@ impl Running {
             .cloned()
     }
 
+    /// The first of `ids` that runs, as given, and the name people know it by.
+    pub fn which(&self, ids: &[String]) -> Option<(String, String)> {
+        ids.iter()
+            .find_map(|id| Some((id.clone(), self.names.get(&id.to_ascii_lowercase())?.clone())))
+    }
+
     pub fn contains(&self, id: &str) -> bool {
         self.names.contains_key(&id.to_ascii_lowercase())
     }
@@ -51,10 +59,13 @@ mod platform {
         let mut bundles: HashMap<PathBuf, Option<String>> = HashMap::new();
         for pid in pids() {
             let Some(exe) = pid_path(pid) else { continue };
-            // every enclosing .app counts: a helper inside Chrome.app keeps Chrome's caches live
+            // the app whose Contents/MacOS holds the executable: Chrome's helpers run inside
+            // "Google Chrome Helper.app" and quit with Chrome; editors run sourcekit-lsp from
+            // inside Xcode.app while Xcode itself is closed
             for bundle in exe
                 .ancestors()
                 .filter(|p| p.extension().is_some_and(|e| e == "app"))
+                .filter(|b| exe.parent() == Some(b.join("Contents/MacOS").as_path()))
             {
                 let id = bundles
                     .entry(bundle.to_path_buf())

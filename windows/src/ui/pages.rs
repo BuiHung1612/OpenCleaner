@@ -207,6 +207,8 @@ const LOCK: char = '\u{E72E}';
 pub enum Action {
     Go(Module),
     DashRefresh,
+    /// Quit the app (exe name) that holds a System Junk rule, then scan again.
+    JunkQuit(String),
     SpaceOpen(Option<String>),
     SpaceBack,
     SpaceStartOver,
@@ -1574,6 +1576,16 @@ impl State {
             c.text(R::new(row.x + 44.0, row.y + 28.0, row.w - 230.0, 18.0), &note, 12.0, false, color, Align::Left);
             if !in_use {
                 c.text(R::new(row.right() - 176.0, row.y, 136.0, row.h), &bytes(rule["bytes"].as_f64()), 14.0, false, fg(), Align::Right);
+            } else if let (Some(app), Some(exe)) = (rule["in_use_by"].as_str(), rule["in_use_id"].as_str()) {
+                // what quitting it frees, and the way to quit it (then it is scanned again)
+                if rule["bytes"].as_f64().unwrap_or(0.0) > 0.0 {
+                    c.text(R::new(row.right() - 176.0, row.y, 136.0, row.h), &bytes(rule["bytes"].as_f64()), 14.0, false, dim(), Align::Right);
+                }
+                if review {
+                    let title = format!("Quit {app}");
+                    let w = self.pill_width(c, &title);
+                    self.pill(c, row.right() - 190.0 - w, row.y + 26.0, &title, Action::JunkQuit(exe.to_string()));
+                }
             }
             if ready && !items.is_empty() {
                 self.chevron(c, R::new(row.right() - 34.0, row.y + 14.0, 24.0, 24.0), open, Action::JunkExpand(id.clone()));
@@ -2590,6 +2602,16 @@ pub fn perform(hwnd: HWND, action: Action) {
                 st.junk = Junk { phase: Phase::Finding, ..Junk::default() };
                 // list: every rule's items, so they can be opened and unticked one by one
                 st.junk.job = Some(jobs::start(hwnd, json!({"op": "scan", "list": true})));
+                st.update_timers();
+            });
+        }
+        Action::JunkQuit(exe) => {
+            with(|st| {
+                if let Some(j) = &st.junk.job {
+                    j.cancel();
+                }
+                st.junk = Junk { phase: Phase::Finding, ..Junk::default() };
+                st.junk.job = Some(jobs::start(hwnd, json!({"op": "quit_and_scan", "name": exe})));
                 st.update_timers();
             });
         }

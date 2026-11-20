@@ -585,3 +585,5 @@
 "%@ is newer" = "đã có %@ mới hơn";
 "installed today" = "cài hôm nay";
 "installed %lld days ago" = "cài %lld ngày trước";
+"Quit %@" = "Thoát %@";
+"Quit it, then scan again: this row can then be cleaned" = "Thoát ứng dụng rồi quét lại: sau đó mục này dọn được";

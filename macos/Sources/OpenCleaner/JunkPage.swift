@@ -115,7 +115,22 @@ final class JunkModel {
         }
     }
 
-    func scan() {
+    /// Asks the app that holds a rule's items to quit (it may still ask to save), then scans
+    /// again once it has gone (or after 10 seconds), keeping the ticks and adding that rule.
+    func quit(_ bundleID: String, for rule: String) {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        running.forEach { $0.terminate() }
+        let keep = selected.union([rule])
+        Task {
+            for _ in 0..<40 where running.contains(where: { !$0.isTerminated }) {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            scan(keeping: keep)
+        }
+    }
+
+    /// `keeping`: the rules to tick (those ready) instead of each rule's default.
+    func scan(keeping: Set<String>? = nil) {
         job?.cancel()
         phase = .scanning
         plan = JSON(nil)
@@ -145,8 +160,10 @@ final class JunkModel {
             }
             plan = final
             // what each rule says, minus rows with nothing to do
-            selected = Set(rules.filter { $0.default.bool && $0.status.string == "ready" }.compactMap(\.id.string))
-            applyTickGroup()
+            selected = Set(rules.filter { rule in
+                rule.status.string == "ready" && (keeping.map { $0.contains(rule.id.string ?? "") } ?? rule.default.bool)
+            }.compactMap(\.id.string))
+            if keeping == nil { applyTickGroup() }
             phase = .review
         }
     }
@@ -335,7 +352,14 @@ struct JunkPage: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tr(rule.title.string ?? id)).font(.app(14, weight: .medium))
                     if let app = rule.in_use_by.string, rule.status.string == "in_use" {
-                        Text("Skipped while \(app) is open").font(.app(12)).foregroundStyle(Color.warn)
+                        HStack(spacing: 8) {
+                            Text("Skipped while \(app) is open").font(.app(12)).foregroundStyle(Color.warn)
+                            if let bundleID = rule.in_use_id.string, model.phase == .review {
+                                Button(String(localized: "Quit \(app)")) { model.quit(bundleID, for: id) }
+                                    .controlSize(.small)
+                                    .help(String(localized: "Quit it, then scan again: this row can then be cleaned"))
+                            }
+                        }
                     } else if let note = rule.note.string, !note.isEmpty {
                         Text(tr(note)).font(.app(12)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
                     }
@@ -344,6 +368,9 @@ struct JunkPage: View {
                 if rule.status.string != "in_use" {
                     Text(verbatim: sizeText(rule.bytes.double ?? 0, selected: model.selectedBytes(of: rule), partial: partial))
                         .font(.app(14)).monospacedDigit()
+                } else if let held = rule.bytes.double, held > 0 {
+                    // what quitting the app frees
+                    Text(verbatim: shortBytes(held)).font(.app(14)).monospacedDigit().foregroundStyle(.dim)
                 }
                 if ready && !items.isEmpty {
                     Button {

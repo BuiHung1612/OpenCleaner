@@ -242,7 +242,12 @@ running = ["com.example.Browser"]
     let plan = scan(&h, &set, &running);
     assert_eq!(rule(&plan, "c").unwrap().items, 1);
     assert_eq!(rule(&plan, "c").unwrap().kept, 1);
-    assert_eq!(rule(&plan, "b").unwrap().status, "in_use");
+    let b = rule(&plan, "b").unwrap();
+    assert_eq!(b.status, "in_use");
+    // measured for the review (what quitting frees), not counted in what can be cleaned
+    assert!(b.bytes > 0);
+    assert_eq!(b.in_use_id.as_deref(), Some("com.example.Browser"));
+    assert_eq!(plan.bytes, rule(&plan, "c").unwrap().bytes);
     run(&h, &plan, &["c", "b"]);
     assert!(h.p("Library/Caches/com.example.live/f").exists());
     assert!(!h.p("Library/Caches/com.example.idle").exists());

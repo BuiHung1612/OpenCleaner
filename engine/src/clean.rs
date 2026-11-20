@@ -29,6 +29,8 @@ struct Item {
     root: PathBuf,
     id: Identity,
     bytes: u64,
+    /// Its app runs: measured for the review, never part of the plan.
+    held: bool,
 }
 
 /// One rule as the review shows it.
@@ -44,6 +46,9 @@ pub struct RuleSummary {
     /// "ready", "empty", or "in_use" (an app it belongs to is running)
     pub status: &'static str,
     pub in_use_by: Option<String>,
+    /// What to ask to quit (macOS bundle id, Windows exe name) so it can be cleaned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_use_id: Option<String>,
     /// items kept because an app owning them runs, or a guard refused them
     pub kept: u64,
     /// The items themselves, when the scan was asked to list them.
@@ -114,6 +119,7 @@ pub fn scan_with(
             bytes: 0,
             status: "empty",
             in_use_by: None,
+            in_use_id: None,
             kept: 0,
             paths: None,
         })
@@ -128,11 +134,16 @@ pub fn scan_with(
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        if let Some(app) = running.any(&rule.running) {
-            summaries[ri].status = "in_use";
-            summaries[ri].in_use_by = Some(app);
-            continue;
-        }
+        // its app runs: measured so the review shows what quitting it frees, never cleaned
+        let held = match running.which(&rule.running) {
+            Some((id, app)) => {
+                summaries[ri].status = "in_use";
+                summaries[ri].in_use_by = Some(app);
+                summaries[ri].in_use_id = Some(id);
+                true
+            }
+            None => false,
+        };
         for (path, root) in candidates(rule, ctx) {
             let name = path
                 .file_name()
@@ -159,6 +170,7 @@ pub fn scan_with(
                 root,
                 id,
                 bytes: 0,
+                held,
             });
         }
     }
@@ -226,6 +238,7 @@ pub fn scan_with(
     // nothing to free: not worth a row (an empty cache folder)
     items.retain(|i| i.bytes > 0);
     tally(&mut summaries, &items, &sizes_of(&items));
+    items.retain(|i| !i.held);
     if list {
         let mut items = items.clone();
         items.sort_by_key(|i| std::cmp::Reverse(i.bytes));
@@ -326,8 +339,10 @@ fn summarize(
     partial: bool,
     cancel: &AtomicBool,
 ) -> PlanSummary {
-    let items = rules.iter().map(|r| r.items).sum();
-    let bytes = rules.iter().map(|r| r.bytes).sum();
+    // what can be cleaned now: not what running apps hold
+    let free = || rules.iter().filter(|r| r.status != "in_use");
+    let items = free().map(|r| r.items).sum();
+    let bytes = free().map(|r| r.bytes).sum();
     let groups = set
         .groups
         .iter()
