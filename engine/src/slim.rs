@@ -125,8 +125,9 @@ fn looks_like_code(path: &Path, meta: &fs::Metadata) -> bool {
             .is_some_and(|e| e == "dylib" || e == "so" || e == "a" || e == "node")
 }
 
-/// Universal apps the user may slim, with the bytes it would save.
-pub fn candidates(apps: &[App]) -> Vec<Pick> {
+/// Universal apps the user may slim, with the bytes it would save. `refused`: apps an
+/// earlier try could not slim without breaking their signature, and when (unix seconds).
+pub fn candidates(apps: &[App], refused: &std::collections::HashMap<PathBuf, u64>) -> Vec<Pick> {
     if !cfg!(target_arch = "aarch64") {
         return Vec::new();
     }
@@ -149,7 +150,16 @@ pub fn candidates(apps: &[App]) -> Vec<Pick> {
         pick.bytes = saving;
         // installed by a .pkg (owned by root): listed, never ticked for the user, and said why
         let can_write = writable(&app.path);
-        pick.detail = if !can_write && app.running {
+        // refused since the app last changed (an update gets a new try)
+        let changed = fs::symlink_metadata(app.path.join("Contents/Info.plist"))
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(u64::MAX, |d| d.as_secs());
+        let would_break = refused.get(&app.path).is_some_and(|&t| t >= changed);
+        pick.detail = if would_break {
+            "Its signature would break (last try); not offered until it updates".into()
+        } else if !can_write && app.running {
             "Open now · needs administrator rights".into()
         } else if !can_write {
             "Needs administrator rights".into()
@@ -158,7 +168,7 @@ pub fn candidates(apps: &[App]) -> Vec<Pick> {
         } else {
             "Intel code".into()
         };
-        pick.preselect = !app.running && can_write;
+        pick.preselect = !app.running && can_write && !would_break;
         pick.running = vec![app.bundle_id.clone()];
         picks.push(pick);
     }

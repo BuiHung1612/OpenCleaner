@@ -403,7 +403,10 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         }
         Request::Slim => {
             #[cfg(target_os = "macos")]
-            let found = crate::slim::candidates(&apps::list(ctx(), &procs::Running::snapshot()));
+            let found = crate::slim::candidates(
+                &apps::list(ctx(), &procs::Running::snapshot()),
+                &ledger::slim_refusals(ctx()),
+            );
             #[cfg(not(target_os = "macos"))]
             let found = Vec::new();
             emit_value("picks", &picks::store("slim", found, ctx()), emit);

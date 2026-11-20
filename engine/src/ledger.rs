@@ -200,6 +200,22 @@ pub fn month(unix: u64) -> String {
     format!("{y:04}-{m:02}")
 }
 
+/// Apps Slim Apps could not slim because their signature would break: path → when it last
+/// tried (unix seconds). Trying again gives the same answer until the app changes.
+pub fn slim_refusals(ctx: &Context) -> std::collections::HashMap<PathBuf, u64> {
+    let mut out = std::collections::HashMap::new();
+    for line in lines(ctx) {
+        if let Line::Item { session, rule, path, result, reason, .. } = line
+            && rule == "slim"
+            && result == "failed"
+            && reason.as_deref().is_some_and(|r| r.contains("signature"))
+        {
+            out.insert(path, session);
+        }
+    }
+    out
+}
+
 pub(crate) fn lines(ctx: &Context) -> impl Iterator<Item = Line> {
     fs::File::open(path(ctx))
         .into_iter()
