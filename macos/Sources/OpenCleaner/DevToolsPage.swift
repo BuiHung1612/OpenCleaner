@@ -34,7 +34,22 @@ final class DevToolsModel {
 struct DevToolsPage: View {
     let tool: Tool
     let model: DevToolsModel
+    let junk: JunkModel
     @State private var confirming = false
+
+    /// What the last System Junk scan found in its Developer tools group (ready rules).
+    private var developerBytes: Double? {
+        guard junk.phase == .review else { return nil }
+        return junk.groups.filter { $0.id.string == "developer" }.flatMap(\.rules.array)
+            .filter { $0.status.string == "ready" }.compactMap(\.bytes.double).reduce(0, +)
+    }
+
+    /// System Junk, limited to its Developer tools group; scanned first if it has not been.
+    private func openDeveloperJunk() {
+        junk.onlyGroup = "developer"
+        if junk.phase == .idle || junk.phase == .done { junk.scan() }
+        Automation.shared.openModule = .tool("clean")
+    }
 
     var body: some View {
         let l = model.listing
@@ -92,8 +107,16 @@ struct DevToolsPage: View {
                         Text("Xcode, Android Studio and JetBrains, VS Code, Cursor, Antigravity, ChatGPT and Codex, Claude, Orca, npm, Gradle, CocoaPods, Cargo and more are cleaned in System Junk, under Developer tools.")
                             .font(.app(13)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 12)
-                        Button(String(localized: "Open System Junk")) { Automation.shared.openModule = .tool("clean") }
-                            .buttonStyle(.pill).padding(.horizontal, 12).padding(.top, 4)
+                        HStack(spacing: 12) {
+                            if let found = developerBytes {
+                                Button(String(localized: "Review \(bytes(found))")) { openDeveloperJunk() }
+                                    .buttonStyle(.pill)
+                                Text("found by the last System Junk scan").font(.app(13)).foregroundStyle(.dim)
+                            } else {
+                                Button(String(localized: "Find Them")) { openDeveloperJunk() }.buttonStyle(.pill)
+                            }
+                        }
+                        .padding(.horizontal, 12).padding(.top, 4)
                     }
                 }
                 .padding(12)

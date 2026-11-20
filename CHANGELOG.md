@@ -4,6 +4,7 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
 ## Unreleased
 
+- Developer Tools shows how much the last System Junk scan found in developer caches; one click opens System Junk limited to that group (scanning first if needed), and Clean then acts only on what is shown.
 - History: open a session to see what was skipped or could not be removed, and why (an app that was running, one that needs administrator rights…).
 - System Junk removes caches that keep read-only folders (dotslash, Go modules) instead of failing on them every time.
 - Developer Tools: Android emulator system images no emulator uses, and NDKs older than the newest one, removed with Android's own sdkmanager. Never ticked for you.

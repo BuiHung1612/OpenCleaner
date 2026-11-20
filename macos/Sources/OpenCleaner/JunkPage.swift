@@ -13,6 +13,8 @@ final class JunkModel {
     /// items unticked inside a selected rule (paths)
     var excluded: Set<String> = []
     var expanded: Set<String> = []
+    /// a group the review is limited to (Developer Tools opens it on "developer"); nil: all
+    var onlyGroup: String?
     /// items opened in turn, with some of their children ticked
     var parts = Parts()
     private(set) var outcome = JSON(nil)
@@ -25,8 +27,15 @@ final class JunkModel {
 
     var groups: [JSON] { plan.groups.array }
     var rules: [JSON] { groups.flatMap(\.rules.array) }
+    /// The ticked rules that Clean acts on: with the review limited to one group, only
+    /// that group's (ticks in hidden groups never go unseen).
+    var activeSelection: Set<String> {
+        guard let only = onlyGroup else { return selected }
+        let shown = Set(groups.filter { $0.id.string == only }.flatMap(\.rules.array).compactMap(\.id.string))
+        return selected.intersection(shown)
+    }
     var selectedBytes: Double {
-        rules.filter { selected.contains($0.id.string ?? "") && $0.status.string == "ready" }
+        rules.filter { activeSelection.contains($0.id.string ?? "") && $0.status.string == "ready" }
             .map(selectedBytes(of:)).reduce(0, +)
     }
 
@@ -130,6 +139,7 @@ final class JunkModel {
     }
 
     func clean() {
+        let selected = activeSelection
         guard let planID = plan.plan.double, !selected.isEmpty else { return }
         job?.cancel()
         phase = .cleaning
@@ -167,6 +177,7 @@ final class JunkModel {
     func reset() {
         stop()
         phase = .idle
+        onlyGroup = nil
         plan = JSON(nil)
         outcome = JSON(nil)
         selected = []
@@ -234,7 +245,16 @@ struct JunkPage: View {
             if model.phase == .review { FilterBar(filter: $filter) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    ForEach(model.groups, id: \.id.string) { group in
+                    if let only = model.onlyGroup, model.phase == .review {
+                        HStack {
+                            Text("Showing one group").font(.app(12)).foregroundStyle(.dim)
+                            Button(String(localized: "Show All")) { model.onlyGroup = nil }.buttonStyle(.pill)
+                        }
+                        .padding(.leading, 12)
+                        .accessibilityElement(children: .contain)
+                        .id(only)
+                    }
+                    ForEach(model.groups.filter { model.onlyGroup == nil || $0.id.string == model.onlyGroup }, id: \.id.string) { group in
                         let rules = shownRules(group)
                         if !rules.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {

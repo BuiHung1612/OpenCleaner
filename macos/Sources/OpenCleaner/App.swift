@@ -292,7 +292,7 @@ struct MainView: View {
                 case "optimize": OptimizePage(tool: tool)
                 case "touchid": TouchIDPage(tool: tool)
                 case "startup": StartupPage(tool: tool)
-                case "devtools": DevToolsPage(tool: tool, model: devtools)
+                case "devtools": DevToolsPage(tool: tool, model: devtools, junk: junk)
                 default: Intro(module: .tool(tool.id), subtitle: tool.subtitle, points: tool.points)
                 }
             }

@@ -511,7 +511,6 @@
 "Settings…" = "Cài đặt…";
 "Editors, AI apps and package caches" = "Trình soạn thảo, app AI và cache gói";
 "Xcode, Android Studio and JetBrains, VS Code, Cursor, Antigravity, ChatGPT and Codex, Claude, Orca, npm, Gradle, CocoaPods, Cargo and more are cleaned in System Junk, under Developer tools." = "Xcode, Android Studio và JetBrains, VS Code, Cursor, Antigravity, ChatGPT và Codex, Claude, Orca, npm, Gradle, CocoaPods, Cargo và nhiều công cụ khác được dọn trong System Junk, mục Developer tools.";
-"Open System Junk" = "Mở System Junk";
 "ChatGPT and Codex apps" = "Ứng dụng ChatGPT và Codex";
 "Web cache, logs and downloaded update packages. Conversations, settings and sign-in stay." = "Cache web, nhật ký và các gói cập nhật đã tải. Hội thoại, cài đặt và đăng nhập được giữ nguyên.";
 "Codex CLI cache" = "Cache của Codex CLI";
@@ -545,3 +544,8 @@
 "A newer NDK is installed. A project that pins this version (ndkVersion) downloads it again when it builds." = "Đã có NDK mới hơn. Dự án nào ghim phiên bản này (ndkVersion) sẽ tải lại khi build.";
 "Unused system images and old NDKs are offered once Android Studio (or the SDK Command-line Tools and a Java runtime) is installed." = "System image không dùng và NDK cũ sẽ hiện khi có Android Studio (hoặc SDK Command-line Tools và Java).";
 "Show what was skipped or not removed, and why" = "Xem mục nào bị bỏ qua hoặc không xóa được, và lý do";
+"Showing one group" = "Đang hiện một nhóm";
+"Show All" = "Hiện tất cả";
+"Review %@" = "Xem lại %@";
+"found by the last System Junk scan" = "tìm thấy trong lần quét System Junk gần nhất";
+"Find Them" = "Tìm ngay";

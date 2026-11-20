@@ -168,7 +168,7 @@ struct TouchIDPage: View {
                     }
                 }
             if let message { ErrorBanner(message: message).padding(.top, 8) }
-            ActionBar {
+            ActionBar(shown: working || state.supported.bool) {
                 EmptyView()
             } center: {
                 if working {
