@@ -216,7 +216,7 @@ struct HistoryPage: View {
     @State private var error: String?
     @State private var putBackNote: String?
     /// sessions (by start time) whose skipped and failed items are shown
-    @State private var opened: Set<Double> = []
+    @State private var opened: Set<String> = []
 
     /// The engine logs a session per tool run; show the tool's own name.
     static func title(_ command: String) -> String {
@@ -239,7 +239,7 @@ struct HistoryPage: View {
             ScrollView {
                 VStack(spacing: 4) {
                     ForEach(Array((sessions ?? []).enumerated()), id: \.offset) { _, s in
-                        let key = s.started_unix.double ?? 0
+                        let key = "\(s.started_unix.double ?? 0)-\(s.command.string ?? "")-\(s.items.double ?? 0)-\(s.bytes.double ?? 0)"
                         let problems = s.problems.array
                         VStack(alignment: .leading, spacing: 6) {
                         HStack {

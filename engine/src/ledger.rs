@@ -111,11 +111,12 @@ impl Writer {
     }
 }
 
+/// Skipped and failed items listed per session in History.
+const PROBLEMS_SHOWN: usize = 30;
+
 /// Sessions newest first, in the shape the History page reads. `trashed`: what the
 /// session moved to the Trash and is still there, so it can be put back. `problems`: the
 /// first items it skipped or could not remove, each with why.
-const PROBLEMS_SHOWN: usize = 30;
-
 pub fn sessions(ctx: &Context, limit: usize) -> Value {
     let mut out = Vec::new();
     // items come before their session line

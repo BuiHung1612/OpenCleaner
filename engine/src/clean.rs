@@ -576,22 +576,39 @@ fn remove(path: &Path, kind: Kind) -> std::io::Result<()> {
 }
 
 /// Adds the owner's write permission to `dir` and every folder under it, without
-/// following symlinks (a link is never changed, nor what it points to).
+/// following symlinks: each folder is opened with O_NOFOLLOW and changed through that
+/// handle, so a folder swapped for a link meanwhile is not changed, nor what it points to.
+/// The tree is about to be removed, so the added permission is not put back.
 fn make_writable(dir: &Path) {
-    let Ok(meta) = std::fs::symlink_metadata(dir) else { return };
-    if !meta.is_dir() {
-        return;
-    }
-    let mut perms = meta.permissions();
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
-        use std::os::unix::fs::PermissionsExt;
-        perms.set_mode(perms.mode() | 0o700);
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let Ok(handle) = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+            .open(dir)
+        else {
+            return;
+        };
+        if let Ok(meta) = handle.metadata() {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o700);
+            let _ = handle.set_permissions(perms);
+        }
     }
-    #[cfg(not(unix))]
-    perms.set_readonly(false);
-    let _ = std::fs::set_permissions(dir, perms);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let Ok(meta) = std::fs::symlink_metadata(dir) else { return };
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return;
+        }
+        let mut perms = meta.permissions();
+        perms.set_readonly(false);
+        let _ = std::fs::set_permissions(dir, perms);
+    }
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        make_writable(&e.path());
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            make_writable(&e.path());
+        }
     }
 }
