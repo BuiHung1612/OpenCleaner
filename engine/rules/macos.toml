@@ -114,7 +114,7 @@ note = "Downloaded media and app code cache."
 
 [[rule]]
 id = "app.vscode"
-group = "apps"
+group = "developer"
 title = "Visual Studio Code"
 paths = [
   "~/Library/Application Support/Code/Cache",
@@ -128,13 +128,14 @@ note = "Editor code cache and downloaded extension packages. Settings and extens
 
 [[rule]]
 id = "app.code-forks"
-group = "apps"
+group = "developer"
 title = "Cursor, Windsurf and other VS Code editors"
 paths = [
   "~/Library/Application Support/Cursor/Cache",
   "~/Library/Application Support/Cursor/CachedData",
   "~/Library/Application Support/Cursor/Code Cache",
   "~/Library/Application Support/Cursor/GPUCache",
+  "~/Library/Logs/Cursor",
   "~/Library/Application Support/Windsurf/Cache",
   "~/Library/Application Support/Windsurf/CachedData",
   "~/Library/Application Support/Windsurf/Code Cache",
@@ -145,13 +146,18 @@ paths = [
   "~/Library/Application Support/Antigravity IDE/Cache",
   "~/Library/Application Support/Antigravity IDE/CachedData",
   "~/Library/Application Support/Antigravity IDE/Code Cache",
+  "~/Library/Application Support/Antigravity/GPUCache",
+  "~/Library/Application Support/Code - Insiders/Cache",
+  "~/Library/Application Support/Code - Insiders/CachedData",
+  "~/Library/Application Support/Code - Insiders/Code Cache",
+  "~/Library/Application Support/Code - Insiders/GPUCache",
 ]
-running = ["com.todesktop.230313mzl4w4u92", "com.exafunction.windsurf", "com.google.antigravity", "com.google.antigravity-ide"]
+running = ["com.todesktop.230313mzl4w4u92", "com.exafunction.windsurf", "com.google.antigravity", "com.google.antigravity-ide", "com.microsoft.VSCodeInsiders"]
 note = "Editor code caches. Settings and extensions stay."
 
 [[rule]]
 id = "app.google"
-group = "apps"
+group = "developer"
 title = "Android Studio and other Google apps"
 paths = ["~/Library/Caches/Google"]
 exclude = ["Chrome"]
@@ -318,6 +324,241 @@ title = "Flutter / Dart packages"
 paths = ["~/.pub-cache/hosted"]
 default = false
 note = "Downloaded Dart packages. Run flutter pub get in a project to fetch them again."
+
+[[rule]]
+id = "dev.codex"
+group = "developer"
+title = "ChatGPT and Codex apps"
+paths = ["~/Library/Caches/Codex", "~/Library/Caches/com.openai.codex/org.sparkle-project.Sparkle", "~/Library/Logs/com.openai.codex"]
+running = ["com.openai.codex"]
+note = "Web cache, logs and downloaded update packages. Conversations, settings and sign-in stay."
+
+[[rule]]
+id = "dev.codex.cli"
+group = "developer"
+title = "Codex CLI cache"
+paths = ["~/.codex/cache"]
+note = "Plugin and app catalogs Codex downloads again. Sessions and settings stay."
+
+[[rule]]
+id = "dev.claude"
+group = "developer"
+title = "Claude app"
+paths = [
+  "~/Library/Application Support/Claude/Cache",
+  "~/Library/Application Support/Claude/Code Cache",
+  "~/Library/Application Support/Claude/GPUCache",
+  "~/Library/Logs/Claude",
+]
+running = ["com.anthropic.claudefordesktop"]
+note = "Web cache and logs of the app. Conversations, settings and sign-in stay."
+
+[[rule]]
+id = "dev.orca"
+group = "developer"
+title = "Orca"
+paths = [
+  "~/Library/Application Support/Orca/Cache",
+  "~/Library/Application Support/Orca/Code Cache",
+  "~/Library/Application Support/Orca/GPUCache",
+  "~/Library/Application Support/Orca/logs",
+]
+running = ["com.stablyai.orca"]
+note = "Web cache and logs. Worktrees, settings and sign-in stay."
+
+[[rule]]
+id = "dev.vscodium"
+group = "developer"
+title = "VSCodium"
+paths = [
+  "~/Library/Application Support/VSCodium/Cache",
+  "~/Library/Application Support/VSCodium/CachedData",
+  "~/Library/Application Support/VSCodium/Code Cache",
+  "~/Library/Application Support/VSCodium/GPUCache",
+  "~/Library/Application Support/VSCodium/CachedExtensionVSIXs",
+]
+running = ["com.vscodium"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.kiro"
+group = "developer"
+title = "Kiro"
+paths = [
+  "~/Library/Application Support/Kiro/Cache",
+  "~/Library/Application Support/Kiro/CachedData",
+  "~/Library/Application Support/Kiro/Code Cache",
+  "~/Library/Application Support/Kiro/GPUCache",
+  "~/Library/Application Support/Kiro/CachedExtensionVSIXs",
+]
+running = ["dev.kiro.desktop"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.trae"
+group = "developer"
+title = "Trae"
+paths = [
+  "~/Library/Application Support/Trae/Cache",
+  "~/Library/Application Support/Trae/CachedData",
+  "~/Library/Application Support/Trae/Code Cache",
+  "~/Library/Application Support/Trae/GPUCache",
+  "~/Library/Application Support/Trae/CachedExtensionVSIXs",
+  "~/Library/Application Support/Trae CN/Cache",
+  "~/Library/Application Support/Trae CN/CachedData",
+  "~/Library/Application Support/Trae CN/Code Cache",
+  "~/Library/Application Support/Trae CN/GPUCache",
+  "~/Library/Application Support/Trae CN/CachedExtensionVSIXs",
+]
+running = ["com.trae.app", "cn.trae.app"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.qoder"
+group = "developer"
+title = "Qoder"
+paths = [
+  "~/Library/Application Support/Qoder/Cache",
+  "~/Library/Application Support/Qoder/CachedData",
+  "~/Library/Application Support/Qoder/Code Cache",
+  "~/Library/Application Support/Qoder/GPUCache",
+  "~/Library/Application Support/Qoder/CachedExtensionVSIXs",
+]
+running = ["com.qoder.app"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.void"
+group = "developer"
+title = "Void"
+paths = [
+  "~/Library/Application Support/Void/Cache",
+  "~/Library/Application Support/Void/CachedData",
+  "~/Library/Application Support/Void/Code Cache",
+  "~/Library/Application Support/Void/GPUCache",
+  "~/Library/Application Support/Void/CachedExtensionVSIXs",
+]
+running = ["com.voideditor.Void"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.positron"
+group = "developer"
+title = "Positron"
+paths = [
+  "~/Library/Application Support/Positron/Cache",
+  "~/Library/Application Support/Positron/CachedData",
+  "~/Library/Application Support/Positron/Code Cache",
+  "~/Library/Application Support/Positron/GPUCache",
+  "~/Library/Application Support/Positron/CachedExtensionVSIXs",
+]
+running = ["co.posit.positron", "com.rstudio.positron"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.codebuddy"
+group = "developer"
+title = "CodeBuddy"
+paths = [
+  "~/Library/Application Support/CodeBuddy/Cache",
+  "~/Library/Application Support/CodeBuddy/CachedData",
+  "~/Library/Application Support/CodeBuddy/Code Cache",
+  "~/Library/Application Support/CodeBuddy/GPUCache",
+  "~/Library/Application Support/CodeBuddy/CachedExtensionVSIXs",
+]
+running = ["com.tencent.codebuddy"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.zed"
+group = "developer"
+title = "Zed"
+paths = [
+  "~/Library/Caches/Zed",
+  "~/Library/Logs/Zed",
+]
+running = ["dev.zed.Zed", "dev.zed.Zed-Preview"]
+note = "Downloaded language servers and logs. Zed fetches them again; settings and projects stay."
+
+[[rule]]
+id = "dev.factory"
+group = "developer"
+title = "Factory"
+paths = [
+  "~/Library/Application Support/Factory/Cache",
+  "~/Library/Application Support/Factory/Code Cache",
+  "~/Library/Application Support/Factory/GPUCache",
+  "~/Library/Logs/Factory",
+]
+running = ["ai.factory.desktop"]
+note = "Web cache and logs of the app. Projects, settings and sign-in stay."
+
+[[rule]]
+id = "dev.superset"
+group = "developer"
+title = "Superset"
+paths = [
+  "~/Library/Application Support/Superset/Cache",
+  "~/Library/Application Support/Superset/Code Cache",
+  "~/Library/Application Support/Superset/GPUCache",
+  "~/Library/Logs/Superset",
+]
+running = ["com.superset.desktop"]
+note = "Web cache and logs of the app. Projects, settings and sign-in stay."
+
+[[rule]]
+id = "dev.sculptor"
+group = "developer"
+title = "Sculptor"
+paths = [
+  "~/Library/Application Support/Sculptor/Cache",
+  "~/Library/Application Support/Sculptor/Code Cache",
+  "~/Library/Application Support/Sculptor/GPUCache",
+]
+running = ["com.electron.sculptor"]
+note = "Web cache and logs of the app. Projects, settings and sign-in stay."
+
+[[rule]]
+id = "dev.replit"
+group = "developer"
+title = "Replit"
+paths = [
+  "~/Library/Application Support/Replit/Cache",
+  "~/Library/Application Support/Replit/Code Cache",
+  "~/Library/Application Support/Replit/GPUCache",
+  "~/Library/Logs/Replit",
+]
+running = ["com.electron.replit"]
+note = "Web cache and logs of the app. Projects, settings and sign-in stay."
+
+[[rule]]
+id = "dev.lmstudio"
+group = "developer"
+title = "LM Studio, Jan and Msty"
+paths = [
+  "~/Library/Application Support/LM Studio/Cache",
+  "~/Library/Application Support/LM Studio/Code Cache",
+  "~/Library/Application Support/LM Studio/GPUCache",
+  "~/Library/Application Support/Jan/Cache",
+  "~/Library/Application Support/Jan/Code Cache",
+  "~/Library/Application Support/Jan/GPUCache",
+  "~/Library/Application Support/Msty/Cache",
+  "~/Library/Application Support/Msty/Code Cache",
+  "~/Library/Application Support/Msty/GPUCache",
+  "~/Library/Logs/LM Studio",
+  "~/Library/Logs/Msty",
+]
+running = ["ai.elementlabs.lmstudio", "jan.ai.app", "app.msty.app"]
+note = "Web cache and logs of the apps. Downloaded models, chats and settings stay."
+
+[[rule]]
+id = "dev.jetbrains"
+group = "developer"
+title = "JetBrains IDE and Android Studio indexes and logs"
+paths = ["~/Library/Caches/JetBrains", "~/Library/Logs/JetBrains", "~/Library/Logs/Google"]
+running = ["com.google.android.studio", "com.jetbrains.intellij", "com.jetbrains.intellij.ce", "com.jetbrains.pycharm", "com.jetbrains.pycharm.ce", "com.jetbrains.WebStorm", "com.jetbrains.goland", "com.jetbrains.rider", "com.jetbrains.CLion", "com.jetbrains.fleet"]
+default = false
+note = "Indexes and logs. Settings and plugins stay; the IDE indexes open projects again on its next start, which takes a while."
 
 # --- Apple devices & Mail -------------------------------------------------------------
 

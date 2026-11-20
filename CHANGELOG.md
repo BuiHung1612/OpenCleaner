@@ -4,6 +4,8 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
 ## Unreleased
 
+- System Junk › Developer tools covers editors and AI coding apps: VS Code (and Insiders), Cursor, Windsurf, Antigravity, Kiro, Trae, Qoder, Void, VSCodium, Positron, CodeBuddy, Zed, ChatGPT and Codex (including downloaded update packages), the Codex CLI cache, Claude, Orca, Factory, Superset, Sculptor, Replit, LM Studio, Jan and Msty, and JetBrains IDE and Android Studio indexes and logs. Each app has its own row and is skipped while it runs; projects, chats, models and settings are never touched. Windows gets the editors too.
+- Developer Tools points to those caches in System Junk.
 - macOS: the Dashboard's Trash figure is what emptying it frees, as System Junk counts it. App copies that share their space with the apps in Applications no longer show as gigabytes to free.
 - macOS: lists use more of the window: pages start right under the title bar, and the Uninstaller's app list runs to the bottom until you pick an app.
 - macOS: scroll bars in every list stay off the panel's rounded corners.

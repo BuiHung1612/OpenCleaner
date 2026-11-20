@@ -78,6 +78,16 @@ struct DevToolsPage: View {
                             ForEach(group("simulators"), id: \.id.string) { row($0) }
                         }
                     }
+                    // file caches (editors, AI coding apps, package managers) are rules of
+                    // System Junk, with its in-use checks and review: point there
+                    if l.raw != nil {
+                        section(String(localized: "Editors, AI apps and package caches"))
+                        Text("Xcode, Android Studio and JetBrains, VS Code, Cursor, Antigravity, ChatGPT and Codex, Claude, Orca, npm, Gradle, CocoaPods, Cargo and more are cleaned in System Junk, under Developer tools.")
+                            .font(.app(13)).foregroundStyle(.dim).fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 12)
+                        Button(String(localized: "Open System Junk")) { Automation.shared.openModule = .tool("clean") }
+                            .buttonStyle(.pill).padding(.horizontal, 12).padding(.top, 4)
+                    }
                 }
                 .padding(12)
             }

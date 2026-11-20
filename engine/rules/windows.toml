@@ -55,6 +55,168 @@ running = ["firefox.exe"]
 note = "Web page cache. Logins and history stay."
 
 [[rule]]
+id = "app.vscode"
+group = "developer"
+title = "Visual Studio Code"
+paths = [
+  "%APPDATA%/Code/Cache",
+  "%APPDATA%/Code/CachedData",
+  "%APPDATA%/Code/Code Cache",
+  "%APPDATA%/Code/GPUCache",
+  "%APPDATA%/Code/CachedExtensionVSIXs",
+  "%APPDATA%/Code - Insiders/Cache",
+  "%APPDATA%/Code - Insiders/CachedData",
+  "%APPDATA%/Code - Insiders/Code Cache",
+  "%APPDATA%/Code - Insiders/GPUCache",
+  "%APPDATA%/Code - Insiders/CachedExtensionVSIXs",
+]
+running = ["Code.exe", "Code - Insiders.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.cursor"
+group = "developer"
+title = "Cursor"
+paths = [
+  "%APPDATA%/Cursor/Cache",
+  "%APPDATA%/Cursor/CachedData",
+  "%APPDATA%/Cursor/Code Cache",
+  "%APPDATA%/Cursor/GPUCache",
+  "%APPDATA%/Cursor/CachedExtensionVSIXs",
+]
+running = ["Cursor.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.windsurf"
+group = "developer"
+title = "Windsurf"
+paths = [
+  "%APPDATA%/Windsurf/Cache",
+  "%APPDATA%/Windsurf/CachedData",
+  "%APPDATA%/Windsurf/Code Cache",
+  "%APPDATA%/Windsurf/GPUCache",
+  "%APPDATA%/Windsurf/CachedExtensionVSIXs",
+]
+running = ["Windsurf.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.antigravity"
+group = "developer"
+title = "Antigravity"
+paths = [
+  "%APPDATA%/Antigravity/Cache",
+  "%APPDATA%/Antigravity/CachedData",
+  "%APPDATA%/Antigravity/Code Cache",
+  "%APPDATA%/Antigravity/GPUCache",
+  "%APPDATA%/Antigravity/CachedExtensionVSIXs",
+]
+running = ["Antigravity.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.kiro"
+group = "developer"
+title = "Kiro"
+paths = [
+  "%APPDATA%/Kiro/Cache",
+  "%APPDATA%/Kiro/CachedData",
+  "%APPDATA%/Kiro/Code Cache",
+  "%APPDATA%/Kiro/GPUCache",
+  "%APPDATA%/Kiro/CachedExtensionVSIXs",
+]
+running = ["Kiro.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.trae"
+group = "developer"
+title = "Trae"
+paths = [
+  "%APPDATA%/Trae/Cache",
+  "%APPDATA%/Trae/CachedData",
+  "%APPDATA%/Trae/Code Cache",
+  "%APPDATA%/Trae/GPUCache",
+  "%APPDATA%/Trae/CachedExtensionVSIXs",
+  "%APPDATA%/Trae CN/Cache",
+  "%APPDATA%/Trae CN/CachedData",
+  "%APPDATA%/Trae CN/Code Cache",
+  "%APPDATA%/Trae CN/GPUCache",
+  "%APPDATA%/Trae CN/CachedExtensionVSIXs",
+]
+running = ["Trae.exe", "Trae CN.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.qoder"
+group = "developer"
+title = "Qoder"
+paths = [
+  "%APPDATA%/Qoder/Cache",
+  "%APPDATA%/Qoder/CachedData",
+  "%APPDATA%/Qoder/Code Cache",
+  "%APPDATA%/Qoder/GPUCache",
+  "%APPDATA%/Qoder/CachedExtensionVSIXs",
+]
+running = ["Qoder.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.vscodium"
+group = "developer"
+title = "VSCodium"
+paths = [
+  "%APPDATA%/VSCodium/Cache",
+  "%APPDATA%/VSCodium/CachedData",
+  "%APPDATA%/VSCodium/Code Cache",
+  "%APPDATA%/VSCodium/GPUCache",
+  "%APPDATA%/VSCodium/CachedExtensionVSIXs",
+]
+running = ["VSCodium.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.void"
+group = "developer"
+title = "Void"
+paths = [
+  "%APPDATA%/Void/Cache",
+  "%APPDATA%/Void/CachedData",
+  "%APPDATA%/Void/Code Cache",
+  "%APPDATA%/Void/GPUCache",
+  "%APPDATA%/Void/CachedExtensionVSIXs",
+]
+running = ["Void.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.positron"
+group = "developer"
+title = "Positron"
+paths = [
+  "%APPDATA%/Positron/Cache",
+  "%APPDATA%/Positron/CachedData",
+  "%APPDATA%/Positron/Code Cache",
+  "%APPDATA%/Positron/GPUCache",
+  "%APPDATA%/Positron/CachedExtensionVSIXs",
+]
+running = ["Positron.exe"]
+note = "Editor code cache and downloaded extension packages. Settings and extensions stay."
+
+[[rule]]
+id = "dev.claude"
+group = "developer"
+title = "Claude app"
+paths = [
+  "%APPDATA%/Claude/Cache",
+  "%APPDATA%/Claude/Code Cache",
+  "%APPDATA%/Claude/GPUCache",
+]
+running = ["Claude.exe"]
+note = "Web cache of the app. Conversations, settings and sign-in stay."
+
+[[rule]]
 id = "dev.npm"
 group = "developer"
 title = "npm cache"
