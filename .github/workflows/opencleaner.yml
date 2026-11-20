@@ -328,18 +328,21 @@ jobs:
     needs: [release]
     runs-on: windows-latest
     env:
-      MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
-      MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
-      MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
-      MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+      # only whether they are set; the secrets themselves go to the submit step alone
+      HAS_STORE: ${{ secrets.MSSTORE_CLIENT_ID != '' }}
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: OpenCleaner-msix
       - uses: microsoft/setup-msstore-cli@v1
-        if: env.MSSTORE_CLIENT_ID != ''
+        if: env.HAS_STORE == 'true'
       - name: Submit to the Microsoft Store
-        if: env.MSSTORE_CLIENT_ID != ''
+        if: env.HAS_STORE == 'true'
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+          MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
         shell: pwsh
         run: |
           msstore reconfigure --tenantId $env:MSSTORE_TENANT_ID --sellerId $env:MSSTORE_SELLER_ID --clientId $env:MSSTORE_CLIENT_ID --clientSecret $env:MSSTORE_CLIENT_SECRET

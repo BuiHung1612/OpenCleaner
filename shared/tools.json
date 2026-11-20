@@ -66,8 +66,8 @@
       "title": "Hidden Items",
       "subtitle": "Review the hidden folders and files in your home folder: what each belongs to, and which are left over or no longer used.",
       "points": [
-        "Old backups and leftovers of removed apps are ticked",
-        "Settings, keys and history are never listed",
+        "Old backups and caches of removed tools are ticked",
+        "Known settings and keys are never listed",
         "Everything goes to the Trash"
       ],
       "icon": "eye.slash",

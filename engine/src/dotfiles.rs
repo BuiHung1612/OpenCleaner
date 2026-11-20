@@ -1,6 +1,7 @@
 //! Hidden items in the home folder (`.android`, `.vscode`, `.zshrc.backup.…`): what each
 //! belongs to and whether it still earns its place. Old backups and files tools rebuild
-//! start ticked; folders of apps that are gone are ticked once unchanged for 90 days;
+//! start ticked; download caches of tools that are gone are ticked once unchanged for 90
+//! days;
 //! everything else is only shown. Settings, keys and history are never listed.
 //! Everything goes to the Trash.
 
@@ -70,10 +71,8 @@ pub fn removable(name: &str, is_dir: bool) -> bool {
 /// gone. Others (`.claude`, `.ollama`, `.android`, `.gradle`…) hold history, models, keys
 /// or settings, and are only shown.
 const REBUILDABLE: &[&str] = &[
-    ".npm", ".yarn", ".cocoapods", ".pub-cache", ".dartServer", ".swiftpm", ".konan", ".vscode",
-    ".vscode-shared", ".vscode-react-native", ".vscode-insiders", ".vscode-oss", ".cursor",
-    ".windsurf", ".kiro", ".trae", ".trae-cn", ".antigravity", ".antigravity-ide", ".qoder",
-    ".bun", ".deno", ".rustup", ".ServiceHub", ".dart-tool", ".expo", ".react-native-cli",
+    ".npm", ".yarn", ".cocoapods", ".pub-cache", ".dartServer", ".dart-tool", ".swiftpm", ".konan",
+    ".rustup", ".vscode", ".vscode-insiders", ".vscode-oss", ".ServiceHub",
 ];
 
 /// Who makes a hidden folder: its name, the owner's name, app names (macOS bundle names,
@@ -531,6 +530,12 @@ mod tests {
         );
         assert!(names.contains(&".mystery") && names.contains(&".zcompdump-host"));
         assert!(items.iter().all(|p| p.name != ".ssh.bak"));
+        // the last check before removal, whatever the list said
+        use crate::guard::check_for;
+        let check = |n: &str| check_for(&home.join(n), &home, &ctx, Purpose::HomeItems).is_ok();
+        assert!(check(".mystery") && check(".zshrc.backup.1") && check(".zcompdump-host"));
+        assert!(!check(".ssh") && !check(".ssh.bak") && !check(".zshrc") && !check(".bash_history"));
+        assert!(!check(".mystery/inside") && !check("visible"));
         // an app's folder that may hold keys or history is never ticked, even when left over
         #[cfg(unix)]
         {

@@ -208,7 +208,9 @@ mod win {
     pub fn check(manual: bool) {
         let version = super::VERSION.trim();
         // installed from the Microsoft Store: the Store updates it
-        if std::env::current_exe().is_ok_and(|p| p.to_string_lossy().to_ascii_lowercase().contains("\\windowsapps\\")) {
+        // (packages live in <drive>\WindowsApps; %LOCALAPPDATA%\Microsoft\WindowsApps holds aliases)
+        let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if exe.contains("\\windowsapps\\") && !exe.contains("\\microsoft\\windowsapps\\") {
             if manual {
                 tell("This copy of OpenCleaner is updated by the Microsoft Store.");
             }
