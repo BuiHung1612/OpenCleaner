@@ -1,4 +1,5 @@
 import AppKit
+import DiskArbitration
 import SwiftUI
 
 struct Volume: Identifiable {
@@ -22,11 +23,19 @@ struct Volume: Identifiable {
     static func all() -> [Volume] {
         let keys: [URLResourceKey] = [.volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
+        let session = DASessionCreate(kCFAllocatorDefault)
         return urls.compactMap { url in
-            guard let v = try? url.resourceValues(forKeys: Set(keys)), let total = v.volumeTotalCapacity, total > 0 else { return nil }
+            guard !isDiskImage(url, session), let v = try? url.resourceValues(forKeys: Set(keys)), let total = v.volumeTotalCapacity, total > 0 else { return nil }
             return Volume(url: url, name: v.volumeName ?? url.lastPathComponent, total: Double(total), free: Double(v.volumeAvailableCapacityForImportantUsage ?? 0))
         }
     }
+}
+
+/// A mounted .dmg (an installer, say): a file on another disk, not a disk to clean.
+private func isDiskImage(_ url: URL, _ session: DASession?) -> Bool {
+    guard let session, let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url as CFURL),
+          let info = DADiskCopyDescription(disk) as? [CFString: Any] else { return false }
+    return info[kDADiskDescriptionDeviceModelKey] as? String == "Disk Image"
 }
 
 /// Lives as long as the window, so results and the sidebar badge survive switching modules.
