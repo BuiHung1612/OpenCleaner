@@ -20,6 +20,7 @@ pub enum Module {
     Installers,
     Projects,
     DevTools,
+    HomeItems,
     Uninstaller,
     Startup,
     SpaceLens,
@@ -30,12 +31,12 @@ pub enum Module {
 }
 
 /// The pages built on a pick list (find, tick, act).
-const PICK_MODULES: [Module; 4] = [Module::Installers, Module::Projects, Module::LargeOld, Module::Duplicates];
+const PICK_MODULES: [Module; 5] = [Module::Installers, Module::Projects, Module::HomeItems, Module::LargeOld, Module::Duplicates];
 
 /// Sidebar: dashboard, then groups, then history (as on macOS).
 const SECTIONS: &[(&str, &[Module])] = &[
     ("", &[Module::Dashboard]),
-    ("Cleanup", &[Module::Junk, Module::Installers, Module::Projects, Module::DevTools]),
+    ("Cleanup", &[Module::Junk, Module::Installers, Module::Projects, Module::DevTools, Module::HomeItems]),
     ("Applications", &[Module::Uninstaller, Module::Startup]),
     ("Files", &[Module::SpaceLens, Module::LargeOld, Module::Duplicates]),
     (" ", &[Module::History, Module::Settings]),
@@ -78,6 +79,7 @@ impl Module {
             Module::Installers => Some("installer"),
             Module::Projects => Some("purge"),
             Module::DevTools => Some("devtools"),
+            Module::HomeItems => Some("home_items"),
             Module::Startup => Some("startup"),
             _ => None,
         }
@@ -123,7 +125,8 @@ impl Module {
             Module::Junk => '\u{EA99}',        // Broom (was Delete, read as "remove")
             Module::Installers => '\u{E896}',
             Module::Projects => '\u{E943}',
-            Module::DevTools => '\u{E90F}',  // Repair (macOS: hammer)
+            Module::DevTools => '\u{E90F}',
+            Module::HomeItems => '\u{ED1A}', // Hide (macOS: eye.slash)  // Repair (macOS: hammer)
             Module::Uninstaller => '\u{E71D}', // AllApps (was ChromeClose, read as "close window")
             Module::Startup => '\u{E7E8}',    // PowerButton
             Module::SpaceLens => '\u{EB05}',
@@ -175,6 +178,7 @@ impl Module {
     fn find_request(self) -> Value {
         match self {
             Module::Installers => json!({"op": "installers"}),
+            Module::HomeItems => json!({"op": "home_items"}),
             Module::LargeOld => json!({"op": "large_old"}),
             Module::Duplicates => json!({"op": "duplicates"}),
             _ => json!({"op": "projects"}),
@@ -523,6 +527,7 @@ pub struct State {
     projects: Picks,
     large: Picks,
     dups: Picks,
+    home: Picks,
     apps: Apps,
     startup: Startup,
     devtools: DevTools,
@@ -613,6 +618,7 @@ impl State {
             projects: Picks::default(),
             large: Picks::default(),
             dups: Picks::default(),
+            home: Picks::default(),
             apps: Apps::default(),
             startup: Startup::default(),
             devtools: DevTools::default(),
@@ -652,6 +658,7 @@ impl State {
             Module::Installers => &mut self.installers,
             Module::LargeOld => &mut self.large,
             Module::Duplicates => &mut self.dups,
+            Module::HomeItems => &mut self.home,
             _ => &mut self.projects,
         }
     }
@@ -661,6 +668,7 @@ impl State {
             Module::Installers => &self.installers,
             Module::LargeOld => &self.large,
             Module::Duplicates => &self.dups,
+            Module::HomeItems => &self.home,
             _ => &self.projects,
         }
     }
@@ -748,7 +756,7 @@ impl State {
         let s = match self.module {
             Module::SpaceLens => &mut self.space.scroll,
             Module::Junk => &mut self.junk.scroll,
-            m @ (Module::Installers | Module::Projects | Module::LargeOld | Module::Duplicates) => &mut self.picks(m).scroll,
+            m @ (Module::Installers | Module::Projects | Module::HomeItems | Module::LargeOld | Module::Duplicates) => &mut self.picks(m).scroll,
             Module::Uninstaller => &mut self.apps.scroll,
             Module::Startup => &mut self.startup.scroll,
             Module::DevTools => &mut self.devtools.scroll,
@@ -1130,7 +1138,7 @@ impl State {
         match self.module {
             Module::Dashboard => self.draw_dashboard(c, page),
             Module::Junk => self.draw_junk(c, page),
-            m @ (Module::Installers | Module::Projects | Module::LargeOld | Module::Duplicates) => self.draw_picks(c, page, m),
+            m @ (Module::Installers | Module::Projects | Module::HomeItems | Module::LargeOld | Module::Duplicates) => self.draw_picks(c, page, m),
             Module::Uninstaller => self.draw_apps(c, page),
             Module::Startup => self.draw_startup(c, page),
             Module::DevTools => self.draw_devtools(c, page),
@@ -2230,6 +2238,7 @@ impl State {
                     "projects" => Module::Projects.title(),
                     "large_old" => Module::LargeOld.title(),
                     "duplicates" => Module::Duplicates.title(),
+                    "home_items" => Module::HomeItems.title(),
                     "uninstall" => "Uninstaller".into(),
                     "startup" => Module::Startup.title(),
                     "devtools" => Module::DevTools.title(),

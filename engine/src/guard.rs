@@ -87,6 +87,9 @@ pub enum Purpose {
     Installers,
     /// Rebuildable build folders inside projects, wherever the projects live (Documents too).
     Projects,
+    /// Hidden items directly in the home folder (`.android`, old `.zshrc` backups), never
+    /// the ones that hold settings or keys.
+    HomeItems,
     /// The user's own files (large and old, duplicates, screenshots): single files in their
     /// folders, to the Trash only.
     Files,
@@ -161,6 +164,7 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
             Purpose::Uninstall => matches!(*p, "Library/Preferences" | "Library/Cookies"),
             Purpose::Installers => matches!(*p, "Downloads" | "Desktop"),
             Purpose::Projects => matches!(*p, "Documents" | "Desktop"),
+            Purpose::HomeItems => false,
             Purpose::Files => matches!(
                 *p,
                 "Documents" | "Desktop" | "Downloads" | "Pictures" | "Movies" | "Music" | "Videos"
@@ -191,6 +195,13 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
         }
         Purpose::Projects if !PROJECT_ARTIFACTS.contains(&name.as_str()) => {
             return Err("not a build folder");
+        }
+        Purpose::HomeItems
+            if item.parent() != Some(ctx.home.as_path())
+                || !name.starts_with('.')
+                || crate::dotfiles::is_essential(&name) =>
+        {
+            return Err("not a hidden item of the home folder");
         }
         Purpose::Files if !std::fs::symlink_metadata(item).is_ok_and(|m| m.is_file()) => {
             return Err("not a plain file");

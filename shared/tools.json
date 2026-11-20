@@ -61,6 +61,22 @@
       ]
     },
     {
+      "id": "home_items",
+      "group": "Cleanup",
+      "title": "Hidden Items",
+      "subtitle": "Review the hidden folders and files in your home folder: what each belongs to, and which are left over or no longer used.",
+      "points": [
+        "Old backups and leftovers of removed apps are ticked",
+        "Settings, keys and history are never listed",
+        "Everything goes to the Trash"
+      ],
+      "icon": "eye.slash",
+      "colors": [
+        "#5B4B8A",
+        "#1E1A3C"
+      ]
+    },
+    {
       "id": "optimize",
       "group": "Speed",
       "title": "Optimization",

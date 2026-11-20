@@ -561,3 +561,21 @@
 "Checking and installing…" = "Đang kiểm tra và cài đặt…";
 "%@ of %@" = "%@ / %@";
 "Connecting…" = "Đang kết nối…";
+
+/* Hidden Items */
+"Hidden Items" = "Mục ẩn";
+"Review the hidden folders and files in your home folder: what each belongs to, and which are left over or no longer used." = "Xem lại các thư mục và tệp ẩn trong thư mục Home: mỗi mục thuộc về ứng dụng nào, mục nào còn sót lại hoặc không còn dùng.";
+"Old backups and leftovers of removed apps are ticked" = "Bản sao lưu cũ và phần sót của ứng dụng đã gỡ được đánh dấu sẵn";
+"Settings, keys and history are never listed" = "Cài đặt, khóa bảo mật và lịch sử không bao giờ được liệt kê";
+"Old backups" = "Bản sao lưu cũ";
+"Rebuilt automatically" = "Tự tạo lại khi cần";
+"Left by apps no longer installed" = "Sót lại từ ứng dụng đã gỡ";
+"Not changed for 6 months" = "Không thay đổi trong 6 tháng";
+"In use" = "Đang dùng";
+"Not recognized" = "Chưa nhận ra";
+"Backup of %@" = "Bản sao lưu của %@";
+"newest, not ticked" = "mới nhất, không đánh dấu";
+"zsh rebuilds it when needed" = "zsh tự tạo lại khi cần";
+"%@ is not installed · unchanged for %lld days" = "%@ không còn được cài · không thay đổi trong %lld ngày";
+"%@ · unchanged for %lld days" = "%@ · không thay đổi trong %lld ngày";
+"Unchanged for %lld days" = "Không thay đổi trong %lld ngày";

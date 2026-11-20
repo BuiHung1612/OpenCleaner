@@ -141,6 +141,7 @@ final class PicksModel {
 enum PickText {
     static func detail(_ item: JSON) -> String {
         let flags = Set(item.flags.strings)
+        if flags.contains("dot") { return hidden(item, flags) }
         if let days = item.idle_days.double {
             return String(localized: "Not opened for \(Int(days)) days")
         }
@@ -169,8 +170,24 @@ enum PickText {
         return flags.contains("shared") ? text + " · " + String(localized: "also used by the other copy of this app") : text
     }
 
+    /// A hidden home item: what it is or belongs to, and how long it has been unchanged.
+    private static func hidden(_ item: JSON, _ flags: Set<String>) -> String {
+        let owner = item.kind.string ?? ""
+        let days = Int(item.changed_days.double ?? 0)
+        if flags.contains("backup") {
+            let text = String(localized: "Backup of \(owner)")
+            return flags.contains("newest") ? text + " · " + String(localized: "newest, not ticked") : text
+        }
+        if flags.contains("rebuilt") { return String(localized: "zsh rebuilds it when needed") }
+        if flags.contains("missing") { return String(localized: "\(owner) is not installed · unchanged for \(days) days") }
+        if flags.contains("idle") { return String(localized: "\(owner) · unchanged for \(days) days") }
+        if flags.contains("in_use") { return owner }
+        return String(localized: "Unchanged for \(days) days")
+    }
+
     /// A group's header: a duplicate set ("a.zip · 2 copies" from the engine) says how many copies it has.
     static func group(_ name: String, first: JSON?) -> String {
+        if first?.flags.strings.contains("dot") == true { return tr(name) }
         guard let copies = first?.copies.double, let cut = name.range(of: " · ", options: .backwards) else { return name }
         return String(localized: "\(String(name[..<cut.lowerBound])) · \(Int(copies)) copies")
     }

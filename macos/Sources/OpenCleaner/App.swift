@@ -223,6 +223,7 @@ struct MainView: View {
     @State private var slim = PicksModel()
     @State private var largeOld = PicksModel()
     @State private var duplicates = PicksModel()
+    @State private var homeItems = PicksModel()
     @State private var devtools = DevToolsModel()
     @AppStorage("largeMiB") private var largeMiB = 500
     @AppStorage("idleDays") private var idleDays = 180
@@ -327,6 +328,7 @@ struct MainView: View {
                 case "slim": PicksPage(tool: tool, request: ["op": "slim"], kind: .slim, model: slim)
                 case "large_old": PicksPage(tool: tool, request: ["op": "large_old", "min_mib": largeMiB, "days": idleDays], kind: .trash, model: largeOld)
                 case "duplicates": PicksPage(tool: tool, request: ["op": "duplicates"], kind: .trash, model: duplicates)
+                case "home_items": PicksPage(tool: tool, request: ["op": "home_items"], kind: .trash, model: homeItems)
                 case "optimize": OptimizePage(tool: tool)
                 case "touchid": TouchIDPage(tool: tool)
                 case "startup": StartupPage(tool: tool)

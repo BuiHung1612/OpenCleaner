@@ -44,6 +44,9 @@ pub struct Pick {
     pub age_days: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idle_days: Option<i64>,
+    /// Hidden home items: days since it or what it directly holds last changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed_days: Option<i64>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub place: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,6 +95,7 @@ impl Pick {
             kind: String::new(),
             age_days: None,
             idle_days: None,
+            changed_days: None,
             place: String::new(),
             copies: None,
             flags: Vec::new(),

@@ -80,6 +80,8 @@ enum Request {
         #[serde(default = "one")]
         min_mib: u64,
     },
+    /// Hidden items in the home folder, each with what it belongs to (`picks`).
+    HomeItems,
     /// Rebuildable build folders in projects (`picks`).
     Projects {
         #[serde(default)]
@@ -474,6 +476,10 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         Request::Installers => {
             let found = finders::installers(ctx());
             emit_value("picks", &picks::store("installers", found, ctx()), emit);
+        }
+        Request::HomeItems => {
+            let found = crate::dotfiles::home_items(ctx(), cancel);
+            emit_value("picks", &picks::store("home_items", found, ctx()), emit);
         }
         Request::Projects { roots } => {
             let found = finders::projects(ctx(), &roots, cancel);

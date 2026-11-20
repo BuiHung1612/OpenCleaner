@@ -9,6 +9,7 @@ pub mod clean;
 pub mod context;
 pub mod devtools;
 pub mod dircache;
+pub mod dotfiles;
 pub mod ffi;
 pub mod files;
 pub mod finders;
