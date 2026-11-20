@@ -16,12 +16,29 @@ struct OpenCleanerApp: App {
         Engine.setFast(UserDefaults.standard.bool(forKey: Engine.fastKey))
     }
 
+    /// Most of the screen (so the sidebar fits without scrolling), centered; at least
+    /// 1080 x 720 where the screen has room.
+    static func fitted(_ screen: CGRect) -> CGRect {
+        let w = max(min(screen.width * 0.8, 1600), min(1080, screen.width))
+        let h = max(min(screen.height * 0.88, 1100), min(720, screen.height))
+        return CGRect(x: screen.midX - w / 2, y: screen.midY - h / 2, width: w, height: h)
+    }
+
     var body: some Scene {
         Window("OpenCleaner", id: "main") {
             MainView()
                 // SwiftUI saves the frame under the window's id but opens it centered on the
                 // main screen again: put it back where it was (a screen gone since: left alone)
                 .background(WindowProbe { window in
+                    // once: forget the size saved by versions that opened at a fixed 1080 x 720
+                    if !UserDefaults.standard.bool(forKey: "windowFitsScreen") {
+                        UserDefaults.standard.set(true, forKey: "windowFitsScreen")
+                        UserDefaults.standard.removeObject(forKey: "NSWindow Frame main")
+                        if let screen = window.screen ?? NSScreen.main {
+                            window.setFrame(Self.fitted(screen.visibleFrame), display: true)
+                        }
+                        return
+                    }
                     guard let saved = UserDefaults.standard.string(forKey: "NSWindow Frame main") else { return }
                     let f = saved.split(separator: " ").prefix(4).compactMap { Double($0) }
                     guard f.count == 4 else { return }
@@ -32,7 +49,9 @@ struct OpenCleanerApp: App {
                 })
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1080, height: 720)
+        .defaultWindowPlacement { _, context in
+            WindowPlacement(size: Self.fitted(context.defaultDisplay.visibleRect).size)
+        }
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {
