@@ -2,7 +2,7 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
-## Unreleased
+## 0.3.7
 
 - Windows in Vietnamese: follows the Windows display language, or Settings › General › Language (System, English, Tiếng Việt). It uses the Mac app's translations plus the Windows-only text.
 - Windows: Developer Tools page (Docker, and Android system images and older NDKs through sdkmanager).
