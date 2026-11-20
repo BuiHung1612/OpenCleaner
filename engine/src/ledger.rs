@@ -112,11 +112,15 @@ impl Writer {
 }
 
 /// Sessions newest first, in the shape the History page reads. `trashed`: what the
-/// session moved to the Trash and is still there, so it can be put back.
+/// session moved to the Trash and is still there, so it can be put back. `problems`: the
+/// first items it skipped or could not remove, each with why.
+const PROBLEMS_SHOWN: usize = 30;
+
 pub fn sessions(ctx: &Context, limit: usize) -> Value {
     let mut out = Vec::new();
     // items come before their session line
     let mut trashed: Vec<Value> = Vec::new();
+    let mut problems: Vec<Value> = Vec::new();
     let mut freed = Vec::new();
     for line in lines(ctx) {
         match line {
@@ -127,6 +131,16 @@ pub fn sessions(ctx: &Context, limit: usize) -> Value {
                 ..
             } if guard::stamp(&to) == Some(was) => {
                 trashed.push(json!({"from": path, "to": to}));
+            }
+            Line::Item {
+                path,
+                result,
+                reason,
+                ..
+            } if result == "failed" || result == "skipped" => {
+                if problems.len() < PROBLEMS_SHOWN {
+                    problems.push(json!({"path": path, "result": result, "reason": reason}));
+                }
             }
             Line::Item { .. } | Line::Startup { .. } => {}
             // written before empty sessions were left out
@@ -147,6 +161,7 @@ pub fn sessions(ctx: &Context, limit: usize) -> Value {
                 "bytes": bytes,
                 "failed": failed,
                 "trashed": std::mem::take(&mut trashed),
+                "problems": std::mem::take(&mut problems),
                 }))
             }
         }

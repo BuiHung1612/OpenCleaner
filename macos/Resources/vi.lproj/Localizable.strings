@@ -544,3 +544,4 @@
 "Older NDK" = "NDK cũ";
 "A newer NDK is installed. A project that pins this version (ndkVersion) downloads it again when it builds." = "Đã có NDK mới hơn. Dự án nào ghim phiên bản này (ndkVersion) sẽ tải lại khi build.";
 "Unused system images and old NDKs are offered once Android Studio (or the SDK Command-line Tools and a Java runtime) is installed." = "System image không dùng và NDK cũ sẽ hiện khi có Android Studio (hoặc SDK Command-line Tools và Java).";
+"Show what was skipped or not removed, and why" = "Xem mục nào bị bỏ qua hoặc không xóa được, và lý do";

@@ -618,3 +618,21 @@ fn shipped_rules_are_consistent() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn removes_trees_with_read_only_folders() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Home::new();
+    let inner = h.p("tool/pkg/inner");
+    write(&inner.join("f"), 1000);
+    // like dotslash and the Go module cache: folders without write permission
+    for d in [inner.clone(), h.p("tool/pkg")] {
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let set = rules("[[rule]]\nid = \"t\"\ngroup = \"g\"\ntitle = \"T\"\npaths = [\"~/tool\"]\n");
+    let plan = scan(&h, &set, &Running::default());
+    let out = run(&h, &plan, &["t"]);
+    assert_eq!((out.removed, out.failed), (1, 0));
+    assert!(!h.p("tool/pkg").exists());
+}

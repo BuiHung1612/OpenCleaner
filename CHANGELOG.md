@@ -4,6 +4,8 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
 ## Unreleased
 
+- History: open a session to see what was skipped or could not be removed, and why (an app that was running, one that needs administrator rights…).
+- System Junk removes caches that keep read-only folders (dotslash, Go modules) instead of failing on them every time.
 - Developer Tools: Android emulator system images no emulator uses, and NDKs older than the newest one, removed with Android's own sdkmanager. Never ticked for you.
 
 ## 0.3.6

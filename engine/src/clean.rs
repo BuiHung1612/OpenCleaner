@@ -562,7 +562,36 @@ pub fn execute(
 /// a symlink inside the tree (it unlinks the link).
 fn remove(path: &Path, kind: Kind) -> std::io::Result<()> {
     match kind {
-        Kind::Dir => std::fs::remove_dir_all(path),
+        Kind::Dir => std::fs::remove_dir_all(path).or_else(|e| {
+            // tools that keep read-only folders in their caches (dotslash, Go modules):
+            // give the owner write access inside the tree, then try once more
+            if e.kind() != std::io::ErrorKind::PermissionDenied {
+                return Err(e);
+            }
+            make_writable(path);
+            std::fs::remove_dir_all(path)
+        }),
         _ => std::fs::remove_file(path),
+    }
+}
+
+/// Adds the owner's write permission to `dir` and every folder under it, without
+/// following symlinks (a link is never changed, nor what it points to).
+fn make_writable(dir: &Path) {
+    let Ok(meta) = std::fs::symlink_metadata(dir) else { return };
+    if !meta.is_dir() {
+        return;
+    }
+    let mut perms = meta.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(perms.mode() | 0o700);
+    }
+    #[cfg(not(unix))]
+    perms.set_readonly(false);
+    let _ = std::fs::set_permissions(dir, perms);
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        make_writable(&e.path());
     }
 }

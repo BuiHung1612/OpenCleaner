@@ -215,6 +215,8 @@ struct HistoryPage: View {
     @State private var log: String?
     @State private var error: String?
     @State private var putBackNote: String?
+    /// sessions (by start time) whose skipped and failed items are shown
+    @State private var opened: Set<Double> = []
 
     /// The engine logs a session per tool run; show the tool's own name.
     static func title(_ command: String) -> String {
@@ -237,6 +239,9 @@ struct HistoryPage: View {
             ScrollView {
                 VStack(spacing: 4) {
                     ForEach(Array((sessions ?? []).enumerated()), id: \.offset) { _, s in
+                        let key = s.started_unix.double ?? 0
+                        let problems = s.problems.array
+                        VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: Self.icon(s.command.string ?? "")).frame(width: 22).foregroundStyle(.dim)
                                 .accessibilityHidden(true)
@@ -250,12 +255,38 @@ struct HistoryPage: View {
                             if let failed = s.failed.double, failed > 0 {
                                 Text("\(Int(failed)) failed").monospacedDigit().foregroundStyle(Color.warn)
                             }
+                            // why items were skipped or failed, one click away
+                            if !problems.isEmpty {
+                                Button {
+                                    if opened.contains(key) { opened.remove(key) } else { opened.insert(key) }
+                                } label: {
+                                    Image(systemName: opened.contains(key) ? "chevron.up" : "chevron.down")
+                                }
+                                .buttonStyle(.plain)
+                                .help(String(localized: "Show what was skipped or not removed, and why"))
+                                .accessibilityLabel(String(localized: "Show what was skipped or not removed, and why"))
+                            }
                             // what this session moved to the Trash and is still there
                             if !s.trashed.array.isEmpty {
                                 Button(String(localized: "Put Back")) { Task { await putBack(s.trashed.array) } }
                                     .buttonStyle(.pill)
                                     .help(String(localized: "Move \(s.trashed.array.count) items from the Trash back where they were"))
                             }
+                        }
+                        if opened.contains(key) {
+                            ForEach(Array(problems.enumerated()), id: \.offset) { _, p in
+                                let path = p.path.string ?? ""
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text(verbatim: (path as NSString).lastPathComponent).font(.app(12, weight: .semibold))
+                                        .help(path)
+                                    Text(tr(p.reason.string ?? p.result.string ?? ""))
+                                        .font(.app(12))
+                                        .foregroundStyle(p.result.string == "failed" ? Color.warn : Color.dim)
+                                    Spacer()
+                                }
+                                .padding(.leading, 30)
+                            }
+                        }
                         }
                         .padding(.horizontal, 14).padding(.vertical, 10)
                     }
