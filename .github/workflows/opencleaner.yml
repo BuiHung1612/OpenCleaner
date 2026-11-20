@@ -302,6 +302,11 @@ jobs:
         with:
           name: OpenCleaner-windows
           path: dist
+      # for the first Store submission by hand (unsigned: it installs only through the Store)
+      - uses: actions/download-artifact@v8
+        with:
+          name: OpenCleaner-msix
+          path: dist
       # Homebrew cask and winget manifests for this release, attached as assets (submitted by hand: packaging/README.md)
       - name: Render package manifests
         run: |
@@ -313,7 +318,7 @@ jobs:
           for f in packaging/winget/*.yaml; do render "$f" "${WIN^^}"; done
           # every placeholder of ours filled ({{appdir}} in the cask is Homebrew's own token)
           ! grep -lE '\{\{(VERSION|SHA256)\}\}' dist/opencleaner.rb dist/*.yaml
-      # dist/ holds OpenCleaner.dmg and OpenCleaner.exe from the macos and windows-app jobs, and the manifests
+      # dist/ holds OpenCleaner.dmg, OpenCleaner.exe and OpenCleaner.msix from the macos and windows-app jobs, and the manifests
       # notes: this version's section of CHANGELOG.md, then GitHub's changelog link
       - run: |
           awk -v v="## ${GITHUB_REF_NAME#v}" '$0==v{on=1;next} /^## /{on=0} on' CHANGELOG.md > notes.md
