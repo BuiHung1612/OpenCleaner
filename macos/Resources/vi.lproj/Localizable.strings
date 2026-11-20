@@ -554,3 +554,6 @@
 "Its signature would break (last try); not offered until it updates" = "Chữ ký sẽ bị hỏng (lần thử trước); không đề xuất cho tới khi ứng dụng cập nhật";
 "Quit" = "Thoát";
 "Quit %@ so it can be uninstalled" = "Thoát %@ để có thể gỡ cài đặt";
+"Welcome to OpenCleaner" = "Chào mừng đến với OpenCleaner";
+"Nothing is removed until you have reviewed it and said so. A few settings help before you start." = "Không có gì bị xóa cho tới khi bạn đã xem lại và đồng ý. Vài thiết lập sau sẽ giúp ích trước khi bắt đầu.";
+"Get Started" = "Bắt đầu";

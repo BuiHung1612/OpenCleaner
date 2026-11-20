@@ -14,6 +14,12 @@ struct OpenCleanerApp: App {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate()
         Engine.setFast(UserDefaults.standard.bool(forKey: Engine.fastKey))
+        // people who used an earlier version (it saved a window frame) skip the welcome
+        let d = UserDefaults.standard
+        if d.object(forKey: Welcome.key) == nil,
+           ["windowFitsScreen", "windowFitsScreen2", "NSWindow Frame main"].contains(where: { d.object(forKey: $0) != nil }) {
+            d.set(true, forKey: Welcome.key)
+        }
     }
 
     /// Tall enough for the whole sidebar where the screen allows (880), no wider than the
@@ -173,7 +179,38 @@ enum Module: Hashable {
     static var ordered: [Module] { sections.flatMap(\.modules) }
 }
 
+/// First launch only: what OpenCleaner may need from macOS, before anything is scanned.
+struct Welcome: View {
+    static let key = "welcomed"
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(Automation.menuBarKey) private var menuBar = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 14) {
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Welcome to OpenCleaner").font(.title2.bold())
+                    Text("Nothing is removed until you have reviewed it and said so. A few settings help before you start.")
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            PermissionsSettings()
+            Toggle(String(localized: "Show in menu bar"), isOn: $menuBar).padding(.horizontal, 8)
+            HStack {
+                Spacer()
+                Button(String(localized: "Get Started")) { dismiss() }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 640)
+    }
+}
+
 struct MainView: View {
+    @AppStorage(Welcome.key) private var welcomed = false
     @State private var module = Module.dashboard
     @State private var version: String?
     // @Observable models: a page redraws only for what it reads, never the whole window
@@ -212,6 +249,7 @@ struct MainView: View {
         .task { version = await Engine.ask(["op": "version"]).version.string }
         .task { Updater.startAutomaticChecks(); CrashReports.offer() }
         .onReceive(Automation.shared.$openModule.compactMap { $0 }) { module = $0; Automation.shared.openModule = nil }
+        .sheet(isPresented: Binding(get: { !welcomed }, set: { if !$0 { welcomed = true } })) { Welcome() }
     }
 
     /// A floating glass panel, not a system sidebar, so the module gradient shows through it.

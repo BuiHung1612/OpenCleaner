@@ -4,6 +4,7 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
 ## Unreleased
 
+- macOS: a welcome on first launch with the permissions OpenCleaner may need and the menu bar option.
 - Uninstaller: an open app has a Quit button right in its row, and sizes are what removing frees (apps that share files, like ChatGPT and Codex, are no longer counted twice).
 - Slim Apps remembers apps whose signature would break and leaves them unticked, saying why, until they update.
 - Dashboard: shows what you freed this month (opens History), and "Empty the Trash" opens System Junk on the Trash alone.
