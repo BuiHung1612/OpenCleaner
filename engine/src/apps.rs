@@ -168,7 +168,8 @@ fn read_app(_path: &Path, _running: &Running) -> Option<App> {
 
 /// Bytes each app bundle takes, in the order given.
 ///
-/// Sizes are remembered between runs (`<data dir>/app-sizes.json`) against a stamp of the
+/// What removing each app frees (a clone shares its blocks: not counted). Sizes are
+/// remembered between runs (`<data dir>/app-sizes-freed.json`) against a stamp of the
 /// bundle: an app that was not updated or replaced is not walked again. Known sizes are
 /// reported at once through `progress`.
 pub fn sizes(
@@ -177,7 +178,7 @@ pub fn sizes(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&[u64]),
 ) -> Vec<u64> {
-    let file = ctx.data_dir.join("app-sizes.json");
+    let file = ctx.data_dir.join("app-sizes-freed.json");
     let mut cache: HashMap<PathBuf, (String, u64)> = std::fs::read(&file)
         .ok()
         .and_then(|d| serde_json::from_slice(&d).ok())
@@ -198,7 +199,7 @@ pub fn sizes(
     if !missing.is_empty() {
         let paths: Vec<PathBuf> = missing.iter().map(|&i| apps[i].clone()).collect();
         let base = out.clone();
-        let measured = size::allocated_many(&paths, cancel, &mut |partial| {
+        let measured = size::freed_many(&paths, cancel, &mut |partial| {
             let mut now = base.clone();
             for (k, &i) in missing.iter().enumerate() {
                 now[i] = partial[k];
@@ -317,7 +318,7 @@ pub fn uninstall_picks(app: &App, ctx: &Context, cancel: &AtomicBool) -> Vec<Pic
     let paths: Vec<PathBuf> = picks.iter().map(|p| p.path.clone()).collect();
     for (p, b) in picks
         .iter_mut()
-        .zip(size::allocated_many(&paths, cancel, &mut |_| {}))
+        .zip(size::freed_many(&paths, cancel, &mut |_| {}))
     {
         p.bytes = b;
     }

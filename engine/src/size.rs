@@ -245,15 +245,6 @@ pub fn freed_many(
     many(items, Mode::Freed, cancel, progress)
 }
 
-/// Allocated bytes (du semantics) of many items in one parallel walk.
-pub fn allocated_many(
-    items: &[std::path::PathBuf],
-    cancel: &AtomicBool,
-    progress: &mut dyn FnMut(&[u64]),
-) -> Vec<u64> {
-    many(items, Mode::Allocated, cancel, progress)
-}
-
 fn many(
     items: &[std::path::PathBuf],
     mode: Mode,

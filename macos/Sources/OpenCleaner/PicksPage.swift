@@ -432,6 +432,19 @@ final class AppsModel {
     let picks = PicksModel()
     @ObservationIgnored private var job: Task<Void, Never>?
 
+    /// Asks the app to quit (it may still ask to save), then lists the apps again once it
+    /// has gone, or after 10 seconds.
+    func quit(_ bundleID: String) {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        running.forEach { $0.terminate() }
+        Task {
+            for _ in 0..<40 where running.contains(where: { !$0.isTerminated }) {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            load()
+        }
+    }
+
     func load() {
         job?.cancel()
         job = Task {
@@ -583,6 +596,11 @@ struct UninstallerPage: View {
                     .font(.app(12)).foregroundStyle(app.running.bool ? Color.warn : .dim)
             }
             Spacer()
+            if app.running.bool, let id = app.bundle_id.string {
+                Button(String(localized: "Quit")) { model.quit(id) }
+                    .buttonStyle(.pill)
+                    .help(String(localized: "Quit \(Self.title(app)) so it can be uninstalled"))
+            }
             Text(verbatim: model.size(of: app).map { bytes($0) } ?? "…").monospacedDigit()
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
