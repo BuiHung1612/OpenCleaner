@@ -591,3 +591,30 @@ fn trash_reports_what_it_cannot_move_and_leaves_no_copy() {
     assert!(!free.exists());
     let _ = std::fs::remove_file(trash.join(free.file_name().unwrap()));
 }
+
+#[test]
+fn shipped_rules_are_consistent() {
+    for pack in [
+        include_str!("../rules/macos.toml"),
+        include_str!("../rules/windows.toml"),
+    ] {
+        let set = RuleSet::parse(pack).unwrap();
+        let mut seen = std::collections::HashMap::new();
+        for r in &set.rules {
+            assert!(!r.note.is_empty(), "{}: says what cleaning it costs", r.id);
+            for p in &r.paths {
+                // one place, one rule: two rules on one path count it twice
+                if let Some(other) = seen.insert(p.to_ascii_lowercase(), &r.id) {
+                    panic!("{p} is in both {other} and {}", r.id);
+                }
+                // an app's own data folder is cleaned only while that app is closed
+                let app_data = p.contains("Application Support/")
+                    || p.starts_with("%APPDATA%")
+                    || p.starts_with("%LOCALAPPDATA%/Programs");
+                if app_data && ["apps", "developer", "browsers"].contains(&r.group.as_str()) {
+                    assert!(!r.running.is_empty(), "{}: {p} needs the app it waits for", r.id);
+                }
+            }
+        }
+    }
+}

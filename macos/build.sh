@@ -65,9 +65,9 @@ codesign --force --sign "${SIGN_ID:--}" $APP
 echo "→ $APP"
 
 # every string the compiler marked localizable, plus tools.json texts, must exist in each language
-python3 - "$STRINGS" Resources ../shared/tools.json <<'PY'
-import glob, json, subprocess, sys
-strings, res, manifest = sys.argv[1:]
+python3 - "$STRINGS" Resources ../shared/tools.json ../engine/rules/macos.toml <<'PY'
+import glob, json, subprocess, sys, tomllib
+strings, res, manifest, rules = sys.argv[1:]
 keys = set()
 for f in glob.glob(f"{strings}/*.stringsdata"):
     for table in json.load(open(f)).get("tables", {}).values():
@@ -76,6 +76,10 @@ for t in json.load(open(manifest)).get("tools", []):
     keys |= {t[k] for k in ("title", "subtitle", "group") if t.get(k)}
     keys |= set(t.get("points", []))
 keys |= {"Cleanup", "Speed", "Applications", "Files", "Security"}
+# System Junk shows rule and group titles and notes through tr()
+pack = tomllib.load(open(rules, "rb"))
+keys |= {g["title"] for g in pack.get("group", [])}
+keys |= {r[k] for r in pack.get("rule", []) for k in ("title", "note") if r.get(k)}
 keys -= {"", "OpenCleaner"}
 for lang in sorted(glob.glob(f"{res}/*.lproj")):
     if lang.endswith("en.lproj"):

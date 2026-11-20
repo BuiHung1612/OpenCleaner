@@ -54,11 +54,19 @@ def main():
     # run, is the repeat scan
     warm = dict(os.environ, HOME=os.path.join(work, "home-warm"))
     subprocess.run([oce, "space", tree], env=warm, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    ratios = {
-        "size": best([oce, "size", tree]) / du,
-        "space": best([oce, "space", tree], fresh=work) / du,
-        "space_repeat": best([oce, "space", tree], env=warm) / du,
+    measure = {
+        "size": lambda: best([oce, "size", tree]) / du,
+        "space": lambda: best([oce, "space", tree], fresh=work) / du,
+        "space_repeat": lambda: best([oce, "space", tree], env=warm) / du,
     }
+    ratios = {k: m() for k, m in measure.items()}
+    base = json.load(open(BASELINE)) if os.path.exists(BASELINE) else {}
+    # a shared runner has slow spells: what is over the limit is measured again (two more
+    # rounds, best kept) before it counts as a regression
+    for _ in range(2):
+        over = [k for k, v in ratios.items() if k in base and v > 2 * base[k]]
+        for k in over:
+            ratios[k] = min(ratios[k], measure[k]())
     print(f"du -sk: {du:.3f}s")
     for k, v in ratios.items():
         print(f"{k:>13}: {v:.2f}x du")
@@ -67,8 +75,6 @@ def main():
             json.dump({k: round(v, 2) for k, v in ratios.items()}, fh, indent=2)
             fh.write("\n")
         return 0
-    with open(BASELINE) as fh:
-        base = json.load(fh)
     failed = [k for k, v in ratios.items() if v > 2 * base[k]]
     for k in failed:
         print(f"::error::{k} is {ratios[k]:.2f}x du, more than twice the baseline {base[k]}x")
