@@ -4,6 +4,10 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
 ## Unreleased
 
+- Windows: Developer Tools page (Docker, and Android system images and older NDKs through sdkmanager).
+- Windows: Settings › Cleaning › Project folders, so Project Junk also looks on other drives (D:\ and others).
+- Windows: alerts in Settings › Automation when the system drive is almost full, or the Recycle Bin or Downloads grows past a size; at most once a day each.
+- Dashboard (macOS): the Trash is measured again only when it changed.
 - macOS: a welcome on first launch with the permissions OpenCleaner may need and the menu bar option.
 - Uninstaller: an open app has a Quit button right in its row, and sizes are what removing frees (apps that share files, like ChatGPT and Codex, are no longer counted twice).
 - Slim Apps remembers apps whose signature would break and leaves them unticked, saying why, until they update.

@@ -57,6 +57,24 @@ pub fn set_reg_dword(key: &str, name: &str, value: u32) {
     unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), REG_DWORD, &value as *const u32 as *const _, 4) };
 }
 
+/// A string under HKEY_CURRENT_USER\`key`, if it is set (up to 16 KB).
+pub fn reg_string(key: &str, name: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
+    let (key, name) = (wide(key), wide(name));
+    let mut buf = vec![0u16; 8192];
+    let mut size = (buf.len() * 2) as u32;
+    let status = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr().cast(), &mut size) };
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(0);
+    (status == ERROR_SUCCESS).then(|| String::from_utf16_lossy(&buf[..end]))
+}
+
+/// Sets a string under HKEY_CURRENT_USER\`key`, creating the key.
+pub fn set_reg_string(key: &str, name: &str, value: &str) {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
+    let (key, name, value) = (wide(key), wide(name), wide(value));
+    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), REG_SZ, value.as_ptr().cast(), (value.len() * 2) as u32) };
+}
+
 /// Reads the system's app theme (missing before Windows 10 1809: dark, the original look).
 fn read_theme() {
     gfx::read_motion();
@@ -118,8 +136,9 @@ pub fn run() {
         style_frame(hwnd, pages::Module::Dashboard.palette().0);
         ShowWindow(hwnd, SW_SHOW);
         with(|st| st.on_show_module());
-        // scheduled cleaning: now, then every hour
+        // scheduled cleaning and alerts: now, then every hour
         with(|st| st.auto_clean_check());
+        auto::check_alerts(hwnd);
         SetTimer(hwnd, TIMER_AUTO, 3_600_000, None);
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
@@ -158,7 +177,7 @@ pub fn invalidate(hwnd: HWND) {
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const TIMER_SPIN: usize = 1;
-/// Hourly: is a scheduled clean due?
+/// Hourly: is a scheduled clean due, is an alert?
 const TIMER_AUTO: usize = 2;
 /// Runs while something moves across the window (page change, meters, bubbles): ~60 fps.
 const TIMER_ANIM: usize = 4;
@@ -477,6 +496,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_TIMER if wparam == TIMER_AUTO => {
             with(|st| st.auto_clean_check());
+            auto::check_alerts(hwnd);
             0
         }
         WM_TIMER => {

@@ -16,8 +16,85 @@ const DAY: u64 = 86_400;
 /// stall the schedule.
 // ponytail: a month is 30 days, not a calendar month; fine for a cleaning schedule
 pub fn is_due(last: Option<u64>, now: u64, monthly: bool) -> bool {
-    let period = if monthly { 30 * DAY } else { 7 * DAY };
+    elapsed(last, now, if monthly { 30 * DAY } else { 7 * DAY })
+}
+
+fn elapsed(last: Option<u64>, now: u64, period: u64) -> bool {
     last.is_none_or(|last| now < last || now >= last + period)
+}
+
+// Alerts (Settings > Automation), off by default: free space on the system drive, and the
+// Recycle Bin and Downloads growing. Each one at most once a day.
+pub const DISK_VALUE: &str = "AlertDisk";
+pub const DISK_GB_VALUE: &str = "AlertDiskGB";
+pub const DISK_CHOICES: [u32; 4] = [5, 10, 20, 50];
+pub const WATCH_VALUE: &str = "AlertWatch";
+pub const WATCH_GB_VALUE: &str = "AlertWatchGB";
+pub const WATCH_CHOICES: [u32; 4] = [1, 5, 10, 20];
+
+/// Checks the alerts that are on, on a thread (the readings take seconds), and shows what
+/// is due as one tray balloon.
+pub fn check_alerts(hwnd: HWND) {
+    use super::{SETTINGS_KEY, pages::bytes, reg_dword, set_reg_dword};
+    let on = |name| reg_dword(SETTINGS_KEY, name) == Some(1);
+    let (disk, watch) = (on(DISK_VALUE), on(WATCH_VALUE));
+    if !disk && !watch {
+        return;
+    }
+    let target = hwnd as isize;
+    std::thread::spawn(move || {
+        let gb = |name, choices: [u32; 4], default| reg_dword(SETTINGS_KEY, name).filter(|v| choices.contains(v)).unwrap_or(default) as f64 * 1e9;
+        let now = now();
+        // not shown in the last day; stamped once shown
+        let due = |name: &str| elapsed(reg_dword(SETTINGS_KEY, name).map(u64::from), now, DAY);
+        let mut lines: Vec<(&str, String)> = Vec::new();
+        // read directly: a status reading would also move the Dashboard's CPU baseline
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        if disk
+            && due("AlertDiskLast")
+            && let Some(free) = free_bytes(&format!("{system}\\"))
+            && free < gb(DISK_GB_VALUE, DISK_CHOICES, 10)
+        {
+            lines.push(("AlertDiskLast", format!("Drive {system} is almost full: {} free", bytes(Some(free)))));
+        }
+        let limit = gb(WATCH_GB_VALUE, WATCH_CHOICES, 5);
+        if watch && due("AlertBinLast") && let Some(bin) = recycle_bin_bytes().filter(|&b| b > limit) {
+            lines.push(("AlertBinLast", format!("The Recycle Bin holds {}", bytes(Some(bin)))));
+        }
+        if watch && due("AlertDownloadsLast") {
+            let downloads = oc_engine::context::Context::from_env().user_folder("Downloads");
+            let reply = super::jobs::call(serde_json::json!({"op": "size", "paths": [downloads]}));
+            if let Some(size) = reply["events"][0]["report"]["bytes"].as_f64().filter(|&b| b > limit) {
+                lines.push(("AlertDownloadsLast", format!("Downloads holds {}", bytes(Some(size)))));
+            }
+        }
+        for (name, _) in &lines {
+            set_reg_dword(SETTINGS_KEY, name, now as u32);
+        }
+        let text: Vec<&str> = lines.iter().map(|(_, l)| l.as_str()).collect();
+        match text[..] {
+            [] => {}
+            [one] => notify(target as HWND, one, "Open OpenCleaner to clean up."),
+            _ => notify(target as HWND, "Time to clean up", &text.join(". ")),
+        }
+    });
+}
+
+/// Free bytes for the current user on the drive of `root` ("C:\\").
+fn free_bytes(root: &str) -> Option<f64> {
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = root.encode_utf16().chain([0]).collect();
+    let mut free = 0u64;
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
+    (ok != 0).then_some(free as f64)
+}
+
+/// What the Recycle Bins of all drives hold.
+fn recycle_bin_bytes() -> Option<f64> {
+    use windows_sys::Win32::UI::Shell::{SHQUERYRBINFO, SHQueryRecycleBinW};
+    let mut info: SHQUERYRBINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = size_of::<SHQUERYRBINFO>() as u32;
+    (unsafe { SHQueryRecycleBinW(std::ptr::null(), &mut info) } == 0).then_some(info.i64Size.max(0) as f64)
 }
 
 /// The rule ids an unattended clean may touch: selected by default, something to remove,
@@ -94,6 +171,8 @@ mod tests {
         assert!(!is_due(Some(t), t + 29 * DAY, true));
         assert!(is_due(Some(t), t + 30 * DAY, true));
         assert!(is_due(Some(t), t - DAY, false), "clock set back");
+        assert!(!elapsed(Some(t), t + DAY - 1, DAY), "an alert at most once a day");
+        assert!(elapsed(Some(t), t + DAY, DAY));
     }
 
     #[test]

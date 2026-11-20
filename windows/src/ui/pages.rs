@@ -19,6 +19,7 @@ pub enum Module {
     Junk,
     Installers,
     Projects,
+    DevTools,
     Uninstaller,
     Startup,
     SpaceLens,
@@ -34,7 +35,7 @@ const PICK_MODULES: [Module; 4] = [Module::Installers, Module::Projects, Module:
 /// Sidebar: dashboard, then groups, then history (as on macOS).
 const SECTIONS: &[(&str, &[Module])] = &[
     ("", &[Module::Dashboard]),
-    ("Cleanup", &[Module::Junk, Module::Installers, Module::Projects]),
+    ("Cleanup", &[Module::Junk, Module::Installers, Module::Projects, Module::DevTools]),
     ("Applications", &[Module::Uninstaller, Module::Startup]),
     ("Files", &[Module::SpaceLens, Module::LargeOld, Module::Duplicates]),
     (" ", &[Module::History, Module::Settings]),
@@ -76,6 +77,7 @@ impl Module {
             Module::Junk => Some("clean"),
             Module::Installers => Some("installer"),
             Module::Projects => Some("purge"),
+            Module::DevTools => Some("devtools"),
             Module::Startup => Some("startup"),
             _ => None,
         }
@@ -121,6 +123,7 @@ impl Module {
             Module::Junk => '\u{EA99}',        // Broom (was Delete, read as "remove")
             Module::Installers => '\u{E896}',
             Module::Projects => '\u{E943}',
+            Module::DevTools => '\u{E90F}',  // Repair (macOS: hammer)
             Module::Uninstaller => '\u{E71D}', // AllApps (was ChromeClose, read as "close window")
             Module::Startup => '\u{E7E8}',    // PowerButton
             Module::SpaceLens => '\u{EB05}',
@@ -245,6 +248,15 @@ pub enum Action {
     CheckUpdates,
     ExclusionAdd,
     ExclusionRemove(String),
+    ProjectRootAdd,
+    ProjectRootRemove(String),
+    DevToggle(String),
+    DevClean,
+    DevRefresh,
+    AlertDiskToggle,
+    AlertDiskGb(u32),
+    AlertWatchToggle,
+    AlertWatchGb(u32),
     LargeMiB(u32),
     IdleDays(u32),
     AutoRefreshToggle,
@@ -269,6 +281,9 @@ impl Action {
                 | Action::AutoPeriodToggle
                 | Action::UpdatesToggle
                 | Action::AutoRefreshToggle
+                | Action::DevToggle(_)
+                | Action::AlertDiskToggle
+                | Action::AlertWatchToggle
         )
     }
 }
@@ -467,6 +482,19 @@ struct Startup {
     scroll: f32,
 }
 
+/// Developer Tools: the engine's listing (Docker, Android SDK), the ticked item ids, the
+/// last cleanup's outcome.
+#[derive(Default)]
+struct DevTools {
+    listing: Value,
+    selected: HashSet<String>,
+    outcome: Value,
+    /// the listing or, while `cleaning`, the cleanup
+    job: Option<Job>,
+    cleaning: bool,
+    scroll: f32,
+}
+
 #[derive(Default)]
 struct History {
     sessions: Vec<Value>,
@@ -495,6 +523,7 @@ pub struct State {
     dups: Picks,
     apps: Apps,
     startup: Startup,
+    devtools: DevTools,
     history: History,
     /// Settings: scans and removals take every core
     fast: bool,
@@ -515,6 +544,13 @@ pub struct State {
     exclusions: Vec<String>,
     /// the saved list could not be read: the engine removes nothing until it is saved again
     exclusions_error: Option<String>,
+    /// Project Junk also looks in these folders (the profile is always searched)
+    project_roots: Vec<String>,
+    /// Settings > Automation > Alerts
+    alert_disk: bool,
+    alert_disk_gb: u32,
+    alert_watch: bool,
+    alert_watch_gb: u32,
     /// Large & Old Files: at least this many MB, not opened for this many days
     large_mib: u32,
     idle_days: u32,
@@ -539,6 +575,8 @@ const AUTO_REFRESH_VALUE: &str = "AutoRefresh";
 const REFRESH_EVERY_VALUE: &str = "RefreshEvery";
 const LARGE_MIB_VALUE: &str = "LargeMiB";
 const IDLE_DAYS_VALUE: &str = "IdleDays";
+/// Project folders, joined by `|` (not allowed in Windows paths)
+const PROJECT_ROOTS_VALUE: &str = "ProjectFolders";
 const LARGE_CHOICES: [u32; 5] = [100, 250, 500, 1000, 5000];
 const IDLE_CHOICES: [u32; 4] = [30, 90, 180, 365];
 const REFRESH_CHOICES: [u32; 4] = [3, 5, 10, 30];
@@ -575,6 +613,7 @@ impl State {
             dups: Picks::default(),
             apps: Apps::default(),
             startup: Startup::default(),
+            devtools: DevTools::default(),
             history: History::default(),
             fast: set_fast(super::reg_dword(super::SETTINGS_KEY, FAST_VALUE) == Some(1)),
             refresh_on_focus: super::reg_dword(super::SETTINGS_KEY, FOCUS_REFRESH_VALUE) == Some(1),
@@ -587,6 +626,13 @@ impl State {
             check_updates: super::reg_dword(super::SETTINGS_KEY, crate::github::CHECK_VALUE) != Some(0),
             exclusions: Vec::new(),
             exclusions_error: None,
+            project_roots: super::reg_string(super::SETTINGS_KEY, PROJECT_ROOTS_VALUE)
+                .map(|s| s.split('|').filter(|p| !p.is_empty()).map(String::from).collect())
+                .unwrap_or_default(),
+            alert_disk: super::reg_dword(super::SETTINGS_KEY, auto::DISK_VALUE) == Some(1),
+            alert_disk_gb: saved(auto::DISK_GB_VALUE, &auto::DISK_CHOICES, 10),
+            alert_watch: super::reg_dword(super::SETTINGS_KEY, auto::WATCH_VALUE) == Some(1),
+            alert_watch_gb: saved(auto::WATCH_GB_VALUE, &auto::WATCH_CHOICES, 5),
             large_mib: saved(LARGE_MIB_VALUE, &LARGE_CHOICES, 500),
             idle_days: saved(IDLE_DAYS_VALUE, &IDLE_CHOICES, 180),
             auto_refresh: super::reg_dword(super::SETTINGS_KEY, AUTO_REFRESH_VALUE) == Some(1),
@@ -668,6 +714,7 @@ impl State {
             || self.junk.job.is_some()
             || PICK_MODULES.iter().any(|&m| self.pick(m).job.is_some())
             || self.apps.job.is_some()
+            || self.devtools.job.is_some()
     }
 
     fn update_timers(&self) {
@@ -702,6 +749,7 @@ impl State {
             m @ (Module::Installers | Module::Projects | Module::LargeOld | Module::Duplicates) => &mut self.picks(m).scroll,
             Module::Uninstaller => &mut self.apps.scroll,
             Module::Startup => &mut self.startup.scroll,
+            Module::DevTools => &mut self.devtools.scroll,
             Module::History => &mut self.history.scroll,
             Module::Settings => &mut self.settings_scroll,
             Module::Dashboard => return,
@@ -737,6 +785,7 @@ impl State {
             Module::History => self.load_history(),
             Module::Startup => self.load_startup(),
             Module::Settings => self.load_exclusions(),
+            Module::DevTools if self.devtools.listing.is_null() && self.devtools.job.is_none() => self.load_devtools(),
             _ => {}
         }
         self.update_dash_timer();
@@ -781,6 +830,7 @@ impl State {
             Module::Uninstaller if self.apps.job.is_none() => Some(Action::AppsReload),
             Module::SpaceLens if !self.space.stack.is_empty() => Some(Action::SpaceRefresh),
             Module::Startup => Some(Action::StartupReload),
+            Module::DevTools if self.devtools.job.is_none() => Some(Action::DevRefresh),
             _ => None,
         }
     }
@@ -880,6 +930,16 @@ impl State {
         // stamped before running: a failing clean is retried next period, not every hour
         super::set_reg_dword(super::SETTINGS_KEY, auto::LAST_VALUE, now as u32);
         self.auto_job = Some(jobs::start(self.hwnd, json!({"op": "scan"})));
+    }
+
+    /// Read-only (`docker system df`, the SDK's folders); can take seconds: on a thread.
+    fn load_devtools(&mut self) {
+        self.devtools.job = Some(jobs::start_call(self.hwnd, json!({"op": "devtools"})));
+        self.update_timers();
+    }
+
+    fn save_project_roots(&self) {
+        super::set_reg_string(super::SETTINGS_KEY, PROJECT_ROOTS_VALUE, &self.project_roots.join("|"));
     }
 
     fn load_history(&mut self) {
@@ -1005,6 +1065,27 @@ impl State {
                 "done" => self.auto_job = None,
                 _ => {}
             }
+        } else if is(&self.devtools.job) {
+            match kind.as_str() {
+                "reply" if self.devtools.cleaning => {
+                    // then a fresh listing (its job replaces this one)
+                    self.devtools.outcome = e;
+                    self.devtools.cleaning = false;
+                    self.load_devtools();
+                }
+                "reply" => {
+                    self.devtools.selected = e["items"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|it| it["default"] == true && it["bytes"].as_f64().unwrap_or(0.0) > 0.0)
+                        .filter_map(|it| it["id"].as_str().map(String::from))
+                        .collect();
+                    self.devtools.listing = e;
+                }
+                "done" => self.devtools.job = None,
+                _ => {}
+            }
         } else if is(&self.apps.job) {
             match kind.as_str() {
                 "apps" => {
@@ -1039,6 +1120,7 @@ impl State {
             m @ (Module::Installers | Module::Projects | Module::LargeOld | Module::Duplicates) => self.draw_picks(c, page, m),
             Module::Uninstaller => self.draw_apps(c, page),
             Module::Startup => self.draw_startup(c, page),
+            Module::DevTools => self.draw_devtools(c, page),
             Module::SpaceLens => self.draw_space(c, page),
             Module::History => self.draw_history(c, page),
             Module::Settings => self.draw_settings(c, page),
@@ -2008,6 +2090,112 @@ impl State {
         c.text(R::new(page.x + 20.0, foot - 12.0, page.w - w - 60.0, 24.0), note, 12.0, false, dim(), Align::Left);
     }
 
+    // ------------------------------------------------------------ Developer Tools
+
+    /// As on macOS (DevToolsPage.swift): Docker and Android sections of tick rows, Clean runs
+    /// the tools' own cleanup commands. Simulators are macOS-only.
+    fn draw_devtools(&mut self, c: &mut Canvas, page: R) {
+        let bar_y = page.bottom() - 90.0;
+        let cx = page.x + page.w / 2.0;
+        let d = &self.devtools;
+        let status = match d.outcome["freed"].as_f64() {
+            Some(freed) if !d.cleaning => format!("Freed {}.", bytes(Some(freed))),
+            _ => "Give back space held by Docker and the Android SDK, with their own cleanup commands.".into(),
+        };
+        let failure = d.outcome["failures"][0].as_str().map(String::from);
+        let y = self.header(c, page.inset(18.0, 0.0), Module::DevTools, Phase::Idle, &Module::DevTools.title(), &status);
+        if self.devtools.job.is_none() {
+            self.icon_pill(c, page.right() - 58.0, page.y + 66.0, REFRESH, Action::DevRefresh);
+        } else {
+            self.spinner(c, page.right() - 38.0, page.y + 66.0, 8.0);
+        }
+        let panel = R::new(page.x + 18.0, y, page.w - 36.0, bar_y - 72.0 - y);
+        let l = std::mem::take(&mut self.devtools.listing);
+        if l.is_null() {
+            c.glass(panel, 20.0);
+            self.spinner(c, panel.x + panel.w / 2.0, panel.y + panel.h / 2.0, 18.0);
+        } else {
+            let scroll = self.devtools.scroll;
+            self.scroll_panel(c, panel, scroll, |st, c, mut yy| {
+                let start = yy;
+                let (x, w) = (panel.x + 20.0, panel.w - 40.0);
+                let line = |c: &mut Canvas, yy: &mut f32, text: &str, size: f32, bold: bool, color: u32| {
+                    c.text(R::new(x, *yy, w, 24.0), text, size, bold, color, Align::Left);
+                    *yy += if bold { 30.0 } else { 24.0 };
+                };
+                if l["docker"] == "missing" && l["android"] != true {
+                    let cx = panel.x + panel.w / 2.0;
+                    c.image(R::new(cx - 55.0, yy + 16.0, 110.0, 110.0), include_bytes!("../../art/empty.png"));
+                    c.text(R::new(panel.x, yy + 132.0, panel.w, 24.0), "No developer tools found", 15.0, true, fg(), Align::Center);
+                    c.text(R::new(panel.x, yy + 158.0, panel.w, 20.0), "Docker and the Android SDK are not set up on this PC.", 13.0, false, dim(), Align::Center);
+                    yy += 196.0;
+                } else {
+                    let context = l["docker_context"].as_str().unwrap_or("");
+                    line(c, &mut yy, &if context.is_empty() { "Docker".into() } else { format!("Docker · {context}") }, 15.0, true, fg());
+                    match l["docker"].as_str() {
+                        Some("missing") => line(c, &mut yy, "Docker is not installed", 13.0, false, dim()),
+                        Some("stopped") => line(c, &mut yy, "Docker is not running", 13.0, false, dim()),
+                        _ => {}
+                    }
+                    for section in ["docker", "android"] {
+                        if section == "android" {
+                            if l["android"] != true {
+                                break;
+                            }
+                            yy += 8.0;
+                            line(c, &mut yy, "Android", 15.0, true, fg());
+                        }
+                        if let Some(note) = l[format!("{section}_note")].as_str().filter(|n| !n.is_empty()) {
+                            line(c, &mut yy, note, 13.0, false, dim());
+                        }
+                        for it in l["items"].as_array().into_iter().flatten().filter(|it| it["group"] == section) {
+                            yy = st.devtools_row(c, panel, yy, it);
+                        }
+                    }
+                }
+                // file caches are System Junk rules (in-use checks, review): point there
+                yy += 8.0;
+                line(c, &mut yy, "Editors, AI apps and package caches", 15.0, true, fg());
+                c.para(R::new(x, yy, w, 40.0), "Editors, AI apps and package caches are cleaned in System Junk, under Developer tools.", 13.0, dim());
+                yy += 30.0;
+                st.pill(c, x, yy + 20.0, "Open System Junk", Action::Go(Module::Junk));
+                yy + 50.0 - start
+            });
+        }
+        self.devtools.listing = l;
+        if let Some(e) = failure {
+            c.text(R::new(page.x + 18.0, bar_y - 12.0, cx - page.x - 120.0, 24.0), &e, 13.0, false, amber(), Align::Left);
+        }
+        let d = &self.devtools;
+        let ready = !d.selected.is_empty() && d.job.is_none();
+        self.big_button(c, cx, bar_y, "Clean", self.devtools.cleaning, ready.then_some(Action::DevClean));
+    }
+
+    /// One Developer Tools item: tick box, "title · detail", note, size. Returns the y below.
+    fn devtools_row(&mut self, c: &mut Canvas, panel: R, yy: f32, it: &Value) -> f32 {
+        let id = it["id"].as_str().unwrap_or("").to_string();
+        let on = self.devtools.selected.contains(&id);
+        let row = R::new(panel.x + 10.0, yy, panel.w - 20.0, 52.0);
+        if !self.devtools.cleaning {
+            self.hit(row, Action::DevToggle(id.clone()));
+        }
+        if self.visible(row) {
+            if on || self.hot(row) {
+                c.rounded(row, 12.0, Some(argb(fg(), if on { 31 } else { 16 })), None);
+            }
+            self.checkbox(c, row.x + 12.0, row.y + 26.0, on, true);
+            let title = it["title"].as_str().unwrap_or(&id);
+            let title = match it["detail"].as_str().filter(|d| !d.is_empty()) {
+                Some(detail) => format!("{title} · {detail}"),
+                None => title.to_string(),
+            };
+            c.text(R::new(row.x + 44.0, row.y + 6.0, row.w - 230.0, 22.0), &title, 14.0, true, fg(), Align::Left);
+            c.text(R::new(row.x + 44.0, row.y + 28.0, row.w - 230.0, 18.0), it["note"].as_str().unwrap_or(""), 12.0, false, dim(), Align::Left);
+            c.text(R::new(row.right() - 176.0, row.y, 160.0, row.h), &bytes(it["bytes"].as_f64()), 14.0, false, fg(), Align::Right);
+        }
+        yy + 56.0
+    }
+
     // ------------------------------------------------------------ History
 
     fn draw_history(&mut self, c: &mut Canvas, page: R) {
@@ -2031,6 +2219,7 @@ impl State {
                     "duplicates" => Module::Duplicates.title(),
                     "uninstall" => "Uninstaller".into(),
                     "startup" => Module::Startup.title(),
+                    "devtools" => Module::DevTools.title(),
                     other => other.to_string(),
                 };
                 c.text(R::new(panel.x + 20.0, yy + 4.0, panel.w * 0.6, 20.0), &title, 14.0, true, fg(), Align::Left);
@@ -2153,22 +2342,40 @@ impl State {
                 yy += 30.0;
             }
             for path in st.exclusions.clone() {
-                let row = R::new(inner.x + 4.0, yy, inner.w - 8.0, 34.0);
-                if st.hot(row) {
-                    c.rounded(row, 8.0, Some(argb(fg(), 14)), None);
-                }
-                c.icon(R::new(row.x + 6.0, row.y, 24.0, row.h), '\u{E8B7}', 14.0, dim());
-                c.text(R::new(row.x + 36.0, row.y, row.w - 80.0, row.h), &path, 14.0, false, fg(), Align::Left);
-                let x_btn = R::new(row.right() - 34.0, row.y + 3.0, 28.0, 28.0);
-                if st.hot(x_btn) {
-                    c.circle(x_btn.x + 14.0, x_btn.y + 14.0, 13.0, Some(argb(fg(), 30)), None);
-                }
-                c.icon(x_btn, '\u{E711}', 11.0, dim());
-                st.hit(x_btn, Action::ExclusionRemove(path));
-                yy += 36.0;
+                yy = st.folder_row(c, inner, yy, &path, Action::ExclusionRemove(path.clone()));
+            }
+            yy += 14.0;
+            c.text(R::new(inner.x + 12.0, yy + 4.0, inner.w - 200.0, 20.0), "Project folders", 13.0, true, dim(), Align::Left);
+            st.pill_right(c, inner.right() - 6.0, yy + 16.0, "Add Folder…", Action::ProjectRootAdd);
+            yy += 38.0;
+            c.para(R::new(inner.x + 12.0, yy, inner.w - 24.0, 20.0), "Project Junk searches your user folder, and these folders too (projects on another drive).", 12.0, dim());
+            yy += 26.0;
+            if st.project_roots.is_empty() {
+                c.text(R::new(inner.x + 12.0, yy, inner.w - 24.0, 30.0), "No other folders", 14.0, false, dim(), Align::Left);
+                yy += 30.0;
+            }
+            for path in st.project_roots.clone() {
+                yy = st.folder_row(c, inner, yy, &path, Action::ProjectRootRemove(path.clone()));
             }
             yy - top + 4.0
         });
+    }
+
+    /// A folder of a settings list with its remove button; returns the y below.
+    fn folder_row(&mut self, c: &mut Canvas, inner: R, yy: f32, path: &str, remove: Action) -> f32 {
+        let row = R::new(inner.x + 4.0, yy, inner.w - 8.0, 34.0);
+        if self.hot(row) {
+            c.rounded(row, 8.0, Some(argb(fg(), 14)), None);
+        }
+        c.icon(R::new(row.x + 6.0, row.y, 24.0, row.h), FOLDER, 14.0, dim());
+        c.text(R::new(row.x + 36.0, row.y, row.w - 80.0, row.h), path, 14.0, false, fg(), Align::Left);
+        let x_btn = R::new(row.right() - 34.0, row.y + 3.0, 28.0, 28.0);
+        if self.hot(x_btn) {
+            c.circle(x_btn.x + 14.0, x_btn.y + 14.0, 13.0, Some(argb(fg(), 30)), None);
+        }
+        c.icon(x_btn, '\u{E711}', 11.0, dim());
+        self.hit(x_btn, remove);
+        yy + 36.0
     }
 
     fn settings_automation(&mut self, c: &mut Canvas, body: R) {
@@ -2190,6 +2397,26 @@ impl State {
         c.para(
             R::new(panel.x + 20.0, panel.y + 120.0, panel.w - 40.0, 36.0),
             "Runs System Junk while OpenCleaner is open (checked at start and every hour), removing only the items selected by default. The Recycle Bin and browser privacy items are never touched.",
+            12.0,
+            dim(),
+        );
+
+        let panel = R::new(body.x, panel.bottom() + 14.0, body.w, 236.0);
+        c.glass(panel, 20.0);
+        Self::section_title(c, panel, "Alerts");
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let label = format!("Warn when drive {drive} is almost full");
+        self.switch_row(c, R::new(panel.x + 10.0, panel.y + 38.0, panel.w - 20.0, 36.0), &label, self.alert_disk, Action::AlertDiskToggle);
+        c.text(R::new(panel.x + 20.0, panel.y + 80.0, 130.0, 32.0), "Below", 14.0, false, if self.alert_disk { fg() } else { dim() }, Align::Left);
+        let items = auto::DISK_CHOICES.iter().map(|&n| (format!("{n} GB"), n == self.alert_disk_gb, Action::AlertDiskGb(n))).collect();
+        self.chips(c, panel.x + 150.0, panel.y + 80.0, items, self.alert_disk);
+        self.switch_row(c, R::new(panel.x + 10.0, panel.y + 120.0, panel.w - 20.0, 36.0), "Watch the Recycle Bin and Downloads", self.alert_watch, Action::AlertWatchToggle);
+        c.text(R::new(panel.x + 20.0, panel.y + 162.0, 130.0, 32.0), "Larger than", 14.0, false, if self.alert_watch { fg() } else { dim() }, Align::Left);
+        let items = auto::WATCH_CHOICES.iter().map(|&n| (format!("{n} GB"), n == self.alert_watch_gb, Action::AlertWatchGb(n))).collect();
+        self.chips(c, panel.x + 150.0, panel.y + 162.0, items, self.alert_watch);
+        c.para(
+            R::new(panel.x + 20.0, panel.y + 204.0, panel.w - 40.0, 28.0),
+            "Checked while OpenCleaner is open (at start and every hour). Each alert shows at most once a day.",
             12.0,
             dim(),
         );
@@ -2390,10 +2617,10 @@ pub fn perform(hwnd: HWND, action: Action) {
                 if let Some(j) = &st.pick(m).job {
                     j.cancel();
                 }
-                let request = if m == Module::LargeOld {
-                    json!({"op": "large_old", "min_mib": st.large_mib, "days": st.idle_days})
-                } else {
-                    m.find_request()
+                let request = match m {
+                    Module::LargeOld => json!({"op": "large_old", "min_mib": st.large_mib, "days": st.idle_days}),
+                    Module::Projects => json!({"op": "projects", "roots": st.project_roots}),
+                    _ => m.find_request(),
                 };
                 let job = jobs::start(hwnd, request);
                 *st.picks(m) = Picks { phase: Phase::Finding, job: Some(job), ..Picks::default() };
@@ -2523,6 +2750,70 @@ pub fn perform(hwnd: HWND, action: Action) {
                 let paths = st.exclusions.iter().filter(|p| **p != path).cloned().collect();
                 st.save_exclusions(paths);
             });
+        }
+        Action::ProjectRootAdd => {
+            if let Some(path) = super::pick_folder(hwnd, "Choose a folder Project Junk should also search.") {
+                with(|st| {
+                    if !st.project_roots.contains(&path) {
+                        st.project_roots.push(path);
+                        st.save_project_roots();
+                    }
+                });
+            }
+        }
+        Action::ProjectRootRemove(path) => {
+            with(|st| {
+                st.project_roots.retain(|p| *p != path);
+                st.save_project_roots();
+            });
+        }
+        Action::DevToggle(id) => {
+            with(|st| {
+                if !st.devtools.selected.remove(&id) {
+                    st.devtools.selected.insert(id);
+                }
+            });
+        }
+        Action::DevRefresh => {
+            with(|st| {
+                if st.devtools.job.is_none() {
+                    st.load_devtools();
+                }
+            });
+        }
+        Action::DevClean => {
+            let Some(n) = with(|st| st.devtools.selected.len()) else { return };
+            if confirm(hwnd, &format!("Run the cleanup of {n} items? What they remove cannot be put back.")) {
+                with(|st| {
+                    let items: Vec<&String> = st.devtools.selected.iter().collect();
+                    st.devtools.job = Some(jobs::start_call(hwnd, json!({"op": "devtools_clean", "items": items})));
+                    st.devtools.cleaning = true;
+                    st.devtools.outcome = Value::Null;
+                    st.update_timers();
+                });
+            }
+        }
+        Action::AlertDiskToggle => {
+            with(|st| {
+                st.alert_disk = !st.alert_disk;
+                super::set_reg_dword(super::SETTINGS_KEY, auto::DISK_VALUE, st.alert_disk as u32);
+            });
+            auto::check_alerts(hwnd);
+        }
+        Action::AlertDiskGb(n) => {
+            with(|st| st.alert_disk_gb = n);
+            super::set_reg_dword(super::SETTINGS_KEY, auto::DISK_GB_VALUE, n);
+        }
+        Action::AlertWatchToggle => {
+            with(|st| {
+                st.alert_watch = !st.alert_watch;
+                super::set_reg_dword(super::SETTINGS_KEY, auto::WATCH_VALUE, st.alert_watch as u32);
+            });
+            auto::check_alerts(hwnd);
+        }
+        Action::AlertWatchGb(n) => {
+            with(|st| st.alert_watch_gb = n);
+            super::set_reg_dword(super::SETTINGS_KEY, auto::WATCH_GB_VALUE, n);
         }
         Action::LargeMiB(m) => {
             with(|st| {

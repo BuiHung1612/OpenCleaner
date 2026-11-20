@@ -27,12 +27,27 @@ pub type Posted = (u64, Value);
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
 pub fn start(hwnd: HWND, request: Value) -> Job {
+    spawn(hwnd, move |flag, emit| oc_engine::api::run(&request.to_string(), flag, emit))
+}
+
+/// A quick-only request (`call`) that can still take seconds (Developer Tools runs docker):
+/// answered on a thread as one `reply` event, then `done`.
+pub fn start_call(hwnd: HWND, request: Value) -> Job {
+    spawn(hwnd, move |_, emit| {
+        let mut reply = oc_engine::api::call(&request.to_string());
+        reply["event"] = "reply".into();
+        emit(reply);
+        emit(serde_json::json!({"event": "done"}));
+    })
+}
+
+fn spawn(hwnd: HWND, work: impl FnOnce(&AtomicBool, &mut dyn FnMut(Value)) + Send + 'static) -> Job {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
     let target = hwnd as isize;
     std::thread::spawn(move || {
-        oc_engine::api::run(&request.to_string(), &flag, &mut |event| {
+        work(&flag, &mut |event| {
             let boxed = Box::into_raw(Box::new((id, event) as Posted));
             // the window frees it; if posting fails (window gone), free it here
             if unsafe { PostMessageW(target as HWND, WM_ENGINE, 0, boxed as isize) } == 0 {
