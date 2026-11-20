@@ -4,6 +4,8 @@ Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
 ## Unreleased
 
+- Dashboard: shows what you freed this month (opens History), and "Empty the Trash" opens System Junk on the Trash alone.
+- Touch ID for sudo: no empty button bar on Macs that cannot use it.
 - Developer Tools shows how much the last System Junk scan found in developer caches; one click opens System Junk limited to that group (scanning first if needed), and Clean then acts only on what is shown.
 - History: open a session to see what was skipped or could not be removed, and why (an app that was running, one that needs administrator rights…).
 - System Junk removes caches that keep read-only folders (dotslash, Go modules) instead of failing on them every time.

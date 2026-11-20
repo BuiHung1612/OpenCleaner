@@ -245,14 +245,12 @@ struct JunkPage: View {
             if model.phase == .review { FilterBar(filter: $filter) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if let only = model.onlyGroup, model.phase == .review {
+                    if model.onlyGroup != nil, model.phase == .review {
                         HStack {
                             Text("Showing one group").font(.app(12)).foregroundStyle(.dim)
                             Button(String(localized: "Show All")) { model.onlyGroup = nil }.buttonStyle(.pill)
                         }
                         .padding(.leading, 12)
-                        .accessibilityElement(children: .contain)
-                        .id(only)
                     }
                     ForEach(model.groups.filter { model.onlyGroup == nil || $0.id.string == model.onlyGroup }, id: \.id.string) { group in
                         let rules = shownRules(group)

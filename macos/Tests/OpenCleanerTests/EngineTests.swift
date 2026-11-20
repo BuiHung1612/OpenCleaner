@@ -123,6 +123,14 @@ import Testing
     #expect(tips.count == 3)
     #expect(tips.first?.module == .spaceLens)
     #expect(tips.map(\.module).contains(.tool("clean")))
+    #expect(tips.first { $0.symbol == "trash" }?.group == "trash")
+}
+
+@Test func dashboardReadsThisMonthFromHistory() {
+    let history = JSON(["months": [["month": "2026-10", "bytes": 1e9], ["month": "2026-11", "bytes": 5e9]]])
+    let now = ISO8601DateFormatter().date(from: "2026-11-20T10:00:00Z")!
+    #expect(DashboardPage.freedThisMonth(history, now: now) == 5e9)
+    #expect(DashboardPage.freedThisMonth(JSON(["months": []]), now: now) == nil)
 }
 
 /// Read-only ops (the listing runs `docker system df` and `simctl list`, never a cleanup).

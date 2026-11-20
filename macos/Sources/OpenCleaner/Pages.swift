@@ -11,6 +11,8 @@ struct DashboardPage: View {
     @AppStorage("autoRefresh") private var autoRefresh = false
     @AppStorage("refreshInterval") private var refreshInterval = 5
     @AppStorage("refreshOnFocus") private var refreshOnFocus = false
+    /// what History counts as freed this month (UTC month, as History does)
+    @State private var freedThisMonth: Double?
 
     var body: some View {
         let s = stream.snapshot
@@ -30,7 +32,15 @@ struct DashboardPage: View {
                 HStack(spacing: 16) {
                     if let up = s.uptime_secs.double.map(duration) ?? s.uptime.string { Text("Up for \(up)") }
                     if let t = stream.updatedAt { Text("Updated \(t.formatted(date: .omitted, time: .standard))") }
+                    if let freed = freedThisMonth, freed > 0 {
+                        Button { Automation.shared.openModule = .history } label: {
+                            Text("Freed \(bytes(freed)) this month")
+                        }
+                        .buttonStyle(.plain)
+                        .help(String(localized: "Open History"))
+                    }
                 }
+                .task { freedThisMonth = Self.freedThisMonth(await Engine.ask(["op": "history"])) }
                 .font(.app(13)).foregroundStyle(.dim)
                 .padding(.top, -10)
 
@@ -100,6 +110,17 @@ struct DashboardPage: View {
         let symbol: String
         let text: String
         let module: Module
+        /// System Junk opens on this group only ("trash"); nil: everything
+        var group: String?
+    }
+
+    /// This month's bytes from History's months ("2026-11"), in UTC like the ledger.
+    static func freedThisMonth(_ history: JSON, now: Date = Date()) -> Double? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let c = calendar.dateComponents([.year, .month], from: now)
+        let month = String(format: "%04d-%02d", c.year ?? 0, c.month ?? 0)
+        return history.months.array.first { $0.month.string == month }?.bytes.double
     }
 
     /// Up to three things worth doing, from the status reading and results already at hand.
@@ -111,7 +132,7 @@ struct DashboardPage: View {
             out.append(.init(symbol: "internaldrive", text: String(localized: "Your disk is almost full: \(bytes(total - used)) free"), module: .spaceLens))
         }
         if let trash = s.trash_size.double, trash > gb {
-            out.append(.init(symbol: "trash", text: String(localized: "Empty the Trash (\(bytes(trash)))"), module: .tool("clean")))
+            out.append(.init(symbol: "trash", text: String(localized: "Empty the Trash (\(bytes(trash)))"), module: .tool("clean"), group: "trash"))
         }
         if let junk = junkBytes, junk > 2 * gb {
             out.append(.init(symbol: "sparkles", text: String(localized: "Clean \(bytes(junk)) of junk"), module: .tool("clean")))
@@ -122,11 +143,20 @@ struct DashboardPage: View {
         return Array(out.prefix(3))
     }
 
+    /// The tip's page; for System Junk, limited to its group and scanned if it has not been.
+    private func open(_ tip: Suggestion) {
+        if tip.module == .tool("clean") {
+            junk.onlyGroup = tip.group
+            if tip.group != nil, junk.phase == .idle || junk.phase == .done { junk.scan() }
+        }
+        Automation.shared.openModule = tip.module
+    }
+
     private func suggestions(_ tips: [Suggestion]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Suggestions").font(.app(15, weight: .semibold)).padding(.bottom, 6)
             ForEach(tips, id: \.text) { tip in
-                Button { Automation.shared.openModule = tip.module } label: {
+                Button { open(tip) } label: {
                     HStack(spacing: 10) {
                         Image(systemName: tip.symbol).frame(width: 22).accessibilityHidden(true)
                         Text(verbatim: tip.text)
