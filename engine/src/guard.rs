@@ -199,7 +199,10 @@ pub fn check_for(item: &Path, root: &Path, ctx: &Context, purpose: Purpose) -> R
         Purpose::HomeItems
             if item.parent() != Some(ctx.home.as_path())
                 || !name.starts_with('.')
-                || crate::dotfiles::is_essential(&name) =>
+                || !crate::dotfiles::removable(
+                    &name,
+                    std::fs::symlink_metadata(item).is_ok_and(|m| m.is_dir()),
+                ) =>
         {
             return Err("not a hidden item of the home folder");
         }

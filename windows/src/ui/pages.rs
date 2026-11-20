@@ -125,8 +125,8 @@ impl Module {
             Module::Junk => '\u{EA99}',        // Broom (was Delete, read as "remove")
             Module::Installers => '\u{E896}',
             Module::Projects => '\u{E943}',
-            Module::DevTools => '\u{E90F}',
-            Module::HomeItems => '\u{ED1A}', // Hide (macOS: eye.slash)  // Repair (macOS: hammer)
+            Module::DevTools => '\u{E90F}',  // Repair (macOS: hammer)
+            Module::HomeItems => '\u{ED1A}', // Hide (macOS: eye.slash)
             Module::Uninstaller => '\u{E71D}', // AllApps (was ChromeClose, read as "close window")
             Module::Startup => '\u{E7E8}',    // PowerButton
             Module::SpaceLens => '\u{EB05}',

@@ -41,13 +41,40 @@ pub const ESSENTIAL: &[&str] = &[
 ];
 
 /// Words in names of folders that hold keys and secrets.
-const SECRET_WORDS: &[&str] = &["sign", "key", "secret", "token", "credential", "cert", "passw", "wallet", "vault"];
+const SECRET_WORDS: &[&str] = &[
+    "sign", "key", "secret", "token", "credential", "cert", "passw", "wallet", "vault", "auth", "1password", "oci",
+];
 
 /// Never listed or removed: in `ESSENTIAL`, or named like a place for keys and secrets.
 pub fn is_essential(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    ESSENTIAL.iter().any(|e| e.eq_ignore_ascii_case(name)) || SECRET_WORDS.iter().any(|w| lower.contains(w))
+    // by word (".app-signing", not ".design")
+    let words = || lower.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty());
+    ESSENTIAL.iter().any(|e| e.eq_ignore_ascii_case(name))
+        || words().any(|w| SECRET_WORDS.iter().any(|s| w.starts_with(s)))
 }
+
+/// What the guard lets go: folders, old backups of files that are not essential, and the
+/// files zsh rebuilds. Other hidden files are settings, history or tokens.
+pub fn removable(name: &str, is_dir: bool) -> bool {
+    if is_essential(name) {
+        return false;
+    }
+    match backup_of(name) {
+        Some(base) => !is_essential(&base),
+        None => is_dir || name.starts_with(".zcompdump"),
+    }
+}
+
+/// Folders that only hold what their tools download or rebuild: ticked when their tool is
+/// gone. Others (`.claude`, `.ollama`, `.android`, `.gradle`…) hold history, models, keys
+/// or settings, and are only shown.
+const REBUILDABLE: &[&str] = &[
+    ".npm", ".yarn", ".cocoapods", ".pub-cache", ".dartServer", ".swiftpm", ".konan", ".vscode",
+    ".vscode-shared", ".vscode-react-native", ".vscode-insiders", ".vscode-oss", ".cursor",
+    ".windsurf", ".kiro", ".trae", ".trae-cn", ".antigravity", ".antigravity-ide", ".qoder",
+    ".bun", ".deno", ".rustup", ".ServiceHub", ".dart-tool", ".expo", ".react-native-cli",
+];
 
 /// Who makes a hidden folder: its name, the owner's name, app names (macOS bundle names,
 /// the start of Windows' registered names) and commands that show the owner is installed.
@@ -257,6 +284,9 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
         );
         pick.changed_days = Some(changed);
         pick.flags.push("dot");
+        if !removable(&name, meta.is_dir()) {
+            continue;
+        }
         if let Some(base) = backup_of(&name) {
             pick.group = BACKUPS.into();
             pick.flags.push("backup");
@@ -294,7 +324,7 @@ pub fn home_items(ctx: &Context, cancel: &AtomicBool) -> Vec<Pick> {
                     "{} is not installed · unchanged for {changed} days",
                     owner.label
                 );
-                pick.preselect = changed >= LEFTOVER_DAYS;
+                pick.preselect = changed >= LEFTOVER_DAYS && REBUILDABLE.contains(&owner.name);
             }
         } else {
             pick.group = UNKNOWN.into();
@@ -343,9 +373,15 @@ fn backup_of(name: &str) -> Option<String> {
         return (base.len() > 1).then(|| base.into());
     }
     let lower = name.to_ascii_lowercase();
+    // a marker at the end, or before a stamp: ".bak.1787286373", ".backup-2", not ".original"
     [".backup", ".bak", ".pysave", ".orig", ".old", ".save"]
         .iter()
-        .filter_map(|m| lower[1..].find(m).map(|at| at + 1))
+        .filter_map(|m| {
+            let at = lower[1..].find(m)? + 1;
+            let rest = &lower[at + m.len()..];
+            (rest.is_empty() || rest.starts_with(['.', '-', '_']) || rest.starts_with(|c: char| c.is_ascii_digit()))
+                .then_some(at)
+        })
         .min()
         .filter(|&at| at > 1)
         .map(|at| name[..at].to_string())
@@ -456,6 +492,11 @@ mod tests {
         assert_eq!(backup_of(".vimrc~").as_deref(), Some(".vimrc"));
         assert_eq!(backup_of(".backup"), None);
         assert_eq!(backup_of(".android"), None);
+        assert_eq!(backup_of(".config.original"), None);
+        assert_eq!(backup_of(".zshrc.bak.1787286373").as_deref(), Some(".zshrc"));
+        assert!(!removable(".ssh.bak", true) && !removable(".zshrc", false) && !removable(".netrc", false));
+        assert!(removable(".zshrc.bak", false) && removable(".zcompdump", false) && removable(".gradle", true));
+        assert!(is_essential(".app-signing") && !is_essential(".design"));
     }
 
     #[test]
@@ -465,6 +506,8 @@ mod tests {
         std::fs::create_dir_all(home.join(".ssh")).unwrap();
         std::fs::create_dir_all(home.join(".mystery")).unwrap();
         std::fs::create_dir_all(home.join(".app-signing")).unwrap();
+        std::fs::create_dir_all(home.join(".ssh.bak")).unwrap();
+        std::fs::create_dir_all(home.join(".ollama")).unwrap();
         for f in [
             ".zshrc",
             ".zshrc.backup.1",
@@ -487,6 +530,15 @@ mod tests {
                 && !names.contains(&".bash_history")
         );
         assert!(names.contains(&".mystery") && names.contains(&".zcompdump-host"));
+        assert!(items.iter().all(|p| p.name != ".ssh.bak"));
+        // an app's folder that may hold keys or history is never ticked, even when left over
+        #[cfg(unix)]
+        {
+            let old = SystemTime::now() - std::time::Duration::from_secs(400 * 86_400);
+            std::fs::File::open(home.join(".ollama")).unwrap().set_modified(old).unwrap();
+            let again = home_items(&ctx, &AtomicBool::new(false));
+            assert!(again.iter().any(|p| p.name == ".ollama" && !p.preselect));
+        }
         let backups: Vec<&Pick> = items.iter().filter(|p| p.group == BACKUPS).collect();
         assert_eq!(backups.len(), 2);
         assert_eq!(backups.iter().filter(|p| p.preselect).count(), 1);
