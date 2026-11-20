@@ -201,8 +201,14 @@ fn android_items(ctx: &Context, sdk: &Path) -> Vec<Item> {
         v
     };
     let mut items = Vec::new();
-    // system-images/<api>/<tag>/<abi>
-    for api in dirs(&sdk.join("system-images")) {
+    // system-images/<api>/<tag>/<abi>, only when the emulators could be read
+    let images = if used.is_some() {
+        dirs(&sdk.join("system-images"))
+    } else {
+        Vec::new()
+    };
+    let used = used.unwrap_or_default();
+    for api in images {
         for tag in dirs(&api) {
             for abi in dirs(&tag) {
                 let rel: Vec<String> = [&api, &tag, &abi]
@@ -282,22 +288,41 @@ fn android_package(parts: &[&str]) -> Option<String> {
     parts.iter().all(plain).then(|| parts.join(";"))
 }
 
-/// "android-37.0/google_apis_playstore/arm64-v8a" of every AVD's image.sysdir.1.
-pub fn used_system_images(avd_home: &Path) -> HashSet<String> {
+/// "android-37.0/google_apis_playstore/arm64-v8a" of every AVD's image.sysdir.1: the AVD
+/// folders in `avd_home` and wherever a `<name>.ini` there points (`path=`). None when the
+/// folder cannot be read: then no image is offered, rather than all of them.
+pub fn used_system_images(avd_home: &Path) -> Option<HashSet<String>> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for e in std::fs::read_dir(avd_home).ok()?.flatten() {
+        let path = e.path();
+        if path.extension().is_some_and(|x| x == "ini") {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            folders.extend(
+                text.lines()
+                    .filter_map(|l| l.strip_prefix("path="))
+                    .map(|p| PathBuf::from(p.trim())),
+            );
+        } else {
+            folders.push(path);
+        }
+    }
     let mut used = HashSet::new();
-    for e in std::fs::read_dir(avd_home).into_iter().flatten().flatten() {
-        let Ok(text) = std::fs::read_to_string(e.path().join("config.ini")) else {
+    for folder in folders {
+        let Ok(text) = std::fs::read_to_string(folder.join("config.ini")) else {
             continue;
         };
         for line in text.lines() {
             if let Some(v) = line.strip_prefix("image.sysdir.1=") {
+                // relative to the SDK, or absolute: what follows "system-images/"
                 let v = v.trim().replace('\\', "/");
-                let v = v.trim_start_matches("system-images/").trim_end_matches('/');
-                used.insert(v.to_string());
+                let v = v
+                    .rsplit_once("system-images/")
+                    .map_or(v.as_str(), |(_, rest)| rest);
+                used.insert(v.trim_end_matches('/').to_string());
             }
         }
     }
-    used
+    Some(used)
 }
 
 /// Runs the cleanup of each chosen item still offered, and measures what it freed.
@@ -671,9 +696,20 @@ mod tests {
             "AvdId=Pixel\nimage.sysdir.1=system-images/android-37.0/google_apis/arm64-v8a/\n",
         )
         .unwrap();
-        let used = used_system_images(&home);
+        // an AVD kept elsewhere, its image given as an absolute path
+        let away = home.join("elsewhere/Tab.avd");
+        std::fs::create_dir_all(&away).unwrap();
+        std::fs::write(
+            away.join("config.ini"),
+            "image.sysdir.1=/sdk/system-images/android-35/default/x86_64/\n",
+        )
+        .unwrap();
+        std::fs::write(home.join("Tab.ini"), format!("path={}\n", away.display())).unwrap();
+        let used = used_system_images(&home).unwrap();
         assert!(used.contains("android-37.0/google_apis/arm64-v8a"));
-        assert_eq!(used.len(), 1);
+        assert!(used.contains("android-35/default/x86_64"));
+        assert_eq!(used.len(), 2);
+        assert!(used_system_images(&home.join("missing")).is_none());
         let _ = std::fs::remove_dir_all(&home);
         assert_eq!(
             android_package(&["ndk", "27.0.1"]).as_deref(),
