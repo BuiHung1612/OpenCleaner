@@ -1,6 +1,5 @@
-//! GitHub without a service: tell the user when a newer release exists (no self-replacement:
-//! the exe is unsigned, so there is nothing to verify a download against), and after a crash
-//! offer a prefilled issue built from the log the panic hook wrote.
+//! GitHub without a service: install a newer release (checked against the SHA-256 GitHub lists
+//! for the asset), and after a crash offer a prefilled issue built from the log the panic hook wrote.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -47,6 +46,8 @@ mod win {
     use std::path::PathBuf;
     use std::process::Command;
     use std::ptr::{null, null_mut};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, S_OK, WPARAM};
+    use windows_sys::Win32::UI::Controls::*;
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -105,14 +106,14 @@ mod win {
 
     /// Downloads the new exe next to this one, checks it against the SHA-256 GitHub lists
     /// for the release asset, swaps it in (the running exe is renamed aside) and starts it.
-    /// Returns only on failure, with what went wrong; this exe is then left as it was.
-    fn install(url: &str, digest: &str) -> Result<(), String> {
+    /// Returns only on failure, with what went wrong (empty when the user cancelled); this exe
+    /// is then left as it was.
+    fn install(url: &str, digest: &str, size: u64, version: &str) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let new = exe.with_extension("new.exe");
         let old = exe.with_extension("old.exe");
         let new_s = new.to_string_lossy().into_owned();
-        quiet("curl.exe", &["-fsSL", "-m", "300", "-H", "User-Agent: OpenCleaner", "-o", &new_s, url])
-            .ok_or("The download failed. Check your internet connection, or that this folder can be written to.")?;
+        download(url, &new, size, version)?;
         let hash = quiet("certutil", &["-hashfile", &new_s, "SHA256"]).and_then(|o| super::certutil_hash(&o));
         if hash.as_deref() != Some(digest.trim_start_matches("sha256:").to_ascii_lowercase().as_str()) {
             let _ = std::fs::remove_file(&new);
@@ -129,6 +130,79 @@ mod win {
         std::process::exit(0);
     }
 
+    struct Download {
+        child: std::process::Child,
+        file: PathBuf,
+        size: u64,
+        done: Option<bool>,
+        cancelled: bool,
+    }
+
+    fn megabytes(n: u64) -> String {
+        format!("{:.1} MB", n as f64 / 1e6)
+    }
+
+    /// Progress dialog: polls the file curl is writing, closes itself when curl exits.
+    unsafe extern "system" fn on_progress(hwnd: HWND, msg: i32, _: WPARAM, _: LPARAM, data: isize) -> i32 {
+        let d = unsafe { &mut *(data as *mut Download) };
+        match msg {
+            TDN_TIMER => {
+                let got = std::fs::metadata(&d.file).map(|m| m.len()).unwrap_or(0);
+                let text = wide(&format!("{} of {}", megabytes(got), megabytes(d.size)));
+                unsafe {
+                    SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS as u32, (got * 100 / d.size.max(1)).min(100) as usize, 0);
+                    SendMessageW(hwnd, TDM_UPDATE_ELEMENT_TEXT as u32, TDE_CONTENT as usize, text.as_ptr() as isize);
+                }
+                if let Ok(Some(status)) = d.child.try_wait() {
+                    d.done = Some(status.success());
+                    unsafe { SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDCANCEL as usize, 0) };
+                }
+            }
+            TDN_BUTTON_CLICKED if d.done.is_none() => {
+                d.cancelled = true;
+                let _ = d.child.kill();
+            }
+            _ => {}
+        }
+        S_OK
+    }
+
+    /// curl.exe into `file`, with a progress dialog the user can cancel.
+    fn download(url: &str, file: &std::path::Path, size: u64, version: &str) -> Result<(), String> {
+        let failed = "The download failed. Check your internet connection, or that this folder can be written to.";
+        let child = Command::new("curl.exe")
+            .args(["-fsSL", "-m", "600", "-H", "User-Agent: OpenCleaner", "-o"])
+            .arg(file)
+            .arg(url)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|_| failed)?;
+        let mut d = Download { child, file: file.to_owned(), size, done: None, cancelled: false };
+        let title = wide("OpenCleaner");
+        let main = wide(&format!("Downloading OpenCleaner {version}"));
+        let content = wide(&format!("{} of {}", megabytes(0), megabytes(size)));
+        let mut cfg: TASKDIALOGCONFIG = unsafe { std::mem::zeroed() };
+        cfg.cbSize = size_of::<TASKDIALOGCONFIG>() as u32;
+        cfg.dwFlags = TDF_SHOW_PROGRESS_BAR | TDF_CALLBACK_TIMER;
+        cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+        cfg.pszWindowTitle = title.as_ptr();
+        cfg.pszMainInstruction = main.as_ptr();
+        cfg.pszContent = content.as_ptr();
+        cfg.pfCallback = Some(on_progress);
+        cfg.lpCallbackData = &mut d as *mut Download as isize;
+        unsafe { TaskDialogIndirect(&cfg, null_mut(), null_mut(), null_mut()) };
+        // the dialog could not open, or closed some other way: the download still decides
+        let ok = d.done.unwrap_or_else(|| !d.cancelled && d.child.wait().is_ok_and(|s| s.success()));
+        if d.cancelled {
+            let _ = d.child.wait();
+        }
+        if ok && !d.cancelled {
+            return Ok(());
+        }
+        let _ = std::fs::remove_file(file);
+        Err(if d.cancelled { String::new() } else { failed.into() })
+    }
+
     /// Asks GitHub for the latest release. `manual` (Settings > Check Now) also says when
     /// there is nothing newer, or when GitHub could not be reached.
     pub fn check(manual: bool) {
@@ -143,11 +217,12 @@ mod win {
             Some(tag) if super::is_newer(&tag, version) => {
                 let new = tag.trim_start_matches('v');
                 let asset = release.as_ref().and_then(|r| r["assets"].as_array()?.iter().find(|a| a["name"] == "OpenCleaner.exe").cloned());
-                let found = asset.as_ref().and_then(|a| Some((a["browser_download_url"].as_str()?.to_owned(), a["digest"].as_str()?.to_owned())));
+                let found = asset.as_ref().and_then(|a| Some((a["browser_download_url"].as_str()?.to_owned(), a["digest"].as_str()?.to_owned(), a["size"].as_u64()?)));
                 match found {
-                    Some((url, digest)) => {
+                    Some((url, digest, size)) => {
                         if ask(&format!("OpenCleaner {new} is available. You have {version}.\n\nInstall it now? OpenCleaner restarts when it is done."))
-                            && let Err(e) = install(&url, &digest)
+                            && let Err(e) = install(&url, &digest, size, new)
+                            && !e.is_empty()
                             && ask(&format!("{e}\n\nOpen the download page to install it yourself?"))
                         {
                             open(&page);
