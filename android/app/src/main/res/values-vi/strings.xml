@@ -1,0 +1,30 @@
+<resources>
+    <string name="app_name">OpenCleaner</string>
+    <string name="scan">Quét</string>
+    <string name="clean">Dọn</string>
+    <string name="need_media">Cho phép truy cập ảnh và video để tìm file rác. Không có gì rời khỏi máy.</string>
+    <string name="grant">Cho phép</string>
+    <string name="need_usage">Cho phép truy cập mức sử dụng để biết app nào lâu rồi không mở.</string>
+    <string name="open_settings">Mở cài đặt</string>
+    <string name="select_all">Chọn tất cả</string>
+    <string name="select_none">Bỏ chọn</string>
+    <string name="clean_button">%1$d mục · %2$s</string>
+    <string name="clean_note">Ảnh vào thùng rác (giữ 30 ngày). Mỗi app hỏi xác nhận một lần.</string>
+    <string name="nothing">Không có gì để dọn</string>
+    <string name="kind_screenshot">Ảnh chụp màn hình cũ</string>
+    <string name="kind_chat">Ảnh và video từ app chat</string>
+    <string name="kind_large_video">Video dung lượng lớn</string>
+    <string name="kind_unused_app">App 90 ngày không dùng</string>
+    <string name="unused_days">Không dùng %1$d ngày</string>
+    <string name="never_used">Lâu không dùng</string>
+    <string name="back">Quay lại</string>
+    <string name="review">Xem</string>
+    <string name="selected_count">Đã chọn %1$d</string>
+    <string name="kind_duplicate">Ảnh trùng lặp</string>
+    <string name="kind_blurry">Ảnh mờ hoặc tối</string>
+    <string name="kind_text">Meme, hóa đơn và tài liệu</string>
+    <string name="hero_caption">sẵn sàng dọn · đã tick %1$d mục</string>
+    <string name="hero_none">Chưa tick gì. Hãy xem từng nhóm bên dưới.</string>
+    <string name="analyzing">Đang xem ảnh ngay trên máy · %1$d / %2$d</string>
+    <string name="protected_note">%1$d ảnh có người và thú cưng được bảo vệ. App không bao giờ tự tick các ảnh này.</string>
+</resources>

@@ -187,23 +187,6 @@ jobs:
         with:
           name: OpenCleaner-windows
           path: windows/target/release/OpenCleaner.exe
-      # the Microsoft Store package: the same exe, unsigned (the Store signs it)
-      - name: Pack the Microsoft Store package
-        shell: pwsh
-        run: |
-          $version = "$((Get-Content VERSION -Raw).Trim()).0"
-          $dir = Join-Path $env:RUNNER_TEMP msix
-          New-Item -ItemType Directory $dir | Out-Null
-          Copy-Item packaging/msix/Assets $dir -Recurse
-          Copy-Item windows/target/release/OpenCleaner.exe $dir
-          (Get-Content packaging/msix/AppxManifest.xml -Raw).Replace('{{VERSION}}', $version) | Set-Content (Join-Path $dir AppxManifest.xml) -Encoding utf8
-          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" | Sort-Object FullName | Select-Object -Last 1
-          & $makeappx.FullName pack /o /d $dir /p OpenCleaner.msix
-          if ($LASTEXITCODE) { throw "makeappx failed" }
-      - uses: actions/upload-artifact@v7
-        with:
-          name: OpenCleaner-msix
-          path: OpenCleaner.msix
 
   macos:
     # Liquid Glass and swift-tools-version 6.2 need the macOS 26 SDK
@@ -302,11 +285,6 @@ jobs:
         with:
           name: OpenCleaner-windows
           path: dist
-      # for the first Store submission by hand (unsigned: it installs only through the Store)
-      - uses: actions/download-artifact@v8
-        with:
-          name: OpenCleaner-msix
-          path: dist
       # Homebrew cask and winget manifests for this release, attached as assets (submitted by hand: packaging/README.md)
       - name: Render package manifests
         run: |
@@ -318,38 +296,10 @@ jobs:
           for f in packaging/winget/*.yaml; do render "$f" "${WIN^^}"; done
           # every placeholder of ours filled ({{appdir}} in the cask is Homebrew's own token)
           ! grep -lE '\{\{(VERSION|SHA256)\}\}' dist/opencleaner.rb dist/*.yaml
-      # dist/ holds OpenCleaner.dmg, OpenCleaner.exe and OpenCleaner.msix from the macos and windows-app jobs, and the manifests
+      # dist/ holds OpenCleaner.dmg and OpenCleaner.exe from the macos and windows-app jobs, and the manifests
       # notes: this version's section of CHANGELOG.md, then GitHub's changelog link
       - run: |
           awk -v v="## ${GITHUB_REF_NAME#v}" '$0==v{on=1;next} /^## /{on=0} on' CHANGELOG.md > notes.md
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "OpenCleaner $GITHUB_REF_NAME" --notes-file notes.md --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
-
-  # After the GitHub Release: the same version to the Microsoft Store, when the Partner Center
-  # credentials are set (packaging/README.md). The Store certifies it before it goes out.
-  store:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [release]
-    runs-on: windows-latest
-    env:
-      # only whether they are set; the secrets themselves go to the submit step alone
-      HAS_STORE: ${{ secrets.MSSTORE_CLIENT_ID != '' }}
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: OpenCleaner-msix
-      - uses: microsoft/setup-msstore-cli@v1
-        if: env.HAS_STORE == 'true'
-      - name: Submit to the Microsoft Store
-        if: env.HAS_STORE == 'true'
-        env:
-          MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
-          MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
-          MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
-          MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
-        shell: pwsh
-        run: |
-          msstore reconfigure --tenantId $env:MSSTORE_TENANT_ID --sellerId $env:MSSTORE_SELLER_ID --clientId $env:MSSTORE_CLIENT_ID --clientSecret $env:MSSTORE_CLIENT_SECRET
-          msstore publish . -i OpenCleaner.msix -id 9PCVNWSXKCCZ
-          if ($LASTEXITCODE) { throw "msstore publish failed" }
