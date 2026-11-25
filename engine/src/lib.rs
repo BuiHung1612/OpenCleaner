@@ -17,6 +17,7 @@ pub mod fs;
 #[cfg(target_os = "macos")]
 pub mod fsevents;
 pub mod guard;
+pub mod hogs;
 pub mod ledger;
 pub mod maintenance;
 pub mod picks;

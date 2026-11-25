@@ -14,6 +14,18 @@ import Testing
     #expect(Engine.call(["op": "disable_startup", "path": "/etc/hosts"]).ok.bool == false)
 }
 
+@Test func engineReadsProcessesAndRefusesToQuitTheWrongOne() {
+    let report = Engine.call(["op": "hogs"])
+    #expect(report.ok.bool)
+    #expect(report.machine.total_ram.double ?? 0 > 0)
+    // this test process and its parents are never offered
+    let mine = Double(ProcessInfo.processInfo.processIdentifier)
+    #expect(!report.findings.array.contains { $0.pid.double == mine })
+    // a pid with the wrong start time is refused, never signalled
+    #expect(Engine.call(["op": "quit_process", "pid": Int(mine), "started": 1]).ok.bool == false)
+    #expect(Engine.call(["op": "quit_process", "pid": 1, "started": 0, "force": true]).ok.bool == false)
+}
+
 @Test func engineJobStreamsEventsUntilDone() async throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("oc-engine-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

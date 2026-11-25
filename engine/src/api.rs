@@ -3,7 +3,9 @@
 
 use crate::context::Context;
 use crate::rules::RuleSet;
-use crate::{apps, clean, finders, guard, ledger, maintenance, picks, procs, size, space, status};
+use crate::{
+    apps, clean, finders, guard, hogs, ledger, maintenance, picks, procs, size, space, status,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -113,6 +115,17 @@ enum Request {
     /// The script that turns Touch ID for sudo on or off (needs administrator rights).
     TouchidScript {
         enable: bool,
+    },
+    /// Process Doctor: stuck, heavy and left-behind processes of the user (`findings`),
+    /// the apps holding the most memory (`groups`) and the machine's memory state.
+    Hogs,
+    /// Quits a process listed by `hogs` (`pid` with its `started`); `force` kills it at once.
+    /// Replies `outcome`: `exited`, or `still_running` after a polite request.
+    QuitProcess {
+        pid: i32,
+        started: u64,
+        #[serde(default)]
+        force: bool,
     },
     /// What starts at login (`items`).
     StartupItems,
@@ -281,6 +294,19 @@ pub fn call(request: &str) -> Value {
                 .collect();
             json!({"ok": true, "results": results})
         }
+        Ok(Request::Hogs) => {
+            let mut v = serde_json::to_value(hogs::read()).unwrap_or(Value::Null);
+            v["ok"] = json!(true);
+            v
+        }
+        Ok(Request::QuitProcess {
+            pid,
+            started,
+            force,
+        }) => match hogs::quit(pid, started, force) {
+            Ok(outcome) => json!({"ok": true, "outcome": outcome}),
+            Err(e) => json!({"ok": false, "error": e}),
+        },
         Ok(Request::StartupItems) => {
             json!({"ok": true, "items": crate::startup::list(ctx()), "turned_off": crate::startup::turned_off(ctx())})
         }
@@ -401,6 +427,8 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
         | Request::RunUninstaller { .. }
         | Request::Optimize { .. }
         | Request::TouchidScript { .. }
+        | Request::Hogs
+        | Request::QuitProcess { .. }
         | Request::StartupItems
         | Request::DisableStartup { .. }
         | Request::EnableStartup { .. }

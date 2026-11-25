@@ -4,6 +4,8 @@
 //!   oce size [--freed] [--all-volumes] [--json] PATH...   du-style "<KiB>\t<path>" lines
 //!   oce space [PATH]                                       Space Lens listing (JSON); no PATH: overview
 //!   oce scan                                               System Junk preview (removes nothing)
+//!   oce hogs [--json]                                      stuck, heavy and left-behind processes
+//!   oce quit [--force] PID                                 quit one of them (asks first; --force kills)
 //!   oce call '<request json>'                              same requests as the app
 //!   oce run '<request json>'                               a job: one event per line
 
@@ -43,6 +45,8 @@ fn main() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
+        Some("hogs") => hogs_cmd(args.iter().any(|a| a == "--json")),
+        Some("quit") => quit_cmd(&args[1..]),
         Some("scan") => {
             let start = std::time::Instant::now();
             let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -127,7 +131,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: oce version | oce size [--freed] [--all-volumes] [--json] PATH... | oce call JSON | oce run JSON"
+                "usage: oce version | oce size [--freed] [--all-volumes] [--json] PATH... | oce hogs [--json] | oce quit [--force] PID | oce call JSON | oce run JSON"
             );
             ExitCode::from(2)
         }
@@ -171,4 +175,96 @@ fn size_cmd(args: &[String]) -> ExitCode {
         }
     }
     status
+}
+
+fn hogs_cmd(json: bool) -> ExitCode {
+    use oc_engine::hogs::{self, Reason, Verdict};
+    let report = hogs::read();
+    if json {
+        println!("{}", serde_json::to_string(&report).unwrap_or_default());
+        return ExitCode::SUCCESS;
+    }
+    let gb = |b: u64| b as f64 / 1e9;
+    let m = &report.machine;
+    println!(
+        "memory {:.1} GB, swap {:.1}/{:.1} GB{}",
+        gb(m.total_ram),
+        gb(m.swap_used),
+        gb(m.swap_total),
+        if m.under_pressure {
+            "  (short of memory)"
+        } else {
+            ""
+        }
+    );
+    for f in &report.findings {
+        let why: Vec<&str> = f
+            .reasons
+            .iter()
+            .map(|r| match r {
+                Reason::Zombie => "zombie",
+                Reason::Stopped => "stopped",
+                Reason::Spinning => "stuck in a loop",
+                Reason::HeavyMemory => "heavy",
+                Reason::LeftBehind => "left behind",
+                Reason::IdleDevTool => "idle dev tool",
+            })
+            .collect();
+        println!(
+            "{:<6} {:>7} {:>6.1} GB {:>5.0}% {:>6}  {:<24} {}",
+            match f.verdict {
+                Verdict::Quit => "QUIT",
+                Verdict::Review => "review",
+            },
+            f.pid,
+            gb(f.memory_bytes),
+            f.cpu,
+            if f.age_secs >= 86_400 {
+                format!("{}d", f.age_secs / 86_400)
+            } else {
+                format!("{}h", f.age_secs / 3600)
+            },
+            f.app.chars().take(24).collect::<String>(),
+            why.join(", ")
+        );
+    }
+    for g in &report.groups {
+        println!(
+            "group  {:>3} x {:<24} {:.1} GB",
+            g.count,
+            g.app,
+            gb(g.memory_bytes)
+        );
+    }
+    println!(
+        "quitting all of them would free about {:.1} GB",
+        gb(report.reclaimable)
+    );
+    ExitCode::SUCCESS
+}
+
+fn quit_cmd(args: &[String]) -> ExitCode {
+    let force = args.iter().any(|a| a == "--force");
+    let Some(pid) = args.iter().find_map(|a| a.parse::<i32>().ok()) else {
+        eprintln!("usage: oce quit [--force] PID");
+        return ExitCode::from(2);
+    };
+    let Some(started) = oc_engine::hogs::start_of(pid) else {
+        eprintln!("oce: no process {pid}");
+        return ExitCode::from(1);
+    };
+    match oc_engine::hogs::quit(pid, started, force) {
+        Ok(oc_engine::hogs::Outcome::Exited) => {
+            println!("{pid} has quit");
+            ExitCode::SUCCESS
+        }
+        Ok(oc_engine::hogs::Outcome::StillRunning) => {
+            eprintln!("oce: {pid} is still running; try --force");
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("oce: {e}");
+            ExitCode::from(1)
+        }
+    }
 }

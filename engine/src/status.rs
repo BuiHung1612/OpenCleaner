@@ -170,7 +170,10 @@ fn version_like(name: &str) -> bool {
 /// A process name people recognise: for a version-like name, the nearest folder of its
 /// executable that is a name ("claude" for ~/.local/share/claude/versions/2.1.328).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn process_name(name: String, exe: impl FnOnce() -> Option<std::path::PathBuf>) -> String {
+pub(crate) fn process_name(
+    name: String,
+    exe: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> String {
     if !version_like(&name) {
         return name;
     }

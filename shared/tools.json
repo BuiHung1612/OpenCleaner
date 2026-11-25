@@ -92,6 +92,21 @@
       ]
     },
     {
+      "id": "hogs",
+      "group": "Speed",
+      "title": "Process Doctor",
+      "subtitle": "Find apps that are stuck, using too much memory or left running, and quit them.",
+      "points": [
+        "Asks an app to quit first, like closing it",
+        "Never touches system processes or other users"
+      ],
+      "icon": "stethoscope",
+      "colors": [
+        "#7A1B3A",
+        "#2A1B4A"
+      ]
+    },
+    {
       "id": "startup",
       "group": "Speed",
       "title": "Startup Items",
