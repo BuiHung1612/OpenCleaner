@@ -125,7 +125,7 @@ fun HomeScreen(
 
 /** All items of one group, to tick or untick. Photos as a grid, apps as rows. */
 @Composable private fun Review(kind: Kind, list: List<Item>, size: (Long) -> String, modifier: Modifier, vm: MainVm, back: () -> Unit) {
-    val all = remember(list) { list.all { it.selected } }
+    val all = remember(list) { list.filter { !it.keep }.all { it.selected } }
     Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Pill(stringResource(R.string.back), back)
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
