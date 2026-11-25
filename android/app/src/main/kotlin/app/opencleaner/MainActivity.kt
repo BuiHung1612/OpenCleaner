@@ -30,8 +30,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// READ_MEDIA_* exists from API 33; Android 11-12 (minSdk 30) use READ_EXTERNAL_STORAGE
+private val mediaPerms =
+    if (android.os.Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+    else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+
 private fun mediaGranted(a: android.content.Context) =
-    a.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+    mediaPerms.all { a.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
 
 @Composable
 private fun Root(vm: MainVm) {
@@ -74,7 +79,7 @@ private fun Root(vm: MainVm) {
         vm = vm,
         mediaGranted = granted,
         size = { Formatter.formatShortFileSize(ctx, it) },
-        onGrantMedia = { askMedia.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)) },
+        onGrantMedia = { askMedia.launch(mediaPerms) },
         onUsageSettings = { ctx.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) },
         onRescan = { vm.scan(granted) },
         busy = vm.scanning || queue.isNotEmpty(),
