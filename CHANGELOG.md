@@ -2,6 +2,11 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## 0.3.11
+
+- macOS: new Process Doctor (Speed) shows which of your processes are stuck in a loop, using a lot of memory or left running, and which apps hold the most memory. Each can be quit: the app is asked to quit first, as closing it would, and Force Quit is offered only if it does not. Only your own processes are listed; system processes, Finder, Dock and the app's own parents are never offered.
+- Command line: `oce hogs [--json]` lists them and `oce quit [--force] PID` quits one, with the same checks (a reused pid is refused). The engine reads processes on Windows too; the Windows page is not built yet.
+
 ## 0.3.10
 
 - macOS: an app counts as open only while its own executable runs. Tools inside an app no longer keep its junk from being cleaned (sourcekit-lsp and DeviceHub inside Xcode.app kept DerivedData skipped while Xcode was closed).
