@@ -84,8 +84,7 @@ struct DashboardPage: View {
         // glass tiles live inside this scroll view; a dark scheme here would darken them
         .scrollIndicators(.never)
         .onAppear {
-            // read once; after that only the refresh button, or what Settings turned on
-            if stream.updatedAt == nil { stream.refresh() }
+            stream.refresh()
             if autoRefresh { stream.start(every: refreshInterval) }
         }
         .onDisappear { stream.stop() }
@@ -192,8 +191,8 @@ struct DashboardPage: View {
         case let n: bytes(n)
         }
         return Tile(title: String(localized: "Trash"), icon: "trash", value: value, fraction: nil,
-                    detail: size == nil ? String(localized: "Needs Full Disk Access") : nil) {
-            if size == nil {
+                    detail: stream.trashLoading ? String(localized: "Measuring…") : size == nil ? String(localized: "Needs Full Disk Access") : nil) {
+            if size == nil && !stream.trashLoading {
                 // where the user grants it; the reading works after the app is reopened
                 Button(String(localized: "Grant Access…"), action: openFullDiskAccess).buttonStyle(.link).font(.app(13))
             } else {
@@ -717,25 +716,50 @@ final class StatusStream {
     var error: String?
     private(set) var replay = 0
     private(set) var loading = false
+    private(set) var trashLoading = false
     private(set) var updatedAt: Date?
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var lastRead = Date.distantPast
+    @ObservationIgnored private let readStatus: () async -> JSON
+    @ObservationIgnored private let readTrash: () async -> JSON
 
-    /// One engine reading, off the main thread (the first one samples CPU for 250 ms).
-    private static func read() async -> JSON {
-        await Task.detached(priority: .userInitiated) { Engine.call(["op": "status"]) }.value
+    init(readStatus: @escaping () async -> JSON = { await Engine.ask(["op": "status", "skip_trash": true]) },
+         readTrash: @escaping () async -> JSON = { await Engine.ask(["op": "trash_size"]) }) {
+        self.readStatus = readStatus
+        self.readTrash = readTrash
+    }
+
+    private func apply(_ json: JSON) {
+        var fields = json.raw as? [String: Any] ?? [:]
+        fields["trash_size"] = snapshot.trash_size.raw
+        snapshot = JSON(fields)
+        updatedAt = Date()
+        lastRead = Date()
+    }
+
+    /// A large Trash must not hold live metrics or the Refresh button hostage.
+    private func refreshTrash() {
+        guard !trashLoading else { return }
+        trashLoading = true
+        Task {
+            let json = await readTrash()
+            var fields = snapshot.raw as? [String: Any] ?? [:]
+            fields["trash_size"] = json.trash_size.raw
+            snapshot = JSON(fields)
+            trashLoading = false
+        }
     }
 
     /// Focus-driven reads pass `ifOlderThan` so switching windows does not re-read every time.
-    func refresh(ifOlderThan age: TimeInterval = 0) {
+    func refresh(ifOlderThan age: TimeInterval = 0, quiet: Bool = false) {
         guard !loading, Date().timeIntervalSince(lastRead) >= age else { return }
         loading = true
+        refreshTrash()
         Task {
-            let json = await Self.read()
+            let json = await readStatus()
             if json.ok.bool {
-                snapshot = json
-                replay += 1
-                updatedAt = Date()
+                apply(json)
+                if !quiet { replay += 1 }
                 error = nil
             } else {
                 error = json.error.string ?? String(localized: "The engine did not answer.")
@@ -752,11 +776,7 @@ final class StatusStream {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(seconds))
                 guard !Task.isCancelled else { return }
-                let json = await Self.read()
-                guard let self, json.ok.bool else { continue }
-                self.snapshot = json
-                self.updatedAt = Date()
-                self.lastRead = Date()
+                self?.refresh(quiet: true)
             }
         }
     }

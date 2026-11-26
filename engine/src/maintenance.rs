@@ -13,6 +13,7 @@ pub struct Task {
     pub id: &'static str,
     pub title: &'static str,
     pub note: &'static str,
+    pub tradeoff: &'static str,
     /// Needs the administrator password (run by the app, not the engine).
     pub admin: bool,
     #[serde(skip)]
@@ -29,6 +30,7 @@ pub fn tasks() -> Vec<Task> {
             id: "dns",
             title: "Flush the DNS cache",
             note: "Fixes sites that moved or fail to load after a network change.",
+            tradeoff: "The next lookup may take longer while DNS records are fetched again. This does not improve your connection speed or remove browser history.",
             admin: true,
             commands: &[
                 &["/usr/bin/dscacheutil", "-flushcache"],
@@ -39,6 +41,7 @@ pub fn tasks() -> Vec<Task> {
             id: "quicklook",
             title: "Reset Quick Look thumbnails",
             note: "Fixes wrong or missing file previews; thumbnails are made again as you browse.",
+            tradeoff: "Previews may appear slowly and use extra CPU while thumbnails rebuild. Your original files stay intact.",
             admin: false,
             commands: &[&["/usr/bin/qlmanage", "-r", "cache"]],
         },
@@ -46,6 +49,7 @@ pub fn tasks() -> Vec<Task> {
             id: "fonts",
             title: "Clear font caches",
             note: "Fixes garbled or missing fonts. Takes effect after you log out.",
+            tradeoff: "Save your work and log out yourself after running this. Font caches rebuild next time you sign in; this does not install or remove fonts.",
             admin: false,
             commands: &[&["/usr/bin/atsutil", "databases", "-removeUser"]],
         },
@@ -53,6 +57,7 @@ pub fn tasks() -> Vec<Task> {
             id: "launchservices",
             title: "Rebuild the \u{201c}Open With\u{201d} list",
             note: "Removes duplicate or deleted apps from Open With menus.",
+            tradeoff: "Rebuilds app registrations for all installed apps; Open With menus may take time to repopulate. Review your preferred default apps afterwards.",
             admin: false,
             commands: &[&[
                 "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
@@ -70,6 +75,7 @@ pub fn tasks() -> Vec<Task> {
             id: "memory",
             title: "Free up memory",
             note: "macOS manages memory well on its own. This drops its file caches (purge), so apps may be slower right after while they reload. Useful mostly just before a heavy task.",
+            tradeoff: "The gain is temporary: caches fill again, and apps may pause or read more from disk. This does not fix a memory leak or add RAM; skip it when the Mac is working normally.",
             admin: true,
             commands: &[&["/usr/sbin/purge"]],
         },
@@ -118,16 +124,28 @@ pub fn admin_script(ids: &[String]) -> Option<String> {
     let lines: Vec<String> = tasks()
         .into_iter()
         .filter(|t| t.admin && ids.iter().any(|i| i == t.id))
-        .flat_map(|t| {
-            t.commands.iter().map(|cmd| {
-                cmd.iter()
-                    .map(|a| shell_quote(a))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-        })
+        .map(|t| admin_task_script(&t))
         .collect();
-    (!lines.is_empty()).then(|| lines.join(" ; "))
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn admin_task_script(task: &Task) -> String {
+    let commands = task
+        .commands
+        .iter()
+        .map(|cmd| {
+            cmd.iter()
+                .map(|a| shell_quote(a))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" && ");
+    // Stop on the first failed command within a task, but still run and report other tasks.
+    format!(
+        "oc_output=$( ( {commands} ) 2>&1 )\noc_result=$?\n/usr/bin/printf '\\nOPEN_CLEANER_TASK_RESULT\\t%s\\t%s\\n%s\\n' {} \"$oc_result\" \"$oc_output\"",
+        shell_quote(task.id)
+    )
 }
 
 /// Single-quoted for /bin/sh.
@@ -220,6 +238,38 @@ fn touchid_script_for(file: &std::path::Path, enable: bool) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn admin_tasks_report_failures_independently() {
+        let failed = Task {
+            id: "failed",
+            title: "",
+            note: "",
+            tradeoff: "",
+            admin: true,
+            commands: &[&["false"], &["true"]],
+        };
+        let passed = Task {
+            id: "passed",
+            commands: &[&["true"]],
+            ..failed.clone()
+        };
+        let script = format!(
+            "{}\n{}",
+            admin_task_script(&failed),
+            admin_task_script(&passed)
+        );
+        // Only shell builtins: never execute real maintenance or request administrator rights.
+        let result = Command::new("/bin/sh")
+            .args(["-c", &script])
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let output = String::from_utf8(result.stdout).unwrap();
+        assert!(output.contains("OPEN_CLEANER_TASK_RESULT\tfailed\t1"));
+        assert!(output.contains("OPEN_CLEANER_TASK_RESULT\tpassed\t0"));
+    }
 
     #[test]
     fn touchid_keeps_other_lines_and_toggles_only_its_own() {

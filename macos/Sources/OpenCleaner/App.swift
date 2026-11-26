@@ -248,6 +248,7 @@ struct MainView: View {
         .tint(.white)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: module)
         .task { version = await Engine.ask(["op": "version"]).version.string }
+        .task { await lens.refreshVolumes() }
         .task { Updater.startAutomaticChecks(); CrashReports.offer() }
         .onReceive(Automation.shared.$openModule.compactMap { $0 }) { module = $0; Automation.shared.openModule = nil }
         .sheet(isPresented: Binding(get: { !welcomed }, set: { if !$0 { welcomed = true } })) { Welcome() }

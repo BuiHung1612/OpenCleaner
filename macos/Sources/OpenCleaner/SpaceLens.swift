@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import DiskArbitration
 import SwiftUI
 
@@ -21,12 +22,17 @@ struct Volume: Identifiable {
     }
 
     static func all() -> [Volume] {
-        let keys: [URLResourceKey] = [.volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]
+        let keys: [URLResourceKey] = [.volumeNameKey]
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
         let session = DASessionCreate(kCFAllocatorDefault)
         return urls.compactMap { url in
-            guard !isDiskImage(url, session), let v = try? url.resourceValues(forKeys: Set(keys)), let total = v.volumeTotalCapacity, total > 0 else { return nil }
-            return Volume(url: url, name: v.volumeName ?? url.lastPathComponent, total: Double(total), free: Double(v.volumeAvailableCapacityForImportantUsage ?? 0))
+            // Match the Dashboard's immediately available bytes, without purgeable space.
+            let path = url.path == "/" ? "/System/Volumes/Data" : url.path
+            var stat = statfs()
+            guard !isDiskImage(url, session), statfs(path, &stat) == 0, stat.f_blocks > 0 else { return nil }
+            let name = try? url.resourceValues(forKeys: Set(keys)).volumeName
+            return Volume(url: url, name: name ?? url.lastPathComponent,
+                          total: Double(stat.f_blocks) * Double(stat.f_bsize), free: Double(stat.f_bavail) * Double(stat.f_bsize))
         }
     }
 }
@@ -41,7 +47,7 @@ private func isDiskImage(_ url: URL, _ session: DASession?) -> Bool {
 /// Lives as long as the window, so results and the sidebar badge survive switching modules.
 @MainActor @Observable
 final class SpaceLensModel {
-    var volumes = Volume.all()
+    var volumes: [Volume] = []
     var volume: Volume?
     /// folders opened so far; `nil` is the startup disk overview
     var stack: [String?] = []
@@ -50,8 +56,21 @@ final class SpaceLensModel {
     /// After a move to the Trash: how many items went.
     var trashed = 0
     var trashError: String?
+    private(set) var removing = false
+    private(set) var trashProcessed = 0
+    private(set) var trashTotal = 0
+    private(set) var isLoading = false
+    @ObservationIgnored private var active = true
+    @ObservationIgnored private var job: Task<Void, Never>?
+    @ObservationIgnored private var generation = UUID()
+    func refreshVolumes() async {
+        let fresh = await Task.detached(priority: .userInitiated) { Volume.all() }.value
+        volumes = fresh
+        if let id = volume?.id { volume = fresh.first { $0.id == id } ?? volume }
+    }
     private var cache: [String: JSON] = [:]
-    /// keys whose `cache` entry came from disk (an earlier launch) and is being re-scanned
+    private var scannedAt: [String: Date] = [:]
+    /// Older results shown while a new scan verifies their sizes.
     private var stale: [String: Date] = [:]
     /// keys whose `cache` entry is a scan still in progress (sizes are still growing)
     private var live: Set<String> = []
@@ -66,6 +85,7 @@ final class SpaceLensModel {
     }
 
     func scan(_ v: Volume) {
+        guard !removing else { return }
         volume = v
         stack = []
         open(v.isStartup ? nil : v.url.path)
@@ -73,13 +93,14 @@ final class SpaceLensModel {
 
     /// A folder dropped on the page, shown on the volume it lives on (Back leaves it).
     func openDropped(_ path: String) {
-        cancelPrefetch()
+        guard !removing else { return }
         volume = Volume.holding(path, in: volumes) ?? volumes.first(where: \.isStartup)
         stack = []
         open(path)
     }
 
     func open(_ path: String?) {
+        guard !removing else { return }
         stack.append(path)
         selection = []
         trashed = 0
@@ -88,66 +109,106 @@ final class SpaceLensModel {
     }
 
     func back() {
-        guard !stack.isEmpty else { return }
+        guard !removing, !stack.isEmpty else { return }
+        cancelScan()
         stack.removeLast()
         selection = []
         trashed = 0
         trashError = nil
-        cancelPrefetch()
-        if stack.isEmpty { volume = nil } else if let current { prefetchChildren(of: current) }
+        if stack.isEmpty {
+            volume = nil
+            Task { await refreshVolumes() }
+        } else { load(stack.last ?? nil) }
     }
 
     func startOver() {
-        cancelPrefetch()
+        guard !removing else { return }
+        cancelScan()
         stack = []
         volume = nil
         selection = []
+        Task { await refreshVolumes() }
     }
 
-    /// One scan per folder at a time; opening a folder that is being prefetched restarts it in the foreground.
-    @ObservationIgnored private var inflight: [String: Task<JSON, Error>] = [:]
-    /// keys in `inflight` that run at utility QoS (prefetch)
-    @ObservationIgnored private var backgroundKeys: Set<String> = []
-    @ObservationIgnored private var queue: [String] = []
-    @ObservationIgnored private var draining = false
+    private func cancelScan() {
+        job?.cancel()
+        job = nil
+        generation = UUID()
+        for key in live { cache[key] = nil }
+        live = []
+        isLoading = false
+    }
 
-    /// The user moved: drop speculative scans so they stop competing for the disk, and so a
-    /// folder they open is scanned at full priority instead of joining a throttled prefetch.
-    /// A cancelled scan restarts quickly: the file system metadata it touched is still cached.
-    private func cancelPrefetch() {
-        queue = []
-        for key in backgroundKeys { inflight[key]?.cancel(); inflight[key] = nil }
-        backgroundKeys = []
+    func pause() {
+        active = false
+        cancelScan()
+    }
+
+    func resume() async {
+        guard !Task.isCancelled else { return }
+        active = true
+        await refreshIfVisible()
+    }
+
+    func refreshIfVisible() async {
+        guard active, !removing, !Task.isCancelled else { return }
+        await refreshVolumes()
+        guard active, !removing, !Task.isCancelled, !stack.isEmpty else { return }
+        load(stack.last ?? nil)
     }
 
     func load(_ path: String?, force: Bool = false) {
+        guard active, !removing else { return }
         let key = path ?? ""
-        cancelPrefetch()
+        cancelScan()
+        let token = generation
         if force { cache[key] = nil; stale[key] = nil }
         error = nil
-        if let ready = cache[key], stale[key] == nil {
-            prefetchChildren(of: ready)
-            return
-        }
-        // show the previous launch's scan right away; the fresh one replaces it
-        if !force, cache[key] == nil, let old = ResultCache.load(Self.cacheKey(key)) {
-            cache[key] = old.json
-            stale[key] = old.date
-        }
-        Task {
+        stale[key] = cache[key] == nil ? nil : scannedAt[key]
+        isLoading = true
+        job = Task {
             do {
-                prefetchChildren(of: try await scan(key, background: false))
+                // Both previous-session and in-memory results are previews, never proof of freshness.
+                if !force, cache[key] == nil {
+                    let old = await ResultCache.read(Self.cacheKey(key))
+                    guard generation == token, !Task.isCancelled else { return }
+                    if let old {
+                        cache[key] = old.json
+                        scannedAt[key] = old.date
+                        stale[key] = old.date
+                    }
+                }
+                var result = JSON(nil)
+                let request: [String: Any] = key.isEmpty ? ["op": "space"] : ["op": "space", "path": key]
+                for await event in Engine.run(request) {
+                    guard generation == token, !Task.isCancelled else { return }
+                    switch event.event.string {
+                    case "progress" where cache[key] == nil || live.contains(key):
+                        cache[key] = event
+                        live.insert(key)
+                    case "space": result = event
+                    case "error": throw EngineFailure(errorDescription: event.error.string)
+                    default: break
+                    }
+                }
+                guard generation == token, !Task.isCancelled else { return }
+                if let message = result.error.string { throw EngineFailure(errorDescription: message) }
+                guard result.raw != nil else { throw EngineFailure(errorDescription: String(localized: "The scan did not finish.")) }
+                cache[key] = result
+                selection.formIntersection(Set(result.entries.array.filter(\.selectable.bool).compactMap(\.path.string)))
+                scannedAt[key] = Date()
+                stale[key] = nil
+                live.remove(key)
+                await ResultCache.write(result, for: Self.cacheKey(key))
+                guard generation == token, !Task.isCancelled else { return }
+                isLoading = false
             } catch {
-                if stack.last.map({ $0 ?? "" }) == key { self.error = error.localizedDescription }
+                guard generation == token, !Task.isCancelled else { return }
+                if live.remove(key) != nil { cache[key] = nil }
+                self.error = error.localizedDescription
+                isLoading = false
             }
         }
-    }
-
-    /// Starts mapping the startup disk (~30 s) while the volume picker is shown. Full priority:
-    /// the user came to this page to scan, and Scan then joins this run instead of restarting it.
-    func warmStartupDisk() {
-        guard cache[""] == nil || stale[""] != nil, inflight[""] == nil else { return }
-        Task { _ = try? await scan("", background: false) }
     }
 
     private static func cacheKey(_ key: String) -> [String] { ["space", key] }
@@ -155,79 +216,10 @@ final class SpaceLensModel {
     struct EngineFailure: LocalizedError {
         let errorDescription: String?
     }
-
-    /// One engine scan. A foreground scan of a folder with nothing to show yet publishes its
-    /// partial listings as it goes, so the map fills in instead of waiting on a spinner.
-    private func engineScan(_ key: String, background: Bool) async throws -> JSON {
-        var result = JSON(nil)
-        let request: [String: Any] = key.isEmpty ? ["op": "space"] : ["op": "space", "path": key]
-        for await event in Engine.run(request) {
-            switch event.event.string {
-            case "progress" where !background && (cache[key] == nil || live.contains(key)):
-                cache[key] = event
-                live.insert(key)
-            case "space":
-                result = event
-            default:
-                break
-            }
-        }
-        try Task.checkCancellation()
-        if let message = result.error.string { throw EngineFailure(errorDescription: message) }
-        guard let raw = result.raw else { throw CancellationError() }
-        if let data = try? JSONSerialization.data(withJSONObject: raw) {
-            try? ResultCache.save(data, for: Self.cacheKey(key))
-        }
-        return result
-    }
-
-    private func scan(_ key: String, background: Bool) async throws -> JSON {
-        if let cached = cache[key], stale[key] == nil, !live.contains(key) { return cached }
-        let task = inflight[key] ?? Task { try await engineScan(key, background: background) }
-        if inflight[key] == nil, background { backgroundKeys.insert(key) }
-        inflight[key] = task
-        // a cancelled prefetch must not unregister the foreground scan that replaced it
-        defer {
-            if inflight[key] == task {
-                inflight[key] = nil
-                backgroundKeys.remove(key)
-            }
-        }
-        do {
-            let json = try await task.value
-            cache[key] = json
-            stale[key] = nil
-            live.remove(key)
-            return json
-        } catch {
-            // a half-measured listing must not pass for a finished one
-            if live.remove(key) != nil { cache[key] = nil }
-            throw error
-        }
-    }
-
-    /// Quietly scans the biggest subfolders next (the engine lists entries largest first), so the folder
-    /// the user most likely opens is already there. Replaces the queue when they navigate.
-    private func prefetchChildren(of json: JSON) {
-        queue = Array(json.entries.array.filter(\.is_dir.bool).compactMap(\.path.string).filter { cache[$0] == nil }.prefix(4))
-        drain()
-    }
-
-    private func drain() {
-        guard !draining else { return }
-        draining = true
-        Task {
-            while !queue.isEmpty {
-                _ = try? await scan(queue.removeFirst(), background: true)
-            }
-            draining = false
-        }
-    }
-
     /// Moves one item to the Trash. macOS *copies* what it cannot remove (read-only or
     /// protected volumes) into the Trash and still reports success: that copy is taken
     /// back out and the move counts as failed.
-    static func moveToTrash(_ path: String) -> Bool {
+    nonisolated static func moveToTrash(_ path: String) -> Bool {
         // never ask macOS to move what cannot move: it may copy it into the Trash first
         let parent = (path as NSString).deletingLastPathComponent
         let volume = try? URL(fileURLWithPath: parent).resourceValues(forKeys: [.volumeIsReadOnlyKey])
@@ -247,21 +239,32 @@ final class SpaceLensModel {
     }
 
     /// Selected items go to the Trash (recoverable), never deleted outright.
-    func removeSelected() {
-        var failed: [String] = []
-        var moved = 0
+    func removeSelected(moveToTrash: @escaping @Sendable (String) -> Bool = { SpaceLensModel.moveToTrash($0) }) async {
+        guard !removing, !isLoading else { return }
         let removable = Set(entries.filter(\.selectable.bool).compactMap(\.path.string))
-        for path in selection where removable.contains(path) {
-            if Self.moveToTrash(path) { moved += 1 } else { failed.append((path as NSString).lastPathComponent) }
+        let paths = selection.intersection(removable).sorted()
+        guard !paths.isEmpty else { return }
+        cancelScan()
+        removing = true
+        var failed: [String] = []
+        trashProcessed = 0
+        trashTotal = paths.count
+        trashed = 0
+        trashError = nil
+        for path in paths {
+            let moved = await Task.detached(priority: .userInitiated) { moveToTrash(path) }.value
+            if moved { trashed += 1 } else { failed.append((path as NSString).lastPathComponent) }
+            trashProcessed += 1
         }
         selection = []
-        trashed = moved
         trashError = failed.isEmpty ? nil : String(localized: "Could not move to Trash: \(failed.joined(separator: ", "))")
         cache = [:]
+        scannedAt = [:]
         stale = [:]
         live = []
-        volumes = Volume.all()
-        load(stack.last ?? nil, force: true)
+        await refreshVolumes()
+        removing = false
+        if active { load(stack.last ?? nil, force: true) }
     }
 }
 
@@ -287,9 +290,15 @@ struct SpaceLensPage: View {
             }
         }
         .padding(.horizontal, Layout.side)
+        .task { await model.resume() }
+        .onDisappear { model.pause() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.refreshIfVisible() }
+        }
         // a folder dragged in from Finder opens here
         .contentShape(Rectangle())
         .dropDestination(for: URL.self) { urls, _ in
+            guard !model.removing else { return false }
             var dir: ObjCBool = false
             guard let url = urls.first, FileManager.default.fileExists(atPath: url.path, isDirectory: &dir), dir.boolValue else { return false }
             model.openDropped(url.path)
@@ -299,7 +308,7 @@ struct SpaceLensPage: View {
             String(localized: "Move \(model.selection.count) items (\(bytes(model.selectedSize))) to the Trash?"),
             isPresented: $confirming
         ) {
-            Button(String(localized: "Move to Trash"), role: .destructive) { model.removeSelected() }
+            Button(String(localized: "Move to Trash"), role: .destructive) { Task { await model.removeSelected() } }
         }
     }
 
@@ -317,8 +326,6 @@ struct SpaceLensPage: View {
             Spacer()
         }
         .padding(.top, 24)
-        // start mapping the startup disk while the user is still looking at this page
-        .onAppear { model.warmStartupDisk() }
     }
 
     private var results: some View {
@@ -335,17 +342,28 @@ struct SpaceLensPage: View {
                 // folder that is slow here is slow there too: its event history since the
                 // oldest record (up to a day) can be too long to replay within the replay's
                 // 10 s budget, and the cache then falls back to stat-ing every folder.
-                Button { model.load(model.stack.last ?? nil, force: true) } label: {
+                Button {
+                    Task { await model.refreshVolumes() }
+                    model.load(model.stack.last ?? nil, force: true)
+                } label: {
                     Label(String(localized: "Scan Again"), systemImage: "arrow.clockwise").labelStyle(.iconOnly)
                 }
                 .buttonStyle(.pill)
                 .help(String(localized: "Scan Again"))
                 Button(String(localized: "Start Over")) { model.startOver() }.buttonStyle(.pill)
             }
+            .disabled(model.removing)
             .padding(.top, Layout.top)
 
+            if model.removing {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Moving to Trash… \(model.trashProcessed) of \(model.trashTotal)")
+                    ProgressView(value: Double(model.trashProcessed), total: Double(max(1, model.trashTotal)))
+                }
+                .font(.app(13)).padding(12).glassPanel(radius: 12)
+            }
             if let failure = model.trashError { ErrorBanner(message: failure) }
-            if model.trashed > 0 {
+            if model.trashed > 0 && !model.removing {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(model.trashed) items moved to the Trash.").font(.app(13, weight: .medium))
                     TrashNote()
@@ -416,7 +434,7 @@ struct SpaceLensPage: View {
                         selected: model.selection.contains(e.path.string ?? ""),
                         hover: hover,
                         toggle: {
-                            guard e.selectable.bool, let p = e.path.string else { return }
+                            guard !model.removing, e.selectable.bool, let p = e.path.string else { return }
                             if model.selection.contains(p) { model.selection.remove(p) } else { model.selection.insert(p) }
                         },
                         open: { if e.is_dir.bool, let p = e.path.string { model.open(p) } }
@@ -441,7 +459,11 @@ struct SpaceLensPage: View {
             ActionBar {
                 EmptyView()
             } center: {
-                if !model.selection.isEmpty { BigButton(title: String(localized: "Move to Trash")) { confirming = true } }
+                if model.removing { BigButton(title: "", busy: true) {} }
+                else if !model.selection.isEmpty {
+                    BigButton(title: String(localized: "Move to Trash")) { confirming = true }
+                        .disabled(model.isLoading)
+                }
             } trailing: {
                 if !model.selection.isEmpty {
                     Text(verbatim: bytes(model.selectedSize)).font(.app(17, weight: .semibold)).monospacedDigit()

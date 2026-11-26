@@ -2,6 +2,21 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## 0.3.12
+
+**macOS**
+
+- Section chips stay inside their horizontal scroll area instead of overlapping Select All or the sidebar.
+- Dashboard updates live metrics independently of the Trash measurement, so a large Trash no longer keeps Refresh disabled. Returning to the Dashboard takes a fresh reading.
+- Space Lens and Dashboard use the same immediately available disk capacity. Space Lens refreshes capacity on entry, focus and rescan, and rechecks cached folder listings while showing the previous result as old.
+- Space Lens scans only the drive or folder you open, cancels scans when you leave, and prevents an older scan from replacing newer results. Cache reads and writes and moves to the Trash run off the UI thread; moving multiple items shows progress and keeps individual failures visible.
+- Optimization explains each task's benefit and trade-off and leaves every task unselected until you choose it. Administrator commands no longer block the UI, and each task reports its own result and error instead of a later success hiding an earlier failure.
+- Developer Tools explains why an image or runtime is considered unused and warns that older NDKs may still be pinned by projects. Last-use dates are shown as not recorded when the scan has no reliable usage history.
+
+**Release checks**
+
+- Publishing now waits for the engine checks as well as both application builds.
+
 ## 0.3.11
 
 - macOS: new Process Doctor (Speed) shows which of your processes are stuck in a loop, using a lot of memory or left running, and which apps hold the most memory. Each can be quit: the app is asked to quit first, as closing it would, and Force Quit is offered only if it does not. Only your own processes are listed; system processes, Finder, Dock and the app's own parents are never offered.

@@ -21,7 +21,12 @@ enum Request {
         fast: bool,
     },
     /// Dashboard reading (CPU since the previous reading).
-    Status,
+    Status {
+        #[serde(default)]
+        skip_trash: bool,
+    },
+    /// Trash measurement can walk a large tree; keep it separate from live metrics.
+    TrashSize,
     Size {
         paths: Vec<PathBuf>,
         #[serde(default = "allocated")]
@@ -218,11 +223,12 @@ pub fn call(request: &str) -> Value {
             crate::fs::walk::FAST.store(fast, std::sync::atomic::Ordering::Relaxed);
             json!({"ok": true})
         }
-        Ok(Request::Status) => {
-            let mut v = serde_json::to_value(status::read()).unwrap_or(Value::Null);
+        Ok(Request::Status { skip_trash }) => {
+            let mut v = serde_json::to_value(status::read(!skip_trash)).unwrap_or(Value::Null);
             v["ok"] = json!(true);
             v
         }
+        Ok(Request::TrashSize) => json!({"ok": true, "trash_size": status::trash_size()}),
         Ok(Request::Rules) => {
             let set = rule_set();
             let groups: Vec<Value> = set
@@ -395,10 +401,13 @@ fn run_request(req: Request, cancel: &AtomicBool, emit: &mut dyn FnMut(Value)) {
             crate::fs::walk::FAST.store(fast, std::sync::atomic::Ordering::Relaxed);
             emit(json!({"event": "priority", "fast": fast}));
         }
-        Request::Status => {
-            let mut v = serde_json::to_value(status::read()).unwrap_or(Value::Null);
+        Request::Status { skip_trash } => {
+            let mut v = serde_json::to_value(status::read(!skip_trash)).unwrap_or(Value::Null);
             v["event"] = json!("status");
             emit(v);
+        }
+        Request::TrashSize => {
+            emit(json!({"event": "trash_size", "trash_size": status::trash_size()}))
         }
         Request::Size {
             paths,

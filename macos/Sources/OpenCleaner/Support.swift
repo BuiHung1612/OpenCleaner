@@ -64,6 +64,25 @@ enum Tools {
 /// Last good JSON of slow commands (a full-disk map takes ~30 s), one file per command line in
 /// ~/Library/Caches. Pages show it immediately, marked as old, while a fresh run replaces it.
 enum ResultCache {
+    private static let io = DispatchQueue(label: "OpenCleaner.result-cache", qos: .utility)
+
+    static func read(_ args: [String]) async -> (json: JSON, date: Date)? {
+        await withCheckedContinuation { reply in
+            io.async { reply.resume(returning: load(args)) }
+        }
+    }
+
+    static func write(_ json: JSON, for args: [String]) async {
+        await withCheckedContinuation { reply in
+            io.async {
+                if let raw = json.raw, let data = try? JSONSerialization.data(withJSONObject: raw) {
+                    try? save(data, for: args)
+                }
+                reply.resume()
+            }
+        }
+    }
+
     static let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("OpenCleaner/results")
 

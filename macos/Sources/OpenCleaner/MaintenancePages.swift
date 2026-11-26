@@ -4,7 +4,7 @@ import SwiftUI
 /// Runs a shell script the engine built (fixed commands only) with administrator rights,
 /// through the system's authorisation dialog (password or Touch ID).
 enum Privileged {
-    enum Outcome { case done, cancelled, failed(String) }
+    enum Outcome { case done(String), cancelled, failed(String) }
 
     /// The AppleScript that runs `script` as root (quotes and backslashes escaped).
     static func source(for script: String) -> String {
@@ -13,14 +13,54 @@ enum Privileged {
     }
 
     static func run(_ script: String) async -> Outcome {
-        let source = source(for: script)
-        return await MainActor.run {
-            var error: NSDictionary?
-            NSAppleScript(source: source)?.executeAndReturnError(&error)
-            guard let error else { return .done }
-            if (error[NSAppleScript.errorNumber] as? Int) == -128 { return .cancelled }
-            return .failed((error[NSAppleScript.errorMessage] as? String) ?? String(localized: "It did not work."))
+        await execute(source(for: script))
+    }
+
+    /// osascript owns the authorization dialog; waiting on it never blocks the app's UI.
+    static func execute(_ source: String) async -> Outcome {
+        await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-"]
+            let input = Pipe(), output = Pipe()
+            process.standardInput = input
+            process.standardOutput = output
+            process.standardError = output
+            do {
+                try process.run()
+                try input.fileHandleForWriting.write(contentsOf: Data(source.utf8))
+                try input.fileHandleForWriting.close()
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                if process.terminationStatus == 0 { return Outcome.done(text) }
+                if text.contains("(-128)") { return .cancelled }
+                return .failed(text.isEmpty ? String(localized: "It did not work.") : text)
+            } catch {
+                try? input.fileHandleForWriting.close()
+                if process.isRunning { process.terminate() }
+                return .failed(error.localizedDescription)
+            }
+        }.value
+    }
+
+    static func taskResults(_ output: String, ids: [String]) -> [String: String] {
+        var results = Dictionary(uniqueKeysWithValues: ids.map { ($0, String(localized: "The task did not report a result.")) })
+        var failed: String?
+        for line in output.split(whereSeparator: \.isNewline) {
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            if fields.first == "OPEN_CLEANER_TASK_RESULT" {
+                failed = nil
+                guard fields.count == 3, let code = Int(fields[2]), code >= 0,
+                      results[String(fields[1])] != nil else { continue }
+                let id = String(fields[1])
+                results[id] = code == 0 ? "✓" : String(localized: "Failed (exit code \(code)).")
+                if code != 0 { failed = id }
+            } else if let failed {
+                results[failed, default: ""] += "\n" + line
+            }
         }
+        return results
     }
 }
 
@@ -63,7 +103,6 @@ struct OptimizePage: View {
         .padding(.horizontal, Layout.side)
         .task {
             tasks = await Engine.ask(["op": "maintenance"]).tasks.array
-            selected = Set(tasks.filter { !$0.admin.bool }.compactMap(\.id.string))
         }
     }
 
@@ -92,11 +131,13 @@ struct OptimizePage: View {
                             .accessibilityLabel(String(localized: "Asks for your password"))
                     }
                 }
-                Text(tr(task.note.string ?? "")).font(.app(12)).foregroundStyle(.dim)
+                Text(verbatim: String(localized: "Benefit:") + " " + tr(task.note.string ?? "")).font(.app(12)).foregroundStyle(.dim)
+                Text(verbatim: String(localized: "Trade-off:") + " " + tr(task.tradeoff.string ?? "")).font(.app(12)).foregroundStyle(.dim)
                 if id == "memory", let memoryNote {
                     Text(verbatim: memoryNote).font(.app(12, weight: .medium)).monospacedDigit()
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
             Spacer()
             if let result = results[id] {
                 if result == Self.okMark {
@@ -116,36 +157,40 @@ struct OptimizePage: View {
     }
 
     private static func freeMemory() async -> Double? {
-        await Engine.ask(["op": "status"]).memory.free.double
+        await Engine.ask(["op": "status", "skip_trash": true]).memory.free.double
     }
 
     private func run() async {
         running = true
-        results = [:]
+        done = false
         memoryNote = nil
         let ids = Array(selected)
+        results = Dictionary(uniqueKeysWithValues: ids.map { ($0, String(localized: "The task did not report a result.")) })
         let reply = await Task.detached { Engine.call(["op": "optimize", "tasks": ids]) }.value
+        guard reply.ok.bool else {
+            for id in ids { results[id] = reply.error.string ?? String(localized: "The engine did not answer.") }
+            running = false
+            return
+        }
         for r in reply.results.array {
             if let id = r.id.string { results[id] = r.ok.bool ? "✓" : (r.message.string ?? String(localized: "Failed")) }
         }
         if let script = reply.admin_script.string {
             let memory = ids.contains("memory")
             let before = memory ? await Self.freeMemory() : nil
-            let admin = tasks.filter { $0.admin.bool && selected.contains($0.id.string ?? "") }.compactMap(\.id.string)
-            let mark: String
+            let admin = tasks.filter { $0.admin.bool && ids.contains($0.id.string ?? "") }.compactMap(\.id.string)
             switch await Privileged.run(script) {
-            case .done: mark = "✓"
-            case .cancelled: mark = String(localized: "Not run")
-            case .failed(let message): mark = message
+            case .done(let output): results.merge(Privileged.taskResults(output, ids: admin)) { _, new in new }
+            case .cancelled: for id in admin { results[id] = String(localized: "Not run") }
+            case .failed(let message): for id in admin { results[id] = message }
             }
-            for id in admin { results[id] = mark }
-            if memory, mark == "✓" {
+            if memory, results["memory"] == Self.okMark {
                 let after = await Self.freeMemory()
                 memoryNote = String(localized: "Free memory: \(memBytes(before)) before, \(memBytes(after)) after")
             }
         }
         running = false
-        done = results.values.allSatisfy { $0 == "✓" }
+        done = !results.isEmpty && results.values.allSatisfy { $0 == Self.okMark }
     }
 }
 

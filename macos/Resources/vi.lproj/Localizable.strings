@@ -614,3 +614,20 @@
 "A developer tool running for over a day, doing nothing" = "Công cụ lập trình chạy hơn một ngày mà không làm gì";
 "Has ended but is not cleaned up; quitting the app that started it clears it" = "Đã kết thúc nhưng chưa được dọn; thoát ứng dụng đã khởi chạy nó sẽ dọn được";
 "Suspended" = "Đang tạm dừng";
+/* Dashboard freshness and maintenance decisions. */
+"Measuring…" = "Đang đo…";
+"Benefit:" = "Lợi ích:";
+"The task did not report a result." = "Tác vụ chưa trả về kết quả.";
+"Failed (exit code %lld)." = "Thất bại (mã thoát %lld).";
+"Moving to Trash… %lld of %lld" = "Đang chuyển vào Thùng rác… %lld trên %lld";
+"Last used: not recorded" = "Lần dùng gần nhất: chưa có dữ liệu";
+"Trade-off:" = "Đánh đổi:";
+"Last used: unknown. These tools do not provide a reliable last-use history; file modification dates are not usage dates." = "Lần dùng gần nhất: không xác định. Các công cụ này không cung cấp lịch sử sử dụng đáng tin cậy; ngày sửa tệp không phải ngày sử dụng.";
+"No configured emulator references this image; this does not mean it has never been used. Android Studio's Device Manager downloads it again if you need it." = "Không có máy ảo đã cấu hình nào tham chiếu image này; điều đó không có nghĩa là chưa từng sử dụng. Device Manager của Android Studio sẽ tải lại khi cần.";
+"No configured simulator references this runtime; this does not mean it has never been used. Xcode downloads it again if you need it." = "Không có simulator đã cấu hình nào tham chiếu runtime này; điều đó không có nghĩa là chưa từng sử dụng. Xcode sẽ tải lại khi cần.";
+"A newer NDK is installed; projects have not been checked for ndkVersion pins. A project may still need this version and have to download it again before building." = "Đã cài NDK mới hơn; chưa kiểm tra phiên bản ndkVersion mà từng dự án yêu cầu. Dự án vẫn có thể cần phiên bản này và phải tải lại trước khi build.";
+"The next lookup may take longer while DNS records are fetched again. This does not improve your connection speed or remove browser history." = "Lần tra cứu tiếp theo có thể chậm hơn do phải tải lại bản ghi DNS. Thao tác này không tăng tốc đường truyền hay xóa lịch sử trình duyệt.";
+"Previews may appear slowly and use extra CPU while thumbnails rebuild. Your original files stay intact." = "Bản xem trước có thể xuất hiện chậm và dùng thêm CPU khi tạo lại ảnh thu nhỏ. Tệp gốc được giữ nguyên.";
+"Save your work and log out yourself after running this. Font caches rebuild next time you sign in; this does not install or remove fonts." = "Hãy lưu công việc rồi tự đăng xuất sau khi chạy. Cache phông chữ được tạo lại ở lần đăng nhập sau; thao tác này không cài hay gỡ phông chữ.";
+"Rebuilds app registrations for all installed apps; Open With menus may take time to repopulate. Review your preferred default apps afterwards." = "Tạo lại đăng ký cho toàn bộ ứng dụng đã cài; menu Mở bằng có thể cần thời gian để hiện đủ. Hãy kiểm tra lại ứng dụng mặc định sau đó.";
+"The gain is temporary: caches fill again, and apps may pause or read more from disk. This does not fix a memory leak or add RAM; skip it when the Mac is working normally." = "Dung lượng lấy lại chỉ là tạm thời: cache sẽ đầy lại, ứng dụng có thể khựng hoặc đọc đĩa nhiều hơn. Không khắc phục rò rỉ bộ nhớ hay tăng RAM; nên bỏ qua nếu máy đang hoạt động bình thường.";

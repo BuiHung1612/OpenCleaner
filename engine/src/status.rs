@@ -72,7 +72,11 @@ struct Sample {
 
 static LAST: Mutex<Option<Sample>> = Mutex::new(None);
 
-pub fn read() -> Status {
+pub fn trash_size() -> Option<u64> {
+    platform::trash_size()
+}
+
+pub fn read(include_trash: bool) -> Status {
     let mut last = LAST.lock().unwrap();
     let first = last.is_none();
     if first {
@@ -129,7 +133,7 @@ pub fn read() -> Status {
         hardware: platform::hardware(),
         uptime: platform::uptime().map(format_uptime).unwrap_or_default(),
         uptime_secs: platform::uptime().map(|d| d.as_secs()),
-        trash_size: platform::trash_size(),
+        trash_size: if include_trash { trash_size() } else { None },
         top_processes: procs,
         cpu,
         memory,

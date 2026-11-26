@@ -166,7 +166,13 @@ struct DevToolsPage: View {
                 Text(verbatim: tr(item.title.string ?? id) + (detail.isEmpty ? "" : " · \(detail)"))
                     .font(.app(14, weight: .medium))
                 Text(tr(item.note.string ?? "")).font(.app(12)).foregroundStyle(.dim)
+                if item.group.string == "simulators" || item.group.string == "android" {
+                    Text("Last used: not recorded")
+                        .font(.app(12)).foregroundStyle(.dim)
+                        .help(String(localized: "Last used: unknown. These tools do not provide a reliable last-use history; file modification dates are not usage dates."))
+                }
             }
+            .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Text(verbatim: bytes(item.bytes.double)).monospacedDigit()
         }

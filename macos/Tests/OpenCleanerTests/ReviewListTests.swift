@@ -3,6 +3,50 @@ import Foundation
 import Testing
 @testable import OpenCleaner
 
+@MainActor
+@Test func dashboardRefreshDoesNotWaitForTrashMeasurement() async throws {
+    var finishTrash: CheckedContinuation<JSON, Never>?
+    let stream = StatusStream(readStatus: { JSON(["ok": true, "cpu": ["cores": 8]]) }, readTrash: {
+        await withCheckedContinuation { finishTrash = $0 }
+    })
+    stream.refresh()
+    for _ in 0..<100 where stream.loading || finishTrash == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    // Finish the suspended measurement even when an expectation below fails.
+    let finish = try #require(finishTrash)
+    defer { finish.resume(returning: JSON(["ok": true, "trash_size": 123])) }
+    #expect(!stream.loading && stream.trashLoading)
+    #expect(stream.updatedAt != nil && stream.snapshot.cpu.cores.double == 8)
+    stream.refresh()
+    for _ in 0..<100 where stream.loading { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!stream.loading && stream.replay == 2)
+}
+
+@MainActor
+@Test func spaceLensRefreshesTheSelectedVolumeAsWellAsTheChooser() async throws {
+    let stale = Volume(url: URL(fileURLWithPath: "/"), name: "Old reading", total: 1, free: 0)
+    let model = SpaceLensModel()
+    model.volumes = [stale]
+    model.volume = stale
+    await model.refreshVolumes()
+    let fresh = try #require(model.volumes.first { $0.isStartup })
+    #expect(fresh.total > 1)
+    #expect(model.volume?.free == fresh.free && model.volume?.name == fresh.name)
+    let disk = try #require(Engine.call(["op": "status", "skip_trash": true]).disks.array.first)
+    #expect(fresh.total == disk.total.double)
+    // Other apps may write between the two readings.
+    #expect(abs(fresh.free - ((disk.total.double ?? 0) - (disk.used.double ?? 0))) < 256_000_000)
+}
+
+@Test func maintenanceExplainsBothBenefitAndTradeoff() {
+    let tasks = Engine.call(["op": "maintenance"]).tasks.array
+    #expect(tasks.count == 5)
+    #expect(tasks.allSatisfy { !($0.note.string ?? "").isEmpty && !($0.tradeoff.string ?? "").isEmpty })
+    #expect(Engine.call(["op": "status", "skip_trash": true]).trash_size.double == nil)
+    #expect(Engine.call(["op": "trash_size"]).ok.bool)
+}
+
 @Test func listFilterMatchesAndSorts() {
     var f = ListFilter()
     #expect(f.matches("anything"))

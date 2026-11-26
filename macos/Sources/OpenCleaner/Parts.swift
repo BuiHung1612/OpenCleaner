@@ -349,7 +349,6 @@ struct GroupChips: View {
                 }
                 .padding(.horizontal, 2)
             }
-            .scrollClipDisabled()
         }
     }
 
