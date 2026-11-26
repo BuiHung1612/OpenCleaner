@@ -19,11 +19,21 @@ import Testing
 
 @MainActor
 @Test func waitingForAppleScriptLeavesTheUIExecutorFree() async throws {
-    // No authorization or maintenance: a plain AppleScript delay and return value.
-    let operation = Task { await Privileged.execute("delay 1\nreturn \"finished\"") }
-    let start = Date()
-    try await Task.sleep(for: .milliseconds(20))
-    #expect(Date().timeIntervalSince(start) < 0.8)
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("oc-script-\(UUID().uuidString)")
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: dir) }
+    let began = dir.appendingPathComponent("began"), release = dir.appendingPathComponent("release")
+    let paths = [began, release].map { "'" + $0.path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+    // The UI executor must release the child before its bounded wait expires; no speed threshold.
+    let script = "/usr/bin/touch \(paths[0]); oc_wait=0; while [ ! -e \(paths[1]) ] && [ \"$oc_wait\" -lt 200 ]; do /bin/sleep 0.05; oc_wait=$((oc_wait+1)); done; [ -e \(paths[1]) ] || exit 99; /usr/bin/printf finished"
+    let source = Privileged.source(for: script).replacingOccurrences(of: " with administrator privileges", with: "")
+    let operation = Task { await Privileged.execute(source) }
+    for _ in 0..<500 where !fm.fileExists(atPath: began.path) {
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(fm.fileExists(atPath: began.path))
+    try Data().write(to: release)
     switch await operation.value {
     case .done(let output): #expect(output == "finished")
     default: Issue.record("The harmless AppleScript did not complete")

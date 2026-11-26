@@ -96,6 +96,14 @@ fn freed_counts_a_hard_link_only_when_all_links_are_inside() {
     let t = TempDir::new();
     write(&t.path().join("d/inner"), 1 << 20);
     write(&t.path().join("outer"), 1 << 20);
+    // APFS may defer private-block accounting until the data reaches disk.
+    #[cfg(target_os = "macos")]
+    for file in ["d/inner", "outer"] {
+        std::fs::File::open(t.path().join(file))
+            .unwrap()
+            .sync_all()
+            .unwrap();
+    }
     std::fs::hard_link(t.path().join("d/inner"), t.path().join("d/inner-2")).unwrap();
     std::fs::hard_link(t.path().join("outer"), t.path().join("d/outer-link")).unwrap();
     let r = size::measure(&t.path().join("d"), &opts(Mode::Freed)).unwrap();

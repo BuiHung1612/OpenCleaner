@@ -1,6 +1,6 @@
 [package]
 name = "opencleaner"
-version = "0.3.13"
+version = "0.3.14"
 license = "MIT"
 edition = "2024"
 description = "OpenCleaner for Windows: native UI on the OpenCleaner engine"
