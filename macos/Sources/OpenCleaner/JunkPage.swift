@@ -281,10 +281,10 @@ struct JunkPage: View {
                     .flatMap { shownRules($0) }.filter { $0.status.string == "ready" }
                 let ids = rules.compactMap(\.id.string)
                 HStack(spacing: 10) {
-                    GroupChips(chips: model.groups.compactMap { g in
+                    GroupFilter(options: model.groups.compactMap { g in
                         guard let id = g.id.string else { return nil }
                         let ready = g.rules.array.filter { $0.status.string == "ready" }
-                        return GroupChips.Chip(id: id, title: tr(g.title.string ?? id), count: ready.count,
+                        return GroupFilter.Option(id: id, title: tr(g.title.string ?? id), count: ready.count,
                                                bytes: ready.reduce(0) { $0 + ($1.bytes.double ?? 0) })
                     }, only: Binding(get: { model.onlyGroup }, set: { model.onlyGroup = $0 }))
                     Spacer(minLength: 0)

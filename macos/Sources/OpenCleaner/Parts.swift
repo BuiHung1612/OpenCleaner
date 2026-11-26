@@ -325,47 +325,46 @@ struct SelectAllButton: View {
     }
 }
 
-/// One chip per section of a long review list, to show one section at a time instead of
-/// scrolling to it. Shown when the list has two sections or more.
-struct GroupChips: View {
-    struct Chip: Identifiable {
+/// A compact group filter; long lists use the native menu instead of horizontal scrolling.
+struct GroupFilter: View {
+    struct Option: Identifiable {
         let id: String
         let title: String
         let count: Int
         let bytes: Double
     }
-    let chips: [Chip]
+    let options: [Option]
     /// nil: every section
     @Binding var only: String?
 
     var body: some View {
-        if chips.count > 1 {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    chip(nil, String(localized: "All"), detail: nil)
-                    ForEach(chips) { c in
-                        chip(c.id, c.title, detail: c.bytes > 0 ? "\(c.count) · \(shortBytes(c.bytes))" : "\(c.count)")
+        if options.count > 1 {
+            Menu {
+                Picker(String(localized: "Filter by group"), selection: $only) {
+                    Text("All groups").tag(nil as String?)
+                    ForEach(options) { option in
+                        Text(verbatim: "\(option.title) · \(option.count)" + (option.bytes > 0 ? " · \(shortBytes(option.bytes))" : ""))
+                            .tag(Optional(option.id))
                     }
                 }
-                .padding(.horizontal, 2)
+                .pickerStyle(.inline)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                    Text(verbatim: options.first { $0.id == only }?.title ?? String(localized: "All groups"))
+                        .lineLimit(1).truncationMode(.middle)
+                    Image(systemName: "chevron.down").font(.app(10, weight: .semibold))
+                }
+                .accessibilityElement(children: .combine)
             }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.pill)
+            .frame(maxWidth: 360, alignment: .leading)
+            .help(String(localized: "Filter by group"))
+            .accessibilityLabel(String(localized: "Filter by group"))
+            .accessibilityValue(options.first { $0.id == only }?.title ?? String(localized: "All groups"))
         }
-    }
-
-    private func chip(_ id: String?, _ title: String, detail: String?) -> some View {
-        let on = only == id
-        return Button { only = id } label: {
-            HStack(spacing: 6) {
-                Text(verbatim: title).font(.app(13, weight: .medium)).lineLimit(1)
-                if let detail { Text(verbatim: detail).font(.app(12)).foregroundStyle(.dim).monospacedDigit() }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(Capsule().fill(.white.opacity(on ? 0.22 : 0.07)))
-            .overlay(Capsule().strokeBorder(.white.opacity(on ? 0.35 : 0.12)))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 

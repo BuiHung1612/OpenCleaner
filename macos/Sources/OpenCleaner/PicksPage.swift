@@ -221,9 +221,8 @@ struct PicksList: View {
                 if let error = model.error { ErrorBanner(message: error) }
                 if !model.items.isEmpty {
                     FilterBar(filter: $filter)
-                    // not for duplicates, whose sections are sets of copies (hundreds of them)
                     HStack(alignment: .center, spacing: 10) {
-                        if model.groups.count <= 20 { GroupChips(chips: chips, only: $only) }
+                        GroupFilter(options: groupOptions, only: $only)
                         Spacer(minLength: 0)
                         let rows = shown.flatMap(\.indexes)
                         SelectAllButton(
@@ -240,9 +239,9 @@ struct PicksList: View {
         .onChange(of: model.groups.map(\.name)) { if let o = only, !model.groups.contains(where: { $0.name == o }) { only = nil } }
     }
 
-    private var chips: [GroupChips.Chip] {
+    private var groupOptions: [GroupFilter.Option] {
         model.groups.filter { !$0.name.isEmpty }.map { g in
-            GroupChips.Chip(id: g.name, title: PickText.group(g.name, first: g.indexes.first.map { model.items[$0] }),
+            GroupFilter.Option(id: g.name, title: PickText.group(g.name, first: g.indexes.first.map { model.items[$0] }),
                             count: g.indexes.count, bytes: g.indexes.reduce(0) { $0 + (model.items[$1].bytes.double ?? 0) })
         }
     }

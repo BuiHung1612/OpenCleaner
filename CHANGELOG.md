@@ -2,6 +2,12 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
+## 0.3.13
+
+- macOS: System Junk and file review lists now use one compact group-filter dropdown instead of horizontally scrolling chips. The button shows the current group; open it to choose a group or return to All groups.
+- Each menu entry includes its item count and size, with localized labels and accessibility text. Long selected names stay within the filter button instead of overlapping Select All.
+- Group filtering is also available for review lists with more than 20 groups, including large duplicate-file lists.
+
 ## 0.3.12
 
 **macOS**

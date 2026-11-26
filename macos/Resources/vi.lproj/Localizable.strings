@@ -617,6 +617,8 @@
 /* Dashboard freshness and maintenance decisions. */
 "Measuring…" = "Đang đo…";
 "Benefit:" = "Lợi ích:";
+"All groups" = "Tất cả nhóm";
+"Filter by group" = "Lọc theo nhóm";
 "The task did not report a result." = "Tác vụ chưa trả về kết quả.";
 "Failed (exit code %lld)." = "Thất bại (mã thoát %lld).";
 "Moving to Trash… %lld of %lld" = "Đang chuyển vào Thùng rác… %lld trên %lld";
