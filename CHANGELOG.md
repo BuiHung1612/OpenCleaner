@@ -2,11 +2,12 @@
 
 Each release's notes on GitHub come from its section here (`## X.Y.Z`).
 
-## 0.3.14
+## 0.3.15
 
 - macOS: System Junk and file review lists now use one compact group-filter dropdown instead of horizontally scrolling chips. The button shows the current group; open it to choose a group or return to All groups.
 - Each menu entry includes its item count and size, with localized labels and accessibility text. Long selected names stay within the filter button instead of overlapping Select All.
 - Group filtering is also available for review lists with more than 20 groups, including large duplicate-file lists.
+- Administrator processes and moves to the Trash wait on Dispatch queues, keeping blocking I/O out of Swift's cooperative task pool when several operations run together.
 - Validation: UI responsiveness tests use a process handshake rather than a wall-clock speed threshold, and hard-link fixtures flush their data before checking APFS private allocation.
 
 ## 0.3.12

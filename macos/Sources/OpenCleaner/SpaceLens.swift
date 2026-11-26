@@ -252,7 +252,11 @@ final class SpaceLensModel {
         trashed = 0
         trashError = nil
         for path in paths {
-            let moved = await Task.detached(priority: .userInitiated) { moveToTrash(path) }.value
+            let moved = await withCheckedContinuation { reply in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    reply.resume(returning: moveToTrash(path))
+                }
+            }
             if moved { trashed += 1 } else { failed.append((path as NSString).lastPathComponent) }
             trashProcessed += 1
         }

@@ -18,30 +18,37 @@ enum Privileged {
 
     /// osascript owns the authorization dialog; waiting on it never blocks the app's UI.
     static func execute(_ source: String) async -> Outcome {
-        await Task.detached(priority: .userInitiated) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-"]
-            let input = Pipe(), output = Pipe()
-            process.standardInput = input
-            process.standardOutput = output
-            process.standardError = output
-            do {
-                try process.run()
-                try input.fileHandleForWriting.write(contentsOf: Data(source.utf8))
-                try input.fileHandleForWriting.close()
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                if process.terminationStatus == 0 { return Outcome.done(text) }
-                if text.contains("(-128)") { return .cancelled }
-                return .failed(text.isEmpty ? String(localized: "It did not work.") : text)
-            } catch {
-                try? input.fileHandleForWriting.close()
-                if process.isRunning { process.terminate() }
-                return .failed(error.localizedDescription)
+        await withCheckedContinuation { reply in
+            DispatchQueue.global(qos: .userInitiated).async {
+                reply.resume(returning: executeBlocking(source))
             }
-        }.value
+        }
+    }
+
+    /// Blocking process I/O belongs on Dispatch, outside Swift's cooperative task pool.
+    private static func executeBlocking(_ source: String) -> Outcome {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-"]
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+            try input.fileHandleForWriting.write(contentsOf: Data(source.utf8))
+            try input.fileHandleForWriting.close()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            if process.terminationStatus == 0 { return Outcome.done(text) }
+            if text.contains("(-128)") { return .cancelled }
+            return .failed(text.isEmpty ? String(localized: "It did not work.") : text)
+        } catch {
+            try? input.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+            return .failed(error.localizedDescription)
+        }
     }
 
     static func taskResults(_ output: String, ids: [String]) -> [String: String] {
